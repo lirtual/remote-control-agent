@@ -589,7 +589,10 @@ test("actual SIGKILL after each identity rename permits guarded operator-only re
     '  await rename(from, to);',
     '  if (++step === Number(process.env.RC_TEST_KILL_AT)) {',
     '    process.send({ completed_renames: step });',
-    '    await new Promise(() => {});',
+    // A never-settling top-level await with no active handles makes Node 24
+    // exit on its own with code 13. Keep the child alive until the OS kills
+    // it, so the test truly proves SIGKILL recovery (not a false process exit).
+    '    await new Promise(() => { setInterval(() => {}, 60_000); });',
     '  }',
     '});',
     'throw Error("Child must be SIGKILLed before the promotion returns");',
