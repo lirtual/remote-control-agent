@@ -142,7 +142,8 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                             start_new_session=True, close_fds=True)
     os.close(slave)
     transcript = b""
-    sent = False
+    sent_status = False
+    sent_exit = False
     try:
         deadline = time.monotonic() + 12
         while time.monotonic() < deadline:
@@ -155,14 +156,19 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Choose an option:" in transcript and not sent:
-                os.write(master, b"1\n6\n")
-                sent = True
+            if b"Choose an option:" in transcript and not sent_status:
+                os.write(master, b"1\n")
+                sent_status = True
+            if (sent_status and not sent_exit and
+                    b"installed_versions" in transcript and
+                    transcript.count(b"Choose an option:") >= 2):
+                os.write(master, b"6\n")
+                sent_exit = True
             if proc.poll() is not None:
                 break
         if proc.poll() is None:
             proc.kill()
-        if proc.wait(timeout=3) != 0 or not sent or b"installed_versions" not in transcript:
+        if proc.wait(timeout=3) != 0 or not sent_exit or b"installed_versions" not in transcript:
             raise SystemExit("Packaged manager interactive PTY menu/status/exit failed")
     finally:
         os.close(master)
