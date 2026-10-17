@@ -50,4 +50,25 @@ jobs:
           archive="$temp_dir/build/remote-control-agent-v0.0.0-ci-$target.tar.gz"
           python3 -B apps/remote-control-agent/scripts/validate-local-archive.py \
             "$archive" v0.0.0-ci "$target"
-          echo "Candidate was verified locally and deleted. No Release was published."
+          # A genuinely separate, minimal runtime image without Node, Git or
+          # compiler verifies the *packaged* Node and native helper. The image
+          # is pulled before running the fully offline, read-only container.
+          docker pull --quiet python:3.12-slim-bookworm >/dev/null
+          mkdir "$temp_dir/bootstrap"
+          cp apps/remote-control-agent/scripts/bootstrap-v2.py \
+             apps/remote-control-agent/scripts/validate-local-archive.py \
+             "$temp_dir/bootstrap/"
+          chmod 755 "$temp_dir/bootstrap"
+          chmod 644 "$temp_dir/bootstrap/"*.py "$archive"
+          docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user 65534:65534 --tmpfs /tmp:rw,exec,mode=1777 \
+            -v "$archive:/opt/agent.tar.gz:ro" \
+            -v "$temp_dir/bootstrap:/opt/bootstrap:ro" \
+            python:3.12-slim-bookworm sh -ec \
+            'for tool in node git cc; do
+               if command -v "$tool" >/dev/null; then exit 11; fi
+             done
+             exec python3 -B /opt/bootstrap/validate-local-archive.py \
+               /opt/agent.tar.gz v0.0.0-ci "$1"' shell "$target"
+          echo "Candidate verified on build runner and offline minimal container; never published."
