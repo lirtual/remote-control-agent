@@ -33,6 +33,9 @@ def local_runtime():
     source = script.with_name("bootstrap-v2.py")
     spec = importlib.util.spec_from_file_location("rc_agent_bootstrap", source)
     bootstrap = importlib.util.module_from_spec(spec)
+    # This versioned tree must remain byte-for-byte equal to its verified
+    # Release archive: Python must not write __pycache__ beside bootstrap.
+    sys.dont_write_bytecode = True
     spec.loader.exec_module(bootstrap)
     # This rejects foreign, symlinked and unowned local installation paths.
     bootstrap.local_inventory(str(home))
