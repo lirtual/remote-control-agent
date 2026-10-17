@@ -168,6 +168,45 @@ export function renderV2Service({ node, home, repoRoot, endpoint, keyPath, entry
  * Existing systemd activation+rollback in installUnit() switches ONLY the
  * v2 program path; private Ed25519 keys, endpoint and SQLite remain intact.
  */
+async function assertReceiptDatabaseCompatible(home, expectedSchema = 1) {
+  const directory = path.join(home, ".local", "state", "mcp-workers", "remote-control-agent");
+  const receiptPath = path.join(directory, "operation-receipts.sqlite");
+  let directoryInfo;
+  try { directoryInfo = await lstat(directory); }
+  catch { throw new Error("Receipt database directory is missing; upgrade blocked."); }
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() ||
+      directoryInfo.uid !== process.getuid() || (directoryInfo.mode & 0o077) !== 0) {
+    throw new Error("Receipt database directory ownership or permissions are unsafe; upgrade blocked.");
+  }
+  let handle;
+  try { handle = await open(receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (error?.code === "ENOENT") throw new Error("Receipt database is missing; upgrade blocked.");
+    throw new Error("Receipt database cannot be opened safely; upgrade blocked.");
+  }
+  try {
+    const meta = await handle.stat();
+    if (!meta.isFile() || meta.uid !== process.getuid() ||
+        (meta.mode & 0o077) !== 0 || meta.nlink !== 1) {
+      throw new Error("Receipt database ownership or permissions are unsafe; upgrade blocked.");
+    }
+    const header = Buffer.alloc(100);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead < 100 ||
+        header.subarray(0, 15).toString("ascii") !== "SQLite format 3" || header[15] !== 0) {
+      throw new Error("Receipt database is not a valid SQLite file; upgrade blocked.");
+    }
+    // SQLite stores PRAGMA user_version as a big-endian uint32 at bytes 60–63.
+    // ReceiptStore currently accepts version 0 (uninitialized) and version 1.
+    // Read only the immutable header: the running Agent holds SQLite's exclusive lock.
+    const version = header.readUInt32BE(60);
+    if (version !== 0 && version !== expectedSchema) {
+      throw new Error("Receipt database schema is incompatible; upgrade blocked.");
+    }
+  } finally {
+    await handle.close();
+  }
+}
 export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Manual upgrade requires an owned v2 service.");
@@ -214,6 +253,7 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (previousRoot === path.resolve(path.dirname(newManifestPath))) {
     throw new Error("Already running this program version; use ordinary install.");
   }
+  await assertReceiptDatabaseCompatible(home, 1);
   return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath))};
 }
 
