@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
-import { confirmDeviceLocally } from "../src/confirm-device.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 
@@ -643,9 +643,37 @@ async function launchForeground({ endpoint, keyPath }) {
 }
 
 /**
- * Shared manual local challenge. Only the Agent holds the original pairing
- * code in memory, and it never asks the user to repeat it.
+ * One-code pairing: the owner enters the locally displayed code into the
+ * authenticated MCP, then explicitly calls pairing_approve for that key/mode.
+ * The existing session-recovery endpoint only returns a device ID after this
+ * Agent has signed a fresh server nonce with the matching private key.
+ * Polling does not call any owner MCP tool or grant a device by itself.
  */
+export async function awaitOwnerMcpApproval(endpoint, keyPath, {
+  claim = recoverDeviceId,
+  delay = (ms) => sleep(ms),
+  deadlineMs = 10 * 60_000,
+  intervalMs = 5_000,
+  now = Date.now,
+} = {}) {
+  const deadline = now() + deadlineMs;
+  while (now() < deadline) {
+    try {
+      return await claim(endpoint, keyPath);
+    } catch (error) {
+      // An unapproved pending key is 404. Other failures are not evidence
+      // that the owner has approved this pairing; fail without rotating keys.
+      if (!(error instanceof DeviceSessionRejectedError) || error.status !== 404) {
+        throw error;
+      }
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await delay(Math.min(intervalMs, remaining));
+  }
+  throw new Error("MCP pairing was not approved within the code lifetime. Re-run the same installer safely.");
+}
+
 async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKey) {
   if (!stdin.isTTY || !stdout.isTTY) {
     throw new Error("Pairing requires a local interactive device terminal.");
@@ -653,25 +681,13 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
   const enrollment = await beginDeviceEnrollment(
     options.name ?? os.hostname(), options.endpoint, keyPath, fetch, reuseExistingKey,
     options.grantType ?? "permanent");
-  const terminal = createInterface({ input: stdin, output: stdout, terminal: true });
-  try {
-    stdout.write("Pairing code (10 min): " + enrollment.code + "\n");
-    if (options.showFingerprint) {
-      stdout.write("Local public key fingerprint (optional check): " + enrollment.fingerprint + "\n");
-    }
-    stdout.write("Approve via MCP (pairing_lookup → pairing_prepare).\n");
-    let challenge;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const typed = (await terminal.question("MCP challenge (12 chars): ")).trim().toUpperCase();
-      if (/^[A-Z2-7]{12}$/.test(typed)) {
-        challenge = typed;
-        break;
-      }
-      if (attempt < 2) stdout.write("Challenge must be 12 characters (A-Z, 2-7). Try again.\n");
-    }
-    if (!challenge) throw new Error("Invalid local challenge format.");
-    await confirmDeviceLocally(enrollment.code, challenge, options.endpoint, keyPath);
-  } finally { terminal.close(); }
+  stdout.write("Pairing code (10 min): " + enrollment.code + "\n");
+  if (options.showFingerprint) {
+    stdout.write("Local public key fingerprint (optional check): " + enrollment.fingerprint + "\n");
+  }
+  stdout.write("Use MCP pairing_lookup, then explicitly pairing_approve for the exact key and mode.\n");
+  stdout.write("Waiting for approval; no local challenge is needed.\n");
+  await awaitOwnerMcpApproval(options.endpoint, keyPath);
 }
 
 /**
