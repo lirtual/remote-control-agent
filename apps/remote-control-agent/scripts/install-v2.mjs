@@ -704,7 +704,7 @@ export async function inspectInstallIdentity(options, keyPath, previous, {
  * Also refuses untrusted launcher parents even when an old binary is present.
  */
 export async function preflightManagerLauncher(home, program) {
-  const target = path.join(program, "apps/remote-control-agent/scripts/manage-v2.py");
+  const target = path.join(program, "apps/remote-control-agent/scripts/rca.sh");
   const file = await lstat(target);
   if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
       !(file.mode & 0o100) || file.mode & 0o077) {
@@ -731,7 +731,7 @@ export async function preflightManagerLauncher(home, program) {
     }
     const destination = await readlink(launcher);
     if (!destination.startsWith(installedRoot + path.sep) ||
-        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/]manage-v2[.]py$/.test(
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/](?:manage-v2[.]py|rca[.]sh)$/.test(
           destination.slice(installedRoot.length + 1))) {
       throw new Error("Existing launcher is not owned by the versioned Agent.");
     }
@@ -760,7 +760,7 @@ export async function installManagerLauncher(home, program) {
       throw new Error("Untrusted user-local launcher directory.");
     }
   }
-  const target = path.join(program, "apps/remote-control-agent/scripts/manage-v2.py");
+  const target = path.join(program, "apps/remote-control-agent/scripts/rca.sh");
   const file = await lstat(target);
   if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
       !(file.mode & 0o100) || file.mode & 0o077) {
@@ -775,7 +775,7 @@ export async function installManagerLauncher(home, program) {
     }
     const destination = await readlink(launcher);
     if (!destination.startsWith(installedRoot + path.sep) ||
-        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/]manage-v2[.]py$/.test(
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/](?:manage-v2[.]py|rca[.]sh)$/.test(
           destination.slice(installedRoot.length + 1))) {
       throw new Error("Existing launcher is not owned by the versioned Agent.");
     }

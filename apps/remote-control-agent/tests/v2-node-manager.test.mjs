@@ -17,8 +17,11 @@ function fixture(){
   const scripts=directory(rel+"/programs/v0.1.2-linux-x64-glibc/apps/remote-control-agent/scripts");
   const manager=path.join(scripts,"manage-v2.mjs");
   copyFileSync(source,manager);chmodSync(manager,0o600);
-  const lifecycleSource=fileURLToPath(new URL("../scripts/lifecycle-v2.mjs",import.meta.url));
-  copyFileSync(lifecycleSource,path.join(scripts,"lifecycle-v2.mjs"));
+  for(const scriptName of ["lifecycle-v2.mjs","upgrade-v2.mjs",
+    "verify-v2-release.mjs","bootstrap-node.mjs"]){
+    const sourceFile=fileURLToPath(new URL("../scripts/"+scriptName,import.meta.url));
+    copyFileSync(sourceFile,path.join(scripts,scriptName));
+  }
   const info={version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
     device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
   writeFileSync(path.join(root,"bundle.json"),JSON.stringify(info),{mode:0o600});
@@ -165,5 +168,73 @@ test("Node uninstall asks for explicit exact confirmation before any action",asy
     await assert.rejects(runInteractiveLocalManager(["uninstall"],{
       ...base,stdin:{isTTY:false},ask:async()=>"UNINSTALL-V2"
     }),/interactive terminal/);
+  }finally{cleanup(f);}
+});
+
+test("Node manual upgrade requires local TTY and explicit immutable tag + commit",async()=>{
+  const f=fixture();
+  try{
+    const state=localManagerInventory({home:f.home,source:f.manager});
+    const calls=[];
+    const tty={isTTY:true,write(){}};
+    const pinned="a".repeat(40);
+    const prepared={program:"/synthetic/owned/new-version"};
+    const options={home:f.home,inventory:()=>state,
+      stdin:tty,stdout:tty,
+      prepareUpgrade:async(s,p,settings)=>{
+        calls.push(["prepare",s,p,settings]);return prepared;
+      },
+      activateUpgrade:p=>{
+        calls.push(["activate",p]);return {version:"v0.1.3"};
+      }};
+    await assert.rejects(runInteractiveLocalManager(["upgrade"],options),/Use rca upgrade/);
+    await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3",pinned],{
+      ...options,stdin:{isTTY:false}
+    }),/local terminal/);
+    assert.equal(calls.length,0);
+    assert.equal(await runInteractiveLocalManager(["upgrade","v0.1.3",pinned],options),0);
+    assert.deepEqual(calls.map(x=>x[0]),["prepare","activate"]);
+    assert.deepEqual(calls[0][2],{tag:"v0.1.3",commit:pinned});
+    assert.equal(calls[0][3].home,f.home);
+    assert.equal(calls[1][1],prepared);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+test("a rejected upgrade prepare cannot invoke a new binary",async()=>{
+  const f=fixture();
+  try{
+    const state=localManagerInventory({home:f.home,source:f.manager});
+    let invoked=0;
+    await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3","a".repeat(40)],{
+      home:f.home,inventory:()=>state,
+      stdin:{isTTY:true},stdout:{isTTY:true,write(){}},
+      prepareUpgrade:async()=>{throw Error("untrusted pinned release");},
+      activateUpgrade:()=>{invoked++;}
+    }),/untrusted pinned release/);
+    assert.equal(invoked,0);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+
+test("installed rca shell shim executes the bundled Node, not a host Node",()=>{
+  const f=fixture();
+  try{
+    const app=path.join(f.root,"apps/remote-control-agent/scripts");
+    const shim=path.join(app,"rca.sh");
+    copyFileSync(fileURLToPath(new URL("../scripts/rca.sh",import.meta.url)),shim);
+    chmodSync(shim,0o700);
+    const node=path.join(f.root,"bin/node");
+    writeFileSync(node,'#!/bin/sh\nprintf "bundled:%s:node-options=%s\\n" "$2" "$'+'{NODE_OPTIONS:-unset}"\n');
+    chmodSync(node,0o700);
+    const localBin=path.join(f.home,".local/bin");
+    mkdirSync(localBin,{recursive:true,mode:0o700});
+    symlinkSync(shim,path.join(localBin,"rca"));
+    const out=spawnSync(path.join(localBin,"rca"),["version"],{
+      encoding:"utf8",timeout:3000,
+      env:{...process.env,HOME:f.home,NODE_OPTIONS:"--require=/not-real"}
+    });
+    assert.equal(out.status,0,out.stderr);
+    assert.equal(out.stdout.trim(),"bundled:version:node-options=unset");
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
   }finally{cleanup(f);}
 });

@@ -17,6 +17,8 @@ async function fixture() {
   await mkdir(script,{recursive:true,mode:0o700});
   await writeFile(path.join(script,"manage-v2.py"),"#!/usr/bin/env python3\n",{mode:0o700});
   await chmod(path.join(script,"manage-v2.py"),0o700);
+  await writeFile(path.join(script,"rca.sh"),"#!/bin/sh\nexit 0\n",{mode:0o700});
+  await chmod(path.join(script,"rca.sh"),0o700);
   await writeFile(path.join(home,".bashrc"),"# existing commands\n",{mode:0o600});
   return {home,program,script};
 }
@@ -26,11 +28,23 @@ test("user-local Agent launcher is installed idempotently and PATH is appended o
   try {
     const link=await installManagerLauncher(f.home,f.program);
     assert.equal(link,path.join(f.home,".local/bin/rca"));
-    assert.equal(await readlink(link),path.join(f.script,"manage-v2.py"));
+    assert.equal(await readlink(link),path.join(f.script,"rca.sh"));
     assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
     await installManagerLauncher(f.home,f.program);
     assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
   } finally { await rm(f.home,{recursive:true,force:true}); }
+});
+
+test("previous owned Python launcher migrates to bundled Node shim",async()=>{
+  const f=await fixture();
+  try {
+    await mkdir(path.join(f.home,".local/bin"),{recursive:true,mode:0o700});
+    const link=path.join(f.home,".local/bin/rca");
+    await symlink(path.join(f.script,"manage-v2.py"),link);
+    await preflightManagerLauncher(f.home,f.program);
+    await installManagerLauncher(f.home,f.program);
+    assert.equal(await readlink(link),path.join(f.script,"rca.sh"));
+  } finally {await rm(f.home,{recursive:true,force:true});}
 });
 
 test("optional PATH customization skips hardlinks and unsafe Bash rc modes",async()=>{
@@ -56,7 +70,7 @@ test("optional PATH customization skips hardlinks and unsafe Bash rc modes",asyn
     await installManagerLauncher(f.home,f.program);
     assert.equal(await readFile(rc,"utf8"),"# group writable\\n");
     assert.equal(await readlink(path.join(f.home,".local/bin/rca")),
-      path.join(f.script,"manage-v2.py"));
+      path.join(f.script,"rca.sh"));
   } finally { await rm(f.home,{recursive:true,force:true}); }
 });
 

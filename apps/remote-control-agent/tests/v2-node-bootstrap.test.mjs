@@ -25,6 +25,10 @@ function fixture({corrupt=false,symlink=false,pax=false}={}){
     [APP+"/.build/session-supervisor",ELF(),0o700],
     [APP+"/scripts/bootstrap-node.mjs","export const candidate = true;\n",0o600],
     [APP+"/scripts/manage-v2.mjs","export const candidate = true;\n",0o600],
+    [APP+"/scripts/lifecycle-v2.mjs","export const candidate = true;\n",0o600],
+    [APP+"/scripts/upgrade-v2.mjs","export const candidate = true;\n",0o600],
+    [APP+"/scripts/verify-v2-release.mjs","export const candidate = true;\n",0o600],
+    [APP+"/scripts/rca.sh","#!/bin/sh\n",0o700],
     [APP+"/scripts/install-v2.mjs","export const candidate = true;\n",0o600],
     [APP+"/src/v2-main.js","export const candidate = true;\n",0o600],
   ]){

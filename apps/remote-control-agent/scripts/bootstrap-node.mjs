@@ -15,7 +15,9 @@ const DIRS=new Set(["bin","apps",APP,APP+"/src",APP+"/scripts",APP+"/.build"]);
 const FILES=new Set([
   "bin/node","bundle.json",APP+"/package.json",
   APP+"/scripts/install-v2.mjs",APP+"/scripts/bootstrap-node.mjs",
-  APP+"/scripts/manage-v2.mjs",APP+"/.build/session-supervisor",
+  APP+"/scripts/manage-v2.mjs",APP+"/scripts/lifecycle-v2.mjs",
+  APP+"/scripts/upgrade-v2.mjs",APP+"/scripts/verify-v2-release.mjs",
+  APP+"/scripts/rca.sh",APP+"/.build/session-supervisor",
 ]);
 const MAX_ARCHIVE=180*1024*1024, MAX_UNCOMPRESSED=240*1024*1024, MAX_FILES=80;
 const SHA=/^[a-f0-9]{64}$/;
@@ -86,7 +88,9 @@ export function inspectPinnedArchiveBytes(bytes,{expectedSha256,tag,target}){
   if(!ended||tar.subarray(offset).some(b=>b!==0))throw Error("Unexpected tar trailer");
   for(const required of ["bin/node","bundle.json",APP+"/.build/session-supervisor",
     APP+"/scripts/bootstrap-node.mjs",APP+"/scripts/manage-v2.mjs",
-    APP+"/scripts/install-v2.mjs",APP+"/src/v2-main.js"]){
+    APP+"/scripts/install-v2.mjs",APP+"/scripts/lifecycle-v2.mjs",
+    APP+"/scripts/upgrade-v2.mjs",APP+"/scripts/verify-v2-release.mjs",
+    APP+"/scripts/rca.sh",APP+"/src/v2-main.js"]){
     if(!records.has(required)||records.get(required).directory)throw Error("Required Node program missing");
   }
   let manifest;

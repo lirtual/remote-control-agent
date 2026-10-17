@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { planLocalUninstall, executeLocalUninstall } from "./lifecycle-v2.mjs";
+import { prepareManualUpgrade, activateManualUpgrade } from "./upgrade-v2.mjs";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -127,8 +128,8 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   if(args.length>2)throw Error("Too many rca arguments");
   if(args.length>1&&cmd!=="pair")throw Error("Only documented rca subcommands are accepted");
   if(cmd==="help"||cmd==="--help"||cmd==="-h"){
-    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|uninstall] — Python-free Draft CLI\n");
-    stdout.write("Manual upgrade remains unavailable pending its verified release integration.\n");
+    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|upgrade TAG COMMIT|uninstall] — Python-free Draft CLI\n");
+    stdout.write("Manual upgrade: rca upgrade <reviewed-tag> <reviewed-40-char-commit>.\n");
     return 0;
   }
   if(cmd==="version"||cmd==="--version"){
@@ -178,6 +179,18 @@ export async function runInteractiveLocalManager(args,{
   ask=null,plan=planLocalUninstall,execute=executeLocalUninstall,
   ...rest
 }={}){
+  if(args[0]==="upgrade"){
+    if(args.length!==3)throw Error("Use rca upgrade <reviewed-tag> <reviewed-40-char-commit>");
+    if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");
+    const upgrade=rest.prepareUpgrade??prepareManualUpgrade;
+    const activate=rest.activateUpgrade??activateManualUpgrade;
+    const state=inventory();
+    const prepared=await upgrade(state,{tag:args[1],commit:args[2]},{home});
+    const result=activate(prepared);
+    stdout.write("Manual upgrade completed; independent cloud verification remains required.\n");
+    stdout.write(JSON.stringify(result,null,2)+"\n");
+    return 0;
+  }
   if(args[0]!=="uninstall")
     return dispatchLocalManager(args,{inventory,stdin,stdout,...rest});
   if(args.length!==1)throw Error("Uninstall accepts no additional arguments");

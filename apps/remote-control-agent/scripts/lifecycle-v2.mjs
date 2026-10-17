@@ -37,7 +37,8 @@ export function verifyOwnedProgram(version){
     APP+"/scripts/install-v2.mjs",APP+"/scripts/verify-v2-release.mjs",
     APP+"/scripts/bootstrap-v2.py",APP+"/scripts/manage-v2.py",
     APP+"/scripts/bootstrap-node.mjs",APP+"/scripts/manage-v2.mjs",
-    APP+"/scripts/lifecycle-v2.mjs"]);
+    APP+"/scripts/lifecycle-v2.mjs",APP+"/scripts/upgrade-v2.mjs",
+    APP+"/scripts/verify-v2-release.mjs",APP+"/scripts/rca.sh"]);
   if(Array.isArray(info.modules)){
     if(info.modules.length>80)throw Error("Unexpected Agent module inventory");
     for(const name of info.modules){
@@ -70,7 +71,7 @@ export function verifyOwnedLauncher(home,versions){
   if(!entry.isSymbolicLink()||entry.uid!==process.getuid())
     throw Error("Foreign rca launcher");
   const target=readlinkSync(launcher);
-  if(!versions.some(version=>["manage-v2.py","manage-v2.mjs"].some(m=>
+  if(!versions.some(version=>["manage-v2.py","manage-v2.mjs","rca.sh"].some(m=>
       target===path.join(version,APP,"scripts",m))))
     throw Error("Foreign rca symlink destination");
   return launcher;
