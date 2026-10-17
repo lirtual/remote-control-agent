@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, assertRepeatInstallSameVersion, ensureApprovedPermanentService, trustedEndpoint } from "../scripts/install-v2.mjs";
+import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, assertRepeatInstallSameVersion, ensureApprovedPermanentService, awaitOwnerMcpApproval, trustedEndpoint } from "../scripts/install-v2.mjs";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 import { DeviceSessionRejectedError, recoverDeviceId, verifyApprovedDeviceId, signedSessionProof } from "../src/v2-session-client.ts";
@@ -20,6 +20,38 @@ const example = {
   endpoint: "https://rc.example.org/",
   keyPath: "/home/agent/.local/share/mcp-workers/remote-control/v2-identity.pem",
 };
+
+test("#97 one-code Agent waits for owner-MCP approval, not local terminal challenge",async()=>{
+  let clock=0,calls=0;
+  const claim=async()=>{
+    calls++;
+    if(calls<3) throw new DeviceSessionRejectedError("pending",404);
+    return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  };
+  const value=await awaitOwnerMcpApproval("https://rc.example.org/","/tmp/local-agent.pem",{
+    claim,now:()=>clock,delay:async(ms)=>{clock+=ms;},intervalMs:1000,deadlineMs:10000,
+  });
+  assert.equal(value,"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  assert.equal(calls,3);
+  assert.equal(clock,2000);
+});
+
+test("#97 one-code Agent fails closed on denied or expired owner approval",async()=>{
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{throw new DeviceSessionRejectedError("denied",403);},
+    delay:async()=>{throw new Error("should not poll forbidden identity");},
+  }),/denied/);
+  let clock=0,count=0;
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{count++;throw new DeviceSessionRejectedError("not yet",404);},
+    now:()=>clock,delay:async(ms)=>{clock+=ms;},intervalMs:2000,deadlineMs:5000,
+  }),/not approved within the code lifetime/);
+  assert.equal(clock,5000);
+  assert.equal(count,3);
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{throw new Error("upstream unavailable");},
+  }),/upstream unavailable/);
+});
 
 test("minimal Linux v2 CLI supports install, explicit paired-key resume, upgrade, and safe uninstall", () => {
   assert.deepEqual(parseInstallArgs(["--endpoint", "https://rc.example.org", "--name", "office"]), {
