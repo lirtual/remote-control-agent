@@ -7,7 +7,6 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { planLocalUninstall, executeLocalUninstall } from "./lifecycle-v2.mjs";
 import { prepareManualUpgrade, activateManualUpgrade } from "./upgrade-v2.mjs";
-import { recoverInterruptedUpgrade as recoverInterruptedUpgradeDefault } from "./install-v2.mjs";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -228,7 +227,8 @@ export async function runInteractiveLocalManager(args,{
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");
     const upgrade=rest.prepareUpgrade??prepareManualUpgrade;
     const activate=rest.activateUpgrade??activateManualUpgrade;
-    const recover=rest.recoverInterruptedUpgrade??recoverInterruptedUpgradeDefault;
+    const recover=rest.recoverInterruptedUpgrade ??
+      (await import("./install-v2.mjs")).recoverInterruptedUpgrade;
     await recover({home});
     const state=inventory();
     const prepared=await upgrade(state,{tag:args[1],commit:args[2]},{home});
