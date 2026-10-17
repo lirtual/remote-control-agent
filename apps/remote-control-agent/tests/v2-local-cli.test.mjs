@@ -50,6 +50,9 @@ test("optional PATH customization skips hardlinks and unsafe Bash rc modes",asyn
     assert.equal(await readFile(rc,"utf8"),"# read only\\n");
     await rm(rc);
     await writeFile(rc,"# group writable\\n",{mode:0o620});
+    // CI umask may strip group write bits at create-time: set the actual mode.
+    await chmod(rc,0o620);
+    assert.notEqual((await lstat(rc)).mode & 0o020,0);
     await installManagerLauncher(f.home,f.program);
     assert.equal(await readFile(rc,"utf8"),"# group writable\\n");
     assert.equal(await readlink(path.join(f.home,".local/bin/rca")),
