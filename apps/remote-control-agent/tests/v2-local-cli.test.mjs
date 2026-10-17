@@ -107,6 +107,47 @@ test("untrusted user-local bin symlink blocks new launcher",async()=>{
   } finally { await rm(f.home,{recursive:true,force:true}); }
 });
 
+test("#76 interrupted verified-download staging cleanup preserves identities and refuses hostile entries",()=>{
+  const bootstrap=path.join(root,"apps/remote-control-agent/scripts/bootstrap-v2.py");
+  const source=String.raw\`import importlib.util,pathlib,tempfile,stat,sys
+spec=importlib.util.spec_from_file_location("bootstrap_v2_recovery",sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
+    root=pathlib.Path(tmp)
+    home=root/"private";home.mkdir(mode=0o700)
+    programs=home/"programs";programs.mkdir(mode=0o700)
+    identity=home/"v2-identity.pem";identity.write_bytes(b"original-owner-identity")
+    receipts=home/"operation-receipts.sqlite";receipts.write_bytes(b"unknown-receipt")
+    interrupted=programs/".unverified-interrupted";interrupted.mkdir(mode=0o700)
+    nested=interrupted/"bin";nested.mkdir(mode=0o700)
+    (nested/"node").write_bytes(b"not-a-verified-executable")
+    partial=programs/".download-incomplete";partial.write_bytes(b"partial-github-download")
+    untouched=programs/"foreign-file";untouched.write_bytes(b"never-remove")
+    module.clean_orphaned_staging(programs)
+    assert not interrupted.exists() and not partial.exists()
+    assert identity.read_bytes()==b"original-owner-identity"
+    assert receipts.read_bytes()==b"unknown-receipt"
+    assert untouched.read_bytes()==b"never-remove"
+    hostile=programs/".unverified-symlink";hostile.symlink_to(identity)
+    try: module.clean_orphaned_staging(programs)
+    except ValueError: pass
+    else: raise AssertionError("refused symlink staging expected")
+    assert hostile.is_symlink() and identity.read_bytes()==b"original-owner-identity"
+    hostile.unlink()
+    wrong_mode=programs/".download-untrusted";wrong_mode.write_bytes(b"untouched")
+    wrong_mode.chmod(0o666)
+    try: module.clean_orphaned_staging(programs)
+    except ValueError: pass
+    else: raise AssertionError("refused unsafe staging permissions expected")
+    assert wrong_mode.read_bytes()==b"untouched"
+    assert receipts.read_bytes()==b"unknown-receipt"
+\`;
+  const result=spawnSync("python3",["-B","-c",source,bootstrap],{
+    encoding:"utf8",timeout:10000
+  });
+  assert.equal(result.status,0,result.stderr);
+});
+
 test("short prerelease shell bootstrap syntax and noninteractive fail-closed before GitHub",()=>{
   const sh=path.join(root,"install.sh");
   const parsed=spawnSync("sh",["-n",sh],{encoding:"utf8",timeout:3000});
