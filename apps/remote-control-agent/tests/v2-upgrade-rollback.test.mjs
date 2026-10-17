@@ -101,7 +101,7 @@ test("#77 SIGKILL during unit activation is recovered from a durable previous-un
     await writeFile(unitPath,from,{mode:0o600});
     const installerUrl = new URL("../scripts/install-v2.mjs", import.meta.url).href;
     const childSource = "import { installUnit } from " + JSON.stringify(installerUrl) + ";\n" +
-      "await installUnit(" + JSON.stringify(unitPath) + "," + JSON.stringify(to) + "," + JSON.stringify(from) + ");\\n";
+      "await installUnit(" + JSON.stringify(unitPath) + "," + JSON.stringify(to) + "," + JSON.stringify(from) + ");\n";
     const child = spawn(process.execPath, ["--experimental-strip-types","--input-type=module","-e",childSource],
       {stdio:"ignore",env:process.env});
     const exited = new Promise(resolve=>child.once("exit",(code,signal)=>resolve({code,signal})));
