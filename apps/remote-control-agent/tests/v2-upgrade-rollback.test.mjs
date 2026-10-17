@@ -151,10 +151,10 @@ test("#77 SIGKILL during unit activation is recovered from a durable previous-un
 });
 
 test("#77 interrupted recovery refuses a linked backup without changing unit or identity", async()=>{
-  await withFakeUserService(async ({unitPath,from,key})=>{
+  await withFakeUserService(async ({unitPath,from,key,home})=>{
     await writeFile(unitPath,from,{mode:0o600});
     await symlink(key,unitPath+".upgrade-backup");
-    await assert.rejects(recoverInterruptedUpgrade({home:path.resolve(unitPath,"..","..","..",".."),unitPath}),/backup is unsafe/);
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/backup is unsafe/);
     assert.equal(await readFile(unitPath,"utf8"),from);
     assert.equal(await readFile(key,"utf8"),"private-unchanged");
   });
