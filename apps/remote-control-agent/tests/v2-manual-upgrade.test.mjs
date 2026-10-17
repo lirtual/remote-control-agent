@@ -56,9 +56,17 @@ test("#77 only owned versioned signed-read-only runtimes can change a v2 service
     await writeFile(receiptFile, "not a SQLite database", {mode:0o600});
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/valid SQLite/);
     await rm(receiptFile, {force:true});
-    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/database is missing/);
+    // Fresh read-only v2 installs may have no receipt state at all.
+    await assert.doesNotReject(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"));
+    const legacyFile = path.join(path.dirname(receiptFile), "operation-receipts.json");
+    await writeFile(legacyFile, JSON.stringify({version:1,receipts:[]}), {mode:0o600});
+    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/Legacy receipt data exists/);
+    await rm(legacyFile, {force:true});
     await createReceiptDatabase(home, 1, 0o644);
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/ownership or permissions/);
+    await createReceiptDatabase(home, 1);
+    await rm(path.dirname(receiptFile), {recursive:true,force:true});
+    await assert.doesNotReject(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"));
     await createReceiptDatabase(home, 1);
     await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by mcp-workers","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,upgrade_profile:"shell-enabled"}),{mode:0o600});
