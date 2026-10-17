@@ -107,7 +107,7 @@ test("WSL2 host detection keeps the Linux installer but rejects unsupported WSL1
 test("WSL2 shares the Linux-only Agent, with no Windows Shell or host auto-wakeup hooks", async () => {
   const file = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
     "..", "scripts", "install-v2.mjs"), "utf8");
-  assert.match(file, /cannot wake a stopped WSL distribution/);
+  assert.match(file, /WSL2: stopped distribution = offline/);
   assert.ok(!file.includes("schtasks"));
   assert.ok(!file.includes("TaskScheduler"));
   assert.ok(!file.includes("powershell.exe"));
@@ -184,7 +184,8 @@ test("first pairing hides fingerprint by default, but optional display matches p
     assert.equal(parseInstallArgs(["--show-fingerprint", "--endpoint", "https://rc.example.org"]).showFingerprint, true);
     assert.match(script, /if \(options\.showFingerprint\)/);
     assert.match(script, /Local public key fingerprint \(optional check\): " \+ enrollment\.fingerprint/);
-    assert.match(script, /Enter only the 12-character challenge here/);
+    assert.match(script, /Approve via MCP \(pairing_lookup → pairing_prepare\)/);
+    assert.match(script, /MCP challenge \(12 chars\): /);
     assert.doesNotMatch(script, /openssl pkey|Repeat original 10-character code/);
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -317,7 +318,7 @@ test("one installer command dispatches verified revoke to guarded local challeng
   assert.match(src, /if \(state === "revoked"\)/);
   assert.match(src, /await rePairRevokedDevice\(options, keyPath, previous, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
-  assert.match(src, /stdout.write\("v2 user service already installed/);
+  assert.match(src, /Ready: v2 service active; existing identity retained/);
   assert.match(src, /run\("systemctl", \["--user", "start", UNIT\]\)/);
   assert.match(src, /await pairFreshPending\(options, keyPath, stdin, stdout, state === "pending"\)/);
   assert.match(src, /await assertRemoteRevocation\(options.endpoint, keyPath, oldId\)/);

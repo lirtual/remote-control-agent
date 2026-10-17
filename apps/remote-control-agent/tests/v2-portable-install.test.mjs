@@ -35,7 +35,7 @@ test("#74 portable installer requires a real local TTY and explicit permanent se
   assert.match(src,/Choose Permanent or Temporary explicitly/);
   assert.match(src,/choice !== "1"/);
   assert.match(src,/options.grantType === "temporary"/);
-  assert.match(src,/foreground only; cloud expires 24 hours/);
+  assert.match(src,/Temporary: cloud grant expires in 24h; terminal stop is not a revoke/);
   assert.match(src,/Portable runtime mismatch; no pairing attempted/);
   assert.match(src,/assertNativeSupervisorProbe\(native\)/);
   assert.match(src,/entryExt: portable \? "js" : "ts"/);
