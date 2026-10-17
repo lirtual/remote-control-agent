@@ -96,7 +96,7 @@ function rewriteExtensions(text) {
 }
 
 /** Follow static source dependency graph, no tests, checkout or node_modules copied. */
-export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "confirm-device.ts", "v2-repair.ts"]) {
+export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "v2-repair.ts"]) {
   const visited = new Set();
   function walk(name) {
     if (!/^[a-z0-9-]+\.ts$/.test(name)) throw new Error("Unreviewed runtime import: " + name);
