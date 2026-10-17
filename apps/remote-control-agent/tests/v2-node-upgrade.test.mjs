@@ -13,20 +13,20 @@ const APP="apps/remote-control-agent";
 const ID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
 const ENDPOINT="https://remote-control-v2-preview.aiyaya.workers.dev/";
 const tag="v0.1.3",commit="a".repeat(40);
-const TARGET="linux-x64-glibc";
+const TARGET=process.arch==="arm64"?"linux-arm64-glibc":"linux-x64-glibc";
 const MAIN="const caps = {readOnly: true, writeFile: false, shell: false,};\n";
 const manifest=()=>({name:"remote-control-agent",artifact_schema:1,
   version:tag,target:TARGET,node:"v24.21.0",glibc_min:"2.34",
   device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"});
 function elf(){
   const b=Buffer.alloc(72);b.writeUInt32LE(0x464c457f,0);
-  b[4]=2;b[5]=1;b.writeUInt16LE(62,18);return b;
+  b[4]=2;b[5]=1;b.writeUInt16LE(process.arch==="arm64"?183:62,18);return b;
 }
 function fixture({newSource=MAIN}={}){
   const home=mkdtempSync(path.join(os.tmpdir(),"rca-upgrade-local-"));chmodSync(home,0o700);
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
   mkdirSync(programs,{recursive:true,mode:0o700});chmodSync(programs,0o700);
-  const oldRoot=path.join(programs,"v0.1.2-linux-x64-glibc");
+  const oldRoot=path.join(programs,"v0.1.2-"+TARGET);
   const oldSrc=path.join(oldRoot,APP,"src");
   mkdirSync(oldSrc,{recursive:true,mode:0o700});
   writeFileSync(path.join(oldSrc,"v2-main.js"),MAIN,{mode:0o600});

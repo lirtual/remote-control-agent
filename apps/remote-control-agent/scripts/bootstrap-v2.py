@@ -45,9 +45,20 @@ ALLOWED_FILES = frozenset((
     "bin/node", "bundle.json", APP + "/package.json",
     APP + "/scripts/install-v2.mjs", APP + "/scripts/bootstrap-v2.py",
     APP + "/scripts/manage-v2.py", APP + "/.build/session-supervisor",
+    APP + "/scripts/bootstrap-node.mjs", APP + "/scripts/manage-v2.mjs",
+    APP + "/scripts/lifecycle-v2.mjs", APP + "/scripts/upgrade-v2.mjs",
+    APP + "/scripts/verify-v2-release.mjs", APP + "/scripts/rca.sh",
 ))
 ELF_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))
-EXEC_FILES = ELF_FILES | frozenset((APP + "/scripts/manage-v2.py",))
+EXEC_FILES = ELF_FILES
+NODE_REQUIRED = frozenset((
+    APP + "/scripts/bootstrap-node.mjs", APP + "/scripts/manage-v2.mjs",
+    APP + "/scripts/lifecycle-v2.mjs", APP + "/scripts/upgrade-v2.mjs",
+    APP + "/scripts/verify-v2-release.mjs", APP + "/scripts/rca.sh",
+))
+LEGACY_REQUIRED = frozenset((
+    APP + "/scripts/bootstrap-v2.py", APP + "/scripts/manage-v2.py",
+))
 TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HASH = re.compile(r"sha256:([0-9a-f]{64})\Z")
@@ -173,10 +184,15 @@ def inspect_archive(archive, tag, target):
             records.append((name, member))
         if not EXEC_FILES.issubset(names) or "bundle.json" not in names \
                 or APP + "/src/v2-main.js" not in names \
-                or APP + "/scripts/install-v2.mjs" not in names \
-                or APP + "/scripts/bootstrap-v2.py" not in names \
-                or APP + "/scripts/manage-v2.py" not in names:
+                or APP + "/scripts/install-v2.mjs" not in names:
             raise ValueError("Incomplete Agent Release archive")
+        # CI candidate tags need not use final semver. Choose the reviewed
+        # file profile by presence, never by a mutable/latest version string.
+        # A partial mixed archive must satisfy the full selected profile.
+        node_profile = bool(names & NODE_REQUIRED)
+        required = NODE_REQUIRED if node_profile else LEGACY_REQUIRED
+        if not required.issubset(names):
+            raise ValueError("Missing reviewed Agent manager/bootstrap files")
         manifest = json.load(tf.extractfile(tf.getmember("bundle.json")))
         if (manifest.get("artifact_schema") != 1 or manifest.get("name") != "remote-control-agent"
                 or manifest.get("version") != tag or manifest.get("target") != target
