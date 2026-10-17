@@ -439,10 +439,10 @@ async function atomicUnitWrite(unitPath, content) {
 }
 
 async function assertRecoverablePreviousUnit(unit, home) {
-  if (!unit || !unit.startsWith(MARKER + "\\n")) {
+  if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Interrupted upgrade backup is not an owned v2 unit.");
   }
-  const settings = unit.split("\\n");
+  const settings = unit.split("\n");
   const working = settings.filter(line => line.startsWith("WorkingDirectory="));
   const starts = settings.filter(line => line.startsWith("ExecStart="));
   if (working.length !== 1 || starts.length !== 1) {
@@ -479,7 +479,7 @@ async function assertRecoverablePreviousUnit(unit, home) {
   const entryInfo = await lstat(entry);
   if (!entryInfo.isFile() || entryInfo.isSymbolicLink() ||
       entryInfo.uid !== process.getuid() || (entryInfo.mode & 0o077) !== 0 ||
-      !/readOnly:\\s*true,\\s*writeFile:\\s*false,\\s*shell:\\s*false,/.test(await readFile(entry, "utf8"))) {
+      !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))) {
     throw new Error("Previous Agent does not prove the reviewed read-only profile.");
   }
   return root;
