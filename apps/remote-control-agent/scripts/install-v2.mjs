@@ -217,6 +217,20 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath))};
 }
 
+/** Repeat-install is same-version only. A different installed service
+ * must use explicit pinned rca upgrade and its rollback gate. */
+export function assertRepeatInstallSameVersion(unit, root) {
+  if (!unit || !unit.startsWith(MARKER + "\n")) {
+    throw new Error("An unowned v2 service cannot be reused.");
+  }
+  const values=unit.split("\n").filter(line=>line.startsWith("ExecStart="));
+  const expected="ExecStart="+path.join(root,"bin/node")+" "+
+    path.join(root,"apps/remote-control-agent/src/v2-main.js");
+  if(values.length!==1||values[0]!==expected){
+    throw new Error("Existing Agent runs another version; use reviewed rca upgrade.");
+  }
+}
+
 /** The regular installer never silently retargets an installed v2 service. */
 export function assertExistingServiceEndpoint(unit, endpoint) {
   const expected = "Environment=REMOTE_CONTROL_V2_ENDPOINT=" + trustedEndpoint(endpoint);
@@ -894,6 +908,10 @@ export async function runInstaller(args, {
   if (previous && (options.action === "install" || options.action === "upgrade") &&
       options.grantType !== "temporary") {
     assertExistingServiceEndpoint(previous, options.endpoint);
+  }
+  if (portable && previous && options.action==="install" &&
+      options.grantType!=="temporary"){
+    assertRepeatInstallSameVersion(previous,programRoot);
   }
   // A distinct temporary Agent may coexist with the installed permanent unit.
   if (options.foreground && previous && options.grantType !== "temporary") {

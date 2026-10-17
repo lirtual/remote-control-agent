@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { installManagerLauncher, preflightManagerLauncher } from "../scripts/install-v2.mjs";
+import { installManagerLauncher, preflightManagerLauncher, assertRepeatInstallSameVersion } from "../scripts/install-v2.mjs";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -22,6 +22,17 @@ async function fixture() {
   await writeFile(path.join(home,".bashrc"),"# existing commands\n",{mode:0o600});
   return {home,program,script};
 }
+
+test("repeat installer reuses only the exact running program, never silently switches CLI versions",()=>{
+  const old="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.1-linux-x64-glibc";
+  const next="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.2-linux-x64-glibc";
+  const unit="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n[Service]\n"+
+    "ExecStart="+old+"/bin/node "+old+"/apps/remote-control-agent/src/v2-main.js\n";
+  assert.equal(assertRepeatInstallSameVersion(unit,old),undefined);
+  assert.throws(()=>assertRepeatInstallSameVersion(unit,next),/use reviewed rca upgrade/);
+  assert.throws(()=>assertRepeatInstallSameVersion(unit.replace("ExecStart=","ExecStart=/bin/sh -c foreign #"),old));
+  assert.throws(()=>assertRepeatInstallSameVersion(unit+"ExecStart=/bin/sh\n",old));
+});
 
 test("user-local Agent launcher is installed idempotently and PATH is appended only once",async()=>{
   const f=await fixture();
