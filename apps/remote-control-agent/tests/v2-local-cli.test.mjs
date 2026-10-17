@@ -123,7 +123,21 @@ with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
     (nested/"node").write_bytes(b"not-a-verified-executable")
     partial=programs/".download-incomplete";partial.write_bytes(b"partial-github-download");partial.chmod(0o600)
     untouched=programs/"foreign-file";untouched.write_bytes(b"never-remove")
+    # A real killed child leaves partially extracted bytes on disk; only
+    # the next invocation's bounded staging cleanup may remove them.
+    import os,signal
+    pid=os.fork()
+    if pid == 0:
+        crashed=programs/".unverified-sigkill"
+        crashed.mkdir(mode=0o700)
+        (crashed/"node").write_bytes(b"never-execute-partial")
+        os.kill(os.getpid(),signal.SIGKILL)
+        os._exit(7)
+    _,status=os.waitpid(pid,0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status)==signal.SIGKILL
+    assert (programs/".unverified-sigkill/node").read_bytes()==b"never-execute-partial"
     module.clean_orphaned_staging(programs)
+    assert not (programs/".unverified-sigkill").exists()
     assert not interrupted.exists() and not partial.exists()
     assert identity.read_bytes()==b"original-owner-identity"
     assert receipts.read_bytes()==b"unknown-receipt"
