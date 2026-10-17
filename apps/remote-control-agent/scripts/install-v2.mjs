@@ -791,7 +791,8 @@ export async function installManagerLauncher(home, program) {
   try {
     const stat=await lstat(rc);
     if (stat.isFile() && !stat.isSymbolicLink() && stat.uid===process.getuid() &&
-        stat.size <= 1024*1024) {
+        stat.nlink === 1 && (stat.mode & 0o200) !== 0 &&
+        (stat.mode & 0o022) === 0 && stat.size <= 1024*1024) {
       const contents=await readFile(rc,"utf8");
       if (!contents.includes("# rca local CLI")) {
         const fd=await open(rc,constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
