@@ -201,8 +201,10 @@ test("#77 interrupted recovery refuses endpoint drift before touching systemd", 
 });
 
 test("#77 interrupted recovery refuses device-key drift before touching systemd", async()=>{
-  await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
-    const moved=to.replace("REMOTE_CONTROL_V2_KEY_PATH=", "REMOTE_CONTROL_V2_KEY_PATH=/other-device-");
+  await withFakeUserService(async ({unitPath,from,to,home,logs,key})=>{
+    // Keep the modified unit internally canonical; change both Environment and
+    // ExecStartPre key paths so we specifically exercise cross-version ID drift.
+    const moved=to.replaceAll(key,key+".different");
     await writeFile(unitPath,moved,{mode:0o600});
     await writeFile(unitPath+".upgrade-backup",from,{mode:0o600});
     await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/changes the endpoint or device identity/);
