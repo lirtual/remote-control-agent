@@ -1,15 +1,29 @@
 # Remote Control Agent
 
-Standalone **Linux/WSL2** Remote Control Agent source (x86_64 and ARM64 target).
+Standalone **Linux/WSL2** Remote Control Agent for x86_64 and ARM64. This is the **public source and GitHub Release repository**; the Cloudflare MCP Worker, owner-scoped Durable Object, Portal authorization and production configuration stay in the private `lirtual/mcp-workers` repository.
 
-This repository is the **public Agent source and future GitHub Release origin** for `lirtual/mcp-workers`, whose Cloudflare MCP Worker, owner-scoped Durable Object, Portal authentication and production configuration remain private. The Agent connects outbound over signed Ed25519 WSS after explicit owner MCP approval and independent confirmation in its own terminal.
+## Published test prerelease
 
-**Current status: source migration preview only.** There is **no official published standalone release**, supported public one-line installer, or production rollout yet. Do not use fabricated download URLs or assume a private Worker deployment exists.
+**[v0.1.0 — test prerelease](https://github.com/lirtual/remote-control-agent/releases/tag/v0.1.0)** is publicly available and **immutable**. It includes the native Linux x64 and ARM64 Agent archives plus `SHA256SUMS`. This is **not** a production Agent rollout, and it does not authorize or connect any device by itself.
 
-The `apps/remote-control-agent` source layout and the archive-internal paths are deliberately retained during the initial split to preserve the current versioned binary contract. This is not a second Worker or dependency on private Worker source. Initial development uses Node.js 24 and the native C helper; the future verified release is designed to bundle its own Node.js and native helper.
+- **Pinned source/tag:** `e82b90287374797ce20072ce18892055e4a17980`
+- **Native CI:** [#38996153946](https://github.com/lirtual/remote-control-agent/actions/runs/38996153946), both architectures passed
+- **Runtime:** self-contained verified official Node.js **24.21.0**, compiled native process-group Supervisor and reviewed JS entrypoints
+- **Compatibility:** Linux glibc **2.34+**, kernel **6.9+** with the required pidfd process-group features; WSL2 when running. Native Windows/macOS, WSL1 and musl are unsupported
+- **Preflight:** Python 3, curl, an approved nonproduction Worker HTTPS origin, and a **nonroot interactive terminal**. No system Node, npm, git or C compiler needed on the target
 
-For signed onboarding, first choose permanent user-systemd or 24-hour temporary foreground mode. Installing does not automatically allow Shell/file writes; those capabilities require independent approval. Local uninstall does **not** revoke cloud grants.
+### Pinned first-install command for an approved nonproduction Worker
 
-Public repository does not include private Worker code, Cloudflare Secrets, device private keys, identity files, SQLite operation history, internal Preview-specific host scripts or private Git commit history.
+Run **only on an isolated, unpaired test host** after the Worker origin and owner approval are confirmed. Replace `https://APPROVED_PREVIEW_WORKER_ORIGIN/` with the real approved HTTPS origin; the placeholder is **not** a runnable endpoint.
 
-Release publication, native ARM64 acceptance, clean-host x64/ARM64 integration, independent security review and actual one-device 48-hour observation remain gated.
+```sh
+bash -c 'set -eu; code=$(curl -fsSL --proto =https --tlsv1.2 "https://raw.githubusercontent.com/lirtual/remote-control-agent/e82b90287374797ce20072ce18892055e4a17980/apps/remote-control-agent/scripts/bootstrap-v2.py"); exec python3 -c "$code" --tag v0.1.0 --commit e82b90287374797ce20072ce18892055e4a17980 --endpoint https://APPROVED_PREVIEW_WORKER_ORIGIN/'
+```
+
+This intentionally pins both the public GitHub source and immutable Release, checks the **official GitHub asset digest** before installing, then prompts locally for Permanent (systemd) or Temporary (24-hour foreground) mode. A first pair must separately pass authenticated MCP `pairing_lookup` and `pairing_prepare` with owner approval plus a **12-character target-terminal challenge**. Initial capabilities are **read-only** by default; installer execution never enables Shell/file writes. Do not paste local keys, secret tokens or the 12-character challenge into public issues or logs.
+
+The above command has passed a real public-GitHub download and staging smoke test on x64 using an isolated disposable HOME, an invalid mode choice and **zero device enrollments**. ARM64 native offline packaging and CLI refusal paths passed CI, but actual owner-confirmed enrollment, end-to-end lifecycle and the one-device **48 elapsed-hour** observation remain open: [release gate #1](https://github.com/lirtual/remote-control-agent/issues/1).
+
+The source and archive retain `apps/remote-control-agent` layout for v2 compatibility while the private repository finishes staged migration. No private Git history, private Worker source, Cloudflare secrets, local device keys or SQLite receipt databases are included. Local uninstall does not revoke a cloud grant; cloud revocation is a separate owner MCP action.
+
+**No production cutover** is implied by this public prerelease.
