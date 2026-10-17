@@ -508,17 +508,11 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
   if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
   try {
-    if (current !== previous) {
-      await atomicUnitWrite(unitPath, previous);
-      run("systemctl", ["--user", "daemon-reload"]);
-      run("systemctl", ["--user", "restart", UNIT]);
-    } else {
-      try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-      catch {
-        run("systemctl", ["--user", "daemon-reload"]);
-        run("systemctl", ["--user", "start", UNIT]);
-      }
-    }
+    if (current !== previous) await atomicUnitWrite(unitPath, previous);
+    // Always restart the previous executable. An active PID alone does not
+    // prove it matches the restored unit after an interrupted restart.
+    run("systemctl", ["--user", "daemon-reload"]);
+    run("systemctl", ["--user", "restart", UNIT]);
     run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
     await rm(backupPath, {force:true});
     return true;
@@ -552,11 +546,7 @@ export async function installUnit(unitPath, content, previous) {
         const current = await readOwnedUnit(unitPath);
         if (current !== previous) await atomicUnitWrite(unitPath, previous);
         run("systemctl", ["--user", "daemon-reload"]);
-        if (current !== previous) run("systemctl", ["--user", "restart", UNIT]);
-        else {
-          try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-          catch { run("systemctl", ["--user", "start", UNIT]); }
-        }
+        run("systemctl", ["--user", "restart", UNIT]);
         run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
         await rm(backupPath, {force:true});
       } catch { /* Keep the durable backup for a later recovery attempt. */ }
