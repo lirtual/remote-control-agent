@@ -1,5 +1,5 @@
 {
-  "name": "@mcp-workers/remote-control-agent",
+  "name": "remote-control-agent",
   "version": "0.0.0",
   "private": true,
   "type": "module",
