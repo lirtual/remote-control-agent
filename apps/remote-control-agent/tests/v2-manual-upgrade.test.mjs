@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, chmod, rename, symlink, link } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -70,6 +70,16 @@ test("#77 only owned versioned signed-read-only runtimes can change a v2 service
     await createReceiptDatabase(home, 1, 0o644);
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/ownership or permissions/);
     await createReceiptDatabase(home, 1);
+    const symlinkTarget = receiptFile + ".target";
+    await rename(receiptFile, symlinkTarget);
+    await symlink(symlinkTarget, receiptFile);
+    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/cannot be opened safely/);
+    await rm(receiptFile, {force:true});
+    await rename(symlinkTarget, receiptFile);
+    const hardlink = receiptFile + ".link";
+    await link(receiptFile, hardlink);
+    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/ownership or permissions/);
+    await rm(hardlink, {force:true});
     await rm(path.dirname(receiptFile), {recursive:true,force:true});
     await assert.doesNotReject(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"));
     await createReceiptDatabase(home, 1);
