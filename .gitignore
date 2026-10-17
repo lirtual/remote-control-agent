@@ -1,0 +1,15 @@
+node_modules/
+**/node_modules/
+**/.build/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.sqlite
+*.sqlite-*
+*receipts*.json
+*.log
+.DS_Store

@@ -1,0 +1,8 @@
+{
+  "name": "remote-control-agent-source",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.17.1",
+  "engines": { "node": ">=24 <25" },
+  "scripts": { "test": "pnpm --filter @mcp-workers/remote-control-agent test", "typecheck": "pnpm --filter @mcp-workers/remote-control-agent typecheck" }
+}
