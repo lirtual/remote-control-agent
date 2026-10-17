@@ -8,6 +8,64 @@ import subprocess
 import sys
 import tempfile
 
+
+def verify_refuses_unsafe_onboarding(node, installer, root):
+    """Exercise the *actual bundled* CLI, never contact the owner/Worker."""
+    import os
+    import pty
+    import select
+    import time
+
+    home = root / "disposable-unpaired-home"
+    home.mkdir(mode=0o700)
+    env = {**os.environ, "HOME": str(home)}
+    cli = [str(node), str(installer), "--endpoint", "https://rc.example.org/"]
+
+    # No TTY: never select a default device lifetime or create an identity.
+    result = subprocess.run(cli, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=10, check=False)
+    if result.returncode == 0:
+        raise SystemExit("noninteractive portable installer activated unexpectedly")
+
+    # Real PTY: the owner must choose; an invalid selection must fail closed
+    # *before* any pairing request or identity key is produced.
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(cli, env=env, stdin=slave, stdout=slave, stderr=slave,
+                            start_new_session=True, close_fds=True)
+    os.close(slave)
+    transcript = b""
+    challenged = False
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                transcript += chunk
+            if b"Choose 1 = Permanent (systemd); 2 = Temporary (24h):" in transcript and not challenged:
+                os.write(master, b"x\n")
+                challenged = True
+            if proc.poll() is not None:
+                break
+        if proc.poll() is None:
+            proc.kill()
+        if proc.wait(timeout=3) == 0 or not challenged:
+            raise SystemExit("portable target-local mode-choice gate failed")
+    finally:
+        os.close(master)
+
+    private = home / ".local/share/mcp-workers/remote-control"
+    if (private / "v2-identity.pem").exists() or (private / "temporary/v2-identity.pem").exists():
+        raise SystemExit("portable installer created identity before owner approval")
+    return "noninteractive_and_invalid_local_mode_rejected"
+
+
 if len(sys.argv) != 4:
     raise SystemExit("usage: validate-local-archive.py <archive> <tag> <target>")
 archive, tag, target = sys.argv[1:]
@@ -37,7 +95,8 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                               start_new_session=True)
         if proc.returncode:
             raise SystemExit("unpublished bundle failed native runtime verification")
-    print(json.dumps({"kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
+    onboarding = verify_refuses_unsafe_onboarding(node, installer, root)
+    print(json.dumps({"onboarding_gate": onboarding, "kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
                       "target": target, "node": manifest["node"],
                       "glibc_min": manifest["glibc_min"],
                       "archive_entries": len(records),
