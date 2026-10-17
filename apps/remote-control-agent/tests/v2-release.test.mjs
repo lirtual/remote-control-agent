@@ -86,7 +86,8 @@ test("#73 release package build rejects unverified architectures and unpinned ta
   assert.ok(runtimeSources().includes("v2-main.ts"));
   assert.ok(!runtimeSources().includes("main.ts"));
   assert.ok(!runtimeSources().includes("server.ts"));
-  assert.throws(()=>ensureNativeTarget({target:"linux-arm64-glibc",nodeBin:"/missing",native:"/missing"}),/architecture/);
+  const mismatchedArch = process.arch === "arm64" ? "linux-x64-glibc" : "linux-arm64-glibc";
+  assert.throws(()=>ensureNativeTarget({target:mismatchedArch,nodeBin:"/missing",native:"/missing"}),/architecture/);
 });
 
 test("#73 verifies immutable setting, tag commit, exact asset id and official digest",async()=>{
