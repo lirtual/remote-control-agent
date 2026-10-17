@@ -168,12 +168,25 @@ export function renderV2Service({ node, home, repoRoot, endpoint, keyPath, entry
  * Existing systemd activation+rollback in installUnit() switches ONLY the
  * v2 program path; private Ed25519 keys, endpoint and SQLite remain intact.
  */
+async function hasPathNoFollow(file) {
+  try { await lstat(file); return true; }
+  catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
 async function assertReceiptDatabaseCompatible(home, expectedSchema = 1) {
   const directory = path.join(home, ".local", "state", "mcp-workers", "remote-control-agent");
   const receiptPath = path.join(directory, "operation-receipts.sqlite");
   let directoryInfo;
   try { directoryInfo = await lstat(directory); }
-  catch { throw new Error("Receipt database directory is missing; upgrade blocked."); }
+  catch (error) {
+    // A fresh read-only v2 install may never have created receipt state.
+    // There is no persisted history to preserve if the directory itself is absent.
+    if (error?.code === "ENOENT") return;
+    throw new Error("Receipt database directory cannot be inspected; upgrade blocked.");
+  }
   if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() ||
       directoryInfo.uid !== process.getuid() || (directoryInfo.mode & 0o077) !== 0) {
     throw new Error("Receipt database directory ownership or permissions are unsafe; upgrade blocked.");
@@ -181,7 +194,21 @@ async function assertReceiptDatabaseCompatible(home, expectedSchema = 1) {
   let handle;
   try { handle = await open(receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW); }
   catch (error) {
-    if (error?.code === "ENOENT") throw new Error("Receipt database is missing; upgrade blocked.");
+    if (error?.code === "ENOENT") {
+      // Missing SQLite is safe only when no legacy receipt file or migration backup exists.
+      for (const legacyPath of [
+        path.join(directory, "operation-receipts.json"),
+        path.join(directory, "operation-receipts.pre-sqlite.json"),
+      ]) {
+        let legacyExists;
+        try { legacyExists = await hasPathNoFollow(legacyPath); }
+        catch { throw new Error("Legacy receipt data cannot be inspected; upgrade blocked."); }
+        if (legacyExists) {
+          throw new Error("Legacy receipt data exists without SQLite database; upgrade blocked.");
+        }
+      }
+      return;
+    }
     throw new Error("Receipt database cannot be opened safely; upgrade blocked.");
   }
   try {
