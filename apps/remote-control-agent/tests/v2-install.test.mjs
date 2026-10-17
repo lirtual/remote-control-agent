@@ -355,7 +355,7 @@ test("one installer command dispatches verified revoke to guarded local challeng
   assert.match(src, /await rePairRevokedDevice\(options, keyPath, previous, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
   assert.match(src, /Ready: v2 service active; existing identity retained/);
-  assert.match(src, /run\("systemctl", \["--user", "start", UNIT\]\)/);
+  assert.match(src, /ensureApprovedPermanentService\(\)/);
   assert.match(src, /await pairFreshPending\(options, keyPath, stdin, stdout, state === "pending"\)/);
   assert.match(src, /await assertRemoteRevocation\(options.endpoint, keyPath, oldId\)/);
   assert.doesNotMatch(src, /Type RE-PAIR|Explicit re-pair confirmation was not provided/);
