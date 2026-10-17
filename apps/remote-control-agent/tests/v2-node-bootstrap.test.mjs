@@ -40,6 +40,14 @@ function fixture({corrupt=false,symlink=false,pax=false}={}){
   return {dir,bytes,sha:expectedSha256};
 }
 const params=(x)=>({expectedSha256:x.sha,tag:"v0.1.2",target:"linux-x64-glibc"});
+test("uncompleted Node installer refuses direct execution instead of reporting success",()=>{
+  const exe=path.join(path.dirname(new URL(import.meta.url).pathname),"../scripts/bootstrap-node.mjs");
+  const result=spawnSync(process.execPath,[exe,"--archive","/tmp/no-such-archive"],{
+    encoding:"utf8",timeout:3000,
+  });
+  assert.equal(result.status,1);
+  assert.match(result.stderr,/not enabled in this Draft/);
+});
 test("pinned original USTAR archive is inspected without Python, tar extraction or side effects",()=>{
   const x=fixture();
   try{

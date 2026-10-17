@@ -6,6 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import { readFileSync, lstatSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
 const APP="apps/remote-control-agent";
@@ -111,4 +112,13 @@ export function inspectPinnedArchiveFile(filename,expected){
      (st.mode&0o077)!==0||st.size>MAX_ARCHIVE)
     throw Error("Untrusted downloaded archive path");
   return inspectPinnedArchiveBytes(readFileSync(filename),expected);
+}
+
+
+// This first Draft only supplies the bounded archive inspector. Do not treat
+// it as a runnable installer until secure staging, lifecycle and JS rca are
+// implemented and exercised on both architectures. No success-shaped no-op.
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  console.error("Python-free Agent installer is not enabled in this Draft build.");
+  process.exitCode = 1;
 }
