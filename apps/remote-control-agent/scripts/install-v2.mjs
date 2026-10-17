@@ -438,23 +438,128 @@ async function atomicUnitWrite(unitPath, content) {
   }
 }
 
-export async function installUnit(unitPath, content, previous) {
-  await atomicUnitWrite(unitPath, content);
+async function assertRecoverablePreviousUnit(unit, home) {
+  if (!unit || !unit.startsWith(MARKER + "\\n")) {
+    throw new Error("Interrupted upgrade backup is not an owned v2 unit.");
+  }
+  const settings = unit.split("\\n");
+  const working = settings.filter(line => line.startsWith("WorkingDirectory="));
+  const starts = settings.filter(line => line.startsWith("ExecStart="));
+  if (working.length !== 1 || starts.length !== 1) {
+    throw new Error("Interrupted upgrade backup has ambiguous executable ownership.");
+  }
+  const root = path.resolve(working[0].slice("WorkingDirectory=".length), "..", "..");
+  const programs = path.join(home, ".local", "share", "mcp-workers", "remote-control", "programs");
+  const expectedStart = "ExecStart=" + path.join(root, "bin", "node") + " " +
+    path.join(root, "apps", "remote-control-agent", "src", "v2-main.js");
+  if (!root.startsWith(programs + path.sep) || starts[0] !== expectedStart) {
+    throw new Error("Interrupted upgrade backup does not reference a versioned Agent.");
+  }
+  const rootInfo = await lstat(root);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() ||
+      rootInfo.uid !== process.getuid() || (rootInfo.mode & 0o077) !== 0) {
+    throw new Error("Previous Agent directory is not safe to recover.");
+  }
+  const manifestPath = path.join(root, "bundle.json");
+  const manifestInfo = await lstat(manifestPath);
+  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink() ||
+      manifestInfo.uid !== process.getuid() || (manifestInfo.mode & 0o077) !== 0) {
+    throw new Error("Previous Agent manifest is not safe to recover.");
+  }
+  let manifest;
+  try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); }
+  catch { throw new Error("Previous Agent manifest is invalid."); }
+  if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
+      manifest.receipt_schema !== 1 || manifest.upgrade_profile !== "read-only-no-shell-v1" ||
+      manifest.target !== "linux-" + process.arch + "-glibc" ||
+      path.basename(root) !== manifest.version + "-" + manifest.target) {
+    throw new Error("Previous Agent version cannot be safely recovered.");
+  }
+  const entry = path.join(root, "apps", "remote-control-agent", "src", "v2-main.js");
+  const entryInfo = await lstat(entry);
+  if (!entryInfo.isFile() || entryInfo.isSymbolicLink() ||
+      entryInfo.uid !== process.getuid() || (entryInfo.mode & 0o077) !== 0 ||
+      !/readOnly:\\s*true,\\s*writeFile:\\s*false,\\s*shell:\\s*false,/.test(await readFile(entry, "utf8"))) {
+    throw new Error("Previous Agent does not prove the reviewed read-only profile.");
+  }
+  return root;
+}
+
+/**
+ * Recover an interrupted program switch from a durable copy of the prior unit.
+ * If the prior unit is already restored, only ensure that service is active.
+ */
+export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = {}) {
+  unitPath ??= path.join(home, ".config", "systemd", "user", UNIT);
+  const backupPath = unitPath + ".upgrade-backup";
+  const backupInfo = await exists(backupPath);
+  if (!backupInfo) return false;
+  if (!backupInfo.isFile() || backupInfo.isSymbolicLink() ||
+      backupInfo.uid !== process.getuid() || (backupInfo.mode & 0o077) !== 0 ||
+      backupInfo.nlink !== 1) {
+    throw new Error("Interrupted upgrade backup is unsafe; manual review required.");
+  }
+  let previous;
+  try { previous = await readFile(backupPath, "utf8"); }
+  catch { throw new Error("Interrupted upgrade backup cannot be read; manual review required."); }
+  await assertRecoverablePreviousUnit(previous, home);
+  let current;
+  try { current = await readOwnedUnit(unitPath); }
+  catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
+  if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
   try {
+    if (current !== previous) {
+      await atomicUnitWrite(unitPath, previous);
+      run("systemctl", ["--user", "daemon-reload"]);
+      run("systemctl", ["--user", "restart", UNIT]);
+    } else {
+      try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
+      catch {
+        run("systemctl", ["--user", "daemon-reload"]);
+        run("systemctl", ["--user", "start", UNIT]);
+      }
+    }
+    run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    await rm(backupPath, {force:true});
+    return true;
+  } catch {
+    throw new Error("Interrupted upgrade recovery failed; previous service backup was preserved.");
+  }
+}
+
+export async function installUnit(unitPath, content, previous) {
+  const backupPath = unitPath + ".upgrade-backup";
+  if (previous) {
+    if (await exists(backupPath)) {
+      throw new Error("Interrupted upgrade backup exists; recovery is required before another switch.");
+    }
+    await atomicUnitWrite(backupPath, previous);
+  }
+  try {
+    await atomicUnitWrite(unitPath, content);
     run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", previous ? "restart" : "enable", ...(previous ? [] : ["--now"]), UNIT]);
     run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    if (previous) await rm(backupPath, {force:true});
   } catch {
-    // Never leave an installed half-started v2 service on first installation.
+    // If SIGKILL bypasses this catch, recoverInterruptedUpgrade uses the same
+    // durable backup on the next install/upgrade invocation.
     if (!previous) {
       try { run("systemctl", ["--user", "disable", "--now", UNIT]); } catch { /* unavailable */ }
       await rm(unitPath, { force: true });
     } else {
-      await atomicUnitWrite(unitPath, previous);
       try {
+        const current = await readOwnedUnit(unitPath);
+        if (current !== previous) await atomicUnitWrite(unitPath, previous);
         run("systemctl", ["--user", "daemon-reload"]);
-        run("systemctl", ["--user", "restart", UNIT]);
-      } catch { /* Preserve the old unit even if local service is unhealthy. */ }
+        if (current !== previous) run("systemctl", ["--user", "restart", UNIT]);
+        else {
+          try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
+          catch { run("systemctl", ["--user", "start", UNIT]); }
+        }
+        run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+        await rm(backupPath, {force:true});
+      } catch { /* Keep the durable backup for a later recovery attempt. */ }
     }
     try { run("systemctl", ["--user", "daemon-reload"]); } catch { /* unavailable */ }
     throw new Error("The v2 user service could not be activated; original v1 services were not touched.");
@@ -968,6 +1073,7 @@ export async function runInstaller(args, {
   const keyPath = keyForInstallMode(home, options.grantType ?? "permanent");
   systemdLiteral(home);
   const host = await preflight(options.action, options.foreground);
+  await recoverInterruptedUpgrade({home, unitPath});
   if (options.action !== "uninstall") trustedEndpoint(options.endpoint);
   // Read-only collision gate BEFORE creating a device key or pending cloud grant.
   if (portable && options.action !== "uninstall") {
