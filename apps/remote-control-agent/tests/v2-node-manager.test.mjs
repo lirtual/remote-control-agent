@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { dispatchLocalManager, localManagerInventory, localManagerStatus } from "../scripts/manage-v2.mjs";
+import { dispatchLocalManager, localManagerInventory, localManagerStatus, runInteractiveLocalManager } from "../scripts/manage-v2.mjs";
 
 const source=fileURLToPath(new URL("../scripts/manage-v2.mjs",import.meta.url));
 const UUID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
@@ -17,6 +17,8 @@ function fixture(){
   const scripts=directory(rel+"/programs/v0.1.2-linux-x64-glibc/apps/remote-control-agent/scripts");
   const manager=path.join(scripts,"manage-v2.mjs");
   copyFileSync(source,manager);chmodSync(manager,0o600);
+  const lifecycleSource=fileURLToPath(new URL("../scripts/lifecycle-v2.mjs",import.meta.url));
+  copyFileSync(lifecycleSource,path.join(scripts,"lifecycle-v2.mjs"));
   const info={version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
     device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
   writeFileSync(path.join(root,"bundle.json"),JSON.stringify(info),{mode:0o600});
@@ -132,5 +134,36 @@ test("Node manager creates no Python cache or program mutations",()=>{
     const programFiles=readFileSync(f.manager,"utf8");
     assert.doesNotMatch(programFiles,/python3|manage-v2\.py|exec python/i);
     assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+
+test("Node uninstall asks for explicit exact confirmation before any action",async()=>{
+  const f=fixture();
+  try{
+    const output={text:"",isTTY:true,write(s){this.text+=s;}};
+    const input={isTTY:true};
+    const state=localManagerInventory({home:f.home,source:f.manager});
+    const plan={home:f.home,versions:[f.root],unitPath:f.unit,
+      preserved_device_ids:{permanent:UUID}};
+    const events=[];
+    const base={inventory:()=>state,home:f.home,stdin:input,stdout:output,
+      plan:()=>{events.push("review");return plan;},
+      execute:(p,options)=>{events.push("execute");assert.equal(p,plan);
+        assert.equal(options.confirm,true);
+        return {preserved_device_ids:{permanent:UUID},cloud_revocation:"NOT_PERFORMED"};}};
+    await assert.rejects(runInteractiveLocalManager(["uninstall"],{
+      ...base,ask:async()=>"no"
+    }),/not confirmed/);
+    assert.deepEqual(events,["review"]);
+    assert.equal(await runInteractiveLocalManager(["uninstall"],{
+      ...base,ask:async()=>"UNINSTALL-V2"
+    }),0);
+    assert.deepEqual(events,["review","review","execute"]);
+    assert.match(output.text,/does NOT revoke cloud grants/);
+    assert.match(output.text,/SQLite receipts are preserved/);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+    await assert.rejects(runInteractiveLocalManager(["uninstall"],{
+      ...base,stdin:{isTTY:false},ask:async()=>"UNINSTALL-V2"
+    }),/interactive terminal/);
   }finally{cleanup(f);}
 });

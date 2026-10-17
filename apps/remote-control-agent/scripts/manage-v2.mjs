@@ -4,6 +4,8 @@
  * separate review. This file is Draft-only and is not an installable CLI yet.
  */
 import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline/promises";
+import { planLocalUninstall, executeLocalUninstall } from "./lifecycle-v2.mjs";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -125,8 +127,8 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   if(args.length>2)throw Error("Too many rca arguments");
   if(args.length>1&&cmd!=="pair")throw Error("Only documented rca subcommands are accepted");
   if(cmd==="help"||cmd==="--help"||cmd==="-h"){
-    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]] — Python-free Draft CLI\n");
-    stdout.write("Upgrade and uninstall require independently reviewed lifecycle implementations.\n");
+    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|uninstall] — Python-free Draft CLI\n");
+    stdout.write("Manual upgrade remains unavailable pending its verified release integration.\n");
     return 0;
   }
   if(cmd==="version"||cmd==="--version"){
@@ -169,10 +171,39 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   // Never fall back to a Python manager, arbitrary Node source or OS shell.
   throw Error("Lifecycle operation not yet implemented in reviewed Node CLI");
 }
-if(process.argv[1]===fileURLToPath(import.meta.url)){
-  try {process.exitCode=dispatchLocalManager(process.argv.slice(2));}
-  catch {
-    console.error("rca refused unsafe or unsupported local operation.");
-    process.exitCode=1;
+/** One explicit owner-terminal confirmation; cloud revoke remains independent. */
+export async function runInteractiveLocalManager(args,{
+  inventory=localManagerInventory,home=os.homedir(),
+  stdin=process.stdin,stdout=process.stdout,
+  ask=null,plan=planLocalUninstall,execute=executeLocalUninstall,
+  ...rest
+}={}){
+  if(args[0]!=="uninstall")
+    return dispatchLocalManager(args,{inventory,stdin,stdout,...rest});
+  if(args.length!==1)throw Error("Uninstall accepts no additional arguments");
+  if(!stdin.isTTY||!stdout.isTTY)throw Error("Uninstall requires a local interactive terminal");
+  const state=inventory();
+  const reviewed=plan(state,{home});
+  stdout.write("Owned Agent versions: "+reviewed.versions.map(version=>path.basename(version)).join(", ")+"\n");
+  stdout.write("Device IDs: "+JSON.stringify(reviewed.preserved_device_ids)+"\n");
+  stdout.write("Local uninstall does NOT revoke cloud grants. Revoke via authenticated MCP separately.\n");
+  stdout.write("Private keys and SQLite receipts are preserved; prior effects are NOT undone.\n");
+  let answer;
+  if(ask){
+    answer=await ask("Type UNINSTALL-V2 to confirm local removal: ");
+  }else{
+    const rl=createInterface({input:stdin,output:stdout,terminal:true});
+    try{answer=await rl.question("Type UNINSTALL-V2 to confirm local removal: ");}
+    finally{rl.close();}
   }
+  if(answer?.trim()!=="UNINSTALL-V2")throw Error("Local uninstall was not confirmed");
+  const result=execute(reviewed,{confirm:true});
+  stdout.write(JSON.stringify(result,null,2)+"\n");
+  return 0;
+}
+if(process.argv[1]===fileURLToPath(import.meta.url)){
+  runInteractiveLocalManager(process.argv.slice(2)).then(
+    code=>{process.exitCode=code;},
+    ()=>{console.error("rca refused unsafe or unsupported local operation.");process.exitCode=1;}
+  );
 }
