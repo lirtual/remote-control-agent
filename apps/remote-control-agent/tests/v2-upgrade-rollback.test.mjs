@@ -160,6 +160,43 @@ test("#77 interrupted recovery refuses a linked backup without changing unit or 
   });
 });
 
+test("#77 interrupted recovery rejects noncanonical backup directives", async()=>{
+  await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
+    // The backup can name the expected old binary but must not add arbitrary
+    // systemd activation directives or change the approved service template.
+    const altered=from.replace("RestartSec=15s", "ExecStartPost=/usr/bin/true\\nRestartSec=15s");
+    await writeFile(unitPath,to,{mode:0o600});
+    const backup=unitPath+".upgrade-backup";
+    await writeFile(backup,altered,{mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/differs from the managed service template/);
+    assert.equal(await readFile(unitPath,"utf8"),to);
+    assert.equal(await readFile(backup,"utf8"),altered);
+    await assert.rejects(access(logs),{code:"ENOENT"});
+  });
+});
+
+test("#77 interrupted recovery refuses endpoint drift before touching systemd", async()=>{
+  await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
+    const moved=to.replace("https://rc.example.org/", "https://other.example.org/");
+    await writeFile(unitPath,moved,{mode:0o600});
+    await writeFile(unitPath+".upgrade-backup",from,{mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/changes the endpoint or device identity/);
+    assert.equal(await readFile(unitPath,"utf8"),moved);
+    await assert.rejects(access(logs),{code:"ENOENT"});
+  });
+});
+
+test("#77 interrupted recovery refuses device-key drift before touching systemd", async()=>{
+  await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
+    const moved=to.replace("REMOTE_CONTROL_V2_KEY_PATH=", "REMOTE_CONTROL_V2_KEY_PATH=/other-device-");
+    await writeFile(unitPath,moved,{mode:0o600});
+    await writeFile(unitPath+".upgrade-backup",from,{mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/changes the endpoint or device identity/);
+    assert.equal(await readFile(unitPath,"utf8"),moved);
+    await assert.rejects(access(logs),{code:"ENOENT"});
+  });
+});
+
 test("#77 interrupted recovery keeps backup if existing unit is absent", async()=>{
   await withFakeUserService(async ({unitPath,from,home})=>{
     const backup=unitPath+".upgrade-backup";
