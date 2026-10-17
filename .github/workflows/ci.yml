@@ -32,16 +32,36 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Digests from the official Node.js v24.21.0 SHASUMS256.txt,
+          # independently reviewed before pinning this CI. Do not package a
+          # mutable setup-node cache binary or an unreviewed Node patch release.
           case "$(uname -m)" in
-            x86_64) target=linux-x64-glibc ;;
-            aarch64) target=linux-arm64-glibc ;;
+            x86_64)
+              target=linux-x64-glibc
+              node_arch=x64
+              node_archive_sha256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+              ;;
+            aarch64)
+              target=linux-arm64-glibc
+              node_arch=arm64
+              node_archive_sha256=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+              ;;
             *) echo "Unsupported CPU for native bundle smoke"; exit 1 ;;
           esac
-          node_bin="$(readlink -f "$(command -v node)")"
           native_bin="$(realpath apps/remote-control-agent/.build/session-supervisor)"
           command -v readelf >/dev/null
           temp_dir="$(mktemp -d)"
           trap 'rm -rf "$temp_dir"' EXIT
+          node_archive="$temp_dir/node-v24.21.0-linux-$node_arch.tar.xz"
+          curl --fail --silent --show-error --location --max-time 60 \
+            --proto '=https' --tlsv1.2 \
+            "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-$node_arch.tar.xz" \
+            -o "$node_archive"
+          echo "$node_archive_sha256  $node_archive" | sha256sum --check --status
+          node_bin="$temp_dir/node"
+          tar -xJOf "$node_archive" "node-v24.21.0-linux-$node_arch/bin/node" > "$node_bin"
+          chmod 700 "$node_bin"
+          test "$("$node_bin" --version)" = v24.21.0
           node apps/remote-control-agent/scripts/build-v2-release.mjs \
             --version v0.0.0-ci --target "$target" \
             --node-bin "$node_bin" --node-sha256 "$(sha256sum "$node_bin" | cut -d' ' -f1)" \
