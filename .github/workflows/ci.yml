@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Reviewed test Release tag (build candidate only)
+        required: true
+        type: choice
+        options: [v0.1.0]
 
 permissions:
   contents: read
@@ -32,6 +39,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          candidate_tag="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.0.0-ci' }}"
+          if [[ "$candidate_tag" != v0.0.0-ci && "$candidate_tag" != v0.1.0 ]]; then
+            echo "Unreviewed candidate tag refused" >&2
+            exit 1
+          fi
           # Digests from the official Node.js v24.21.0 SHASUMS256.txt,
           # independently reviewed before pinning this CI. Do not package a
           # mutable setup-node cache binary or an unreviewed Node patch release.
@@ -63,13 +75,13 @@ jobs:
           chmod 700 "$node_bin"
           test "$("$node_bin" --version)" = v24.21.0
           node apps/remote-control-agent/scripts/build-v2-release.mjs \
-            --version v0.0.0-ci --target "$target" \
+            --version "$candidate_tag" --target "$target" \
             --node-bin "$node_bin" --node-sha256 "$(sha256sum "$node_bin" | cut -d' ' -f1)" \
             --native "$native_bin" --native-sha256 "$(sha256sum "$native_bin" | cut -d' ' -f1)" \
             --out "$temp_dir/build"
-          archive="$temp_dir/build/remote-control-agent-v0.0.0-ci-$target.tar.gz"
+          archive="$temp_dir/build/remote-control-agent-$candidate_tag-$target.tar.gz"
           python3 -B apps/remote-control-agent/scripts/validate-local-archive.py \
-            "$archive" v0.0.0-ci "$target"
+            "$archive" "$candidate_tag" "$target"
           # A genuinely separate, minimal runtime image without Node, Git or
           # compiler verifies the *packaged* Node and native helper. The image
           # is pulled before running the fully offline, read-only container.
@@ -90,5 +102,19 @@ jobs:
                if command -v "$tool" >/dev/null; then exit 11; fi
              done
              exec python3 -B /opt/bootstrap/validate-local-archive.py \
-               /opt/agent.tar.gz v0.0.0-ci "$1"' shell "$target"
+               /opt/agent.tar.gz "$2" "$1"' shell "$target" "$candidate_tag"
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            mkdir -p "release-candidate/$target"
+            cp -- "$archive" "release-candidate/$target/"
+            sha256sum "release-candidate/$target/"*.tar.gz > "release-candidate/$target/SHA256SUMS.txt"
+          fi
           echo "Candidate verified on build runner and offline minimal container; never published."
+      - name: Save reviewed native candidate for manual Release promotion
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: v0.1.0-${{ matrix.os }}
+          path: release-candidate/
+          retention-days: 2
+          if-no-files-found: error
+          compression-level: 0
