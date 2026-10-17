@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram } from "../scripts/bootstrap-node.mjs";
+import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -50,7 +50,7 @@ test("uncompleted Node installer refuses direct execution instead of reporting s
     encoding:"utf8",timeout:3000,
   });
   assert.equal(result.status,1);
-  assert.match(result.stderr,/not enabled in this Draft/);
+  assert.match(result.stderr,/Pinned Node installation refused/);
 });
 test("pinned original USTAR archive is inspected without Python, tar extraction or side effects",()=>{
   const x=fixture();
@@ -185,4 +185,147 @@ test("repeat-install rejects symlink member and dangling symlink root",()=>{
     symlinkSync(path.join(p,"missing"),dst);
     assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"));
   }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(p,{recursive:true,force:true});}
+});
+
+const nativeTarget=process.arch==="arm64"?"linux-arm64-glibc":"linux-x64-glibc";
+function nativeFixture(){
+  const x=fixture();
+  if(process.arch==="arm64"){
+    const newManifest={...manifest,target:nativeTarget};
+    writeFileSync(path.join(x.dir,"bundle.json"),JSON.stringify(newManifest));
+    for(const name of ["bin/node",APP+"/.build/session-supervisor"])
+      writeFileSync(path.join(x.dir,name),ELF(183));
+    const tar=spawnSync("tar",["--format=ustar","--owner=0","--group=0",
+      "--numeric-owner","--mode=u+rwX,go-rwx","-cf","-","bin","apps","bundle.json"],
+      {cwd:x.dir,maxBuffer:2048*1024});
+    assert.equal(tar.status,0,tar.stderr.toString());
+    x.bytes=gzipSync(tar.stdout);
+    x.sha=createHash("sha256").update(x.bytes).digest("hex");
+  }
+  return x;
+}
+function localBootstrapFixture(){
+  const x=nativeFixture();
+  const home=mkdtempSync(path.join(tmpdir(),"rca-install-target-"));
+  chmodSync(home,0o700);
+  const archive=path.join(home,"verified-archive.tar.gz");
+  writeFileSync(archive,x.bytes,{mode:0o600});
+  chmodSync(archive,0o600);
+  const opts={archive,tag:"v0.1.2",commit:"a".repeat(40),
+    sha256:x.sha,endpoint:"https://remote-control-v2-preview.aiyaya.workers.dev/",
+    target:nativeTarget,locked:false};
+  return {x,home,archive,opts,cleanup(){
+    rmSync(x.dir,{recursive:true,force:true});
+    rmSync(home,{recursive:true,force:true});
+  }};
+}
+test("Node bootstrap pins only clean Worker origin and strict version+commit",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const argv=["--archive",f.archive,"--tag","v0.1.2","--commit","a".repeat(40),
+      "--sha256",f.x.sha,"--endpoint",f.opts.endpoint];
+    assert.equal(parseNodeBootstrapArgs(argv).target,nativeTarget);
+    for(const evil of [
+      argv.concat("--endpoint","https://evil.example/"),
+      argv.slice(0,-1).concat("https://evil.example/?x=1"),
+      argv.slice(0,-1).concat("http://remote-control-v2-preview.aiyaya.workers.dev/"),
+      argv.slice(0,3).concat("latest",argv.slice(4)),
+    ])assert.throws(()=>parseNodeBootstrapArgs(evil));
+  }finally{f.cleanup();}
+});
+test("invalid archive and missing TTY fail before creating installation state",()=>{
+  const f=localBootstrapFixture();
+  try{
+    let calls=0;
+    assert.throws(()=>executeNodeBootstrap(f.opts,{home:f.home,
+      stdin:{isTTY:false},stdout:{isTTY:true},invoke:()=>{calls++;}}),/real local terminal/);
+    assert.equal(calls,0);
+    assert.equal(readdirSync(f.home).length,1);
+    assert.throws(()=>prepareNodeBootstrap({...f.opts,sha256:"f".repeat(64)},
+      {home:f.home,runtimeLibc:"2.41"}),/SHA mismatch/);
+    assert.equal(readdirSync(f.home).length,1);
+  }finally{f.cleanup();}
+});
+test("unlocked bootstrap takes ONE shared flock before package staging",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const staged=path.join(f.home,"bootstrap.mjs");
+    writeFileSync(staged,"safe local bootstrap",{mode:0o600});
+    let call;
+    const rv=executeNodeBootstrap(f.opts,{home:f.home,
+      stdin:{isTTY:true},stdout:{isTTY:true},bootstrap:staged,
+      invoke:(cmd,args,opts)=>{call={cmd,args,opts};return {status:0};}});
+    assert.equal(rv,0);
+    assert.equal(call.cmd,"flock");
+    assert.ok(call.args.includes("--lock-held"));
+    assert.equal(call.args.at(-2),f.opts.endpoint);
+    assert.equal(call.opts.env.NODE_OPTIONS,"");
+    const programs=path.join(f.home,".local/share/mcp-workers/remote-control/programs");
+    assert.deepEqual(readdirSync(programs),[]);
+  }finally{f.cleanup();}
+});
+test("locked bootstrap stages once, reuses identical archive, and passes single authority to existing installer",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const locked={...f.opts,locked:true};
+    const events=[];
+    for(let n=0;n<2;n++){
+      assert.equal(executeNodeBootstrap(locked,{home:f.home,
+        stdin:{isTTY:true},stdout:{isTTY:true},
+        invoke:(cmd,args,opts)=>{events.push({cmd,args,opts});return {status:0};}}),0);
+    }
+    assert.equal(events.length,2);
+    assert.ok(events[0].cmd.endsWith("/bin/node"));
+    assert.ok(events[0].args[0].endsWith("/scripts/install-v2.mjs"));
+    assert.deepEqual(events[0].args.slice(1),["--endpoint",f.opts.endpoint]);
+    assert.equal(events[0].opts.env.RC_V2_INSTALL_FLOCKED,"1");
+    const programs=path.join(f.home,".local/share/mcp-workers/remote-control/programs");
+    assert.deepEqual(readdirSync(programs),["v0.1.2-"+nativeTarget]);
+  }finally{f.cleanup();}
+});
+
+test("orphaned partial stage cleanup is bounded to installer-owned paths",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const programs=ensurePrivatePrograms(f.home);
+    const orphan=mkdtempSync(path.join(programs,".unverified-node-"));
+    chmodSync(orphan,0o700);
+    const bin=path.join(orphan,"bin");
+    mkdirSync(bin,{mode:0o700});
+    writeFileSync(path.join(bin,"node"),"PARTIAL",{mode:0o600});
+    removeSafeOrphanStages(programs);
+    assert.deepEqual(readdirSync(programs),[]);
+    const foreign=mkdtempSync(path.join(programs,".unverified-node-"));
+    chmodSync(foreign,0o700);
+    symlinkSync("/etc/passwd",path.join(foreign,"bundle.json"));
+    assert.throws(()=>removeSafeOrphanStages(programs),/Untrusted|orphan/);
+    assert.ok(lstatSync(foreign).isDirectory());
+    assert.ok(lstatSync(path.join(foreign,"bundle.json")).isSymbolicLink());
+  }finally{f.cleanup();}
+});
+test("bad glibc or a world-readable download is refused before any Agent directory",()=>{
+  const f=localBootstrapFixture();
+  try{
+    assert.throws(()=>prepareNodeBootstrap(f.opts,{home:f.home,
+      runtimeLibc:"2.31"}),/glibc ABI/);
+    assert.deepEqual(readdirSync(f.home),["verified-archive.tar.gz"]);
+    chmodSync(f.archive,0o644);
+    assert.throws(()=>prepareNodeBootstrap(f.opts,{home:f.home,
+      runtimeLibc:"2.41"}),/owner-local path/);
+    assert.deepEqual(readdirSync(f.home),["verified-archive.tar.gz"]);
+  }finally{f.cleanup();}
+});
+test("failed installer activation preserves prior local keys and does not report success",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const marker=path.join(f.home,"unrelated-identity.keep");
+    writeFileSync(marker,"KEEP",{mode:0o600});
+    const opts={...f.opts,locked:true};
+    assert.throws(()=>executeNodeBootstrap(opts,{home:f.home,
+      stdin:{isTTY:true},stdout:{isTTY:true},
+      invoke:()=>({status:1})}),/activation incomplete/);
+    assert.equal(readFileSync(marker,"utf8"),"KEEP");
+    assert.ok(readdirSync(path.join(f.home,".local/share/mcp-workers/remote-control/programs"))
+      .includes("v0.1.2-"+nativeTarget));
+  }finally{f.cleanup();}
 });

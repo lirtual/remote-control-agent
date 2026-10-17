@@ -66,6 +66,67 @@ def verify_refuses_unsafe_onboarding(node, installer, root):
     return "noninteractive_and_invalid_local_mode_rejected"
 
 
+# Real immutable candidate exercise: no cloud, no installer activation.
+
+def verify_node_bootstrap_offline(node, bootstrap, archive, tag, work):
+    """Exercise real bundled Node+archive without ever enrolling a device."""
+    import hashlib
+    import os
+    import pty
+    import select
+    import shutil
+    import time
+    home = work / "disposable-node-bootstrap-home"
+    home.mkdir(mode=0o700)
+    local_archive = home / "verified-release.tar.gz"
+    shutil.copyfile(archive, local_archive)
+    local_archive.chmod(0o600)
+    digest = hashlib.sha256(local_archive.read_bytes()).hexdigest()
+    env = {**os.environ, "HOME": str(home), "NODE_OPTIONS": "", "NODE_PATH": ""}
+    argv = [str(node), str(bootstrap), "--archive", str(local_archive),
+            "--tag", tag, "--commit", "a"*40, "--sha256", digest,
+            "--endpoint", "https://rc.example.org/"]
+    result = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            check=False, timeout=10)
+    if result.returncode == 0 or (home / ".local").exists():
+        raise SystemExit("Node bootstrap bypassed local terminal gate")
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(argv, env=env, stdin=slave, stdout=slave, stderr=slave,
+                            start_new_session=True, close_fds=True)
+    os.close(slave)
+    transcript = b""
+    rejected = False
+    try:
+        deadline = time.monotonic()+16
+        while time.monotonic()<deadline:
+            ready,_,_ = select.select([master],[],[],0.1)
+            if ready:
+                try:
+                    chunk = os.read(master,8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                transcript += chunk
+            if b"Choose 1 = Permanent (systemd); 2 = Temporary (24h):" in transcript and not rejected:
+                os.write(master,b"x\n")
+                rejected = True
+            if proc.poll() is not None:
+                break
+        if proc.poll() is None:
+            proc.kill()
+        if proc.wait(timeout=4)==0 or not rejected:
+            raise SystemExit("Node bootstrap did not enforce owner mode selection")
+    finally:
+        os.close(master)
+    private = home / ".local/share/mcp-workers/remote-control"
+    if ((private / "v2-identity.pem").exists()
+            or (private / "temporary/v2-identity.pem").exists()):
+        raise SystemExit("Unapproved Node bootstrap created a device identity")
+    return "node_bootstrap_real_pty_no_approval"
+
+
 if len(sys.argv) != 4:
     raise SystemExit("usage: validate-local-archive.py <archive> <tag> <target>")
 archive, tag, target = sys.argv[1:]
@@ -96,6 +157,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
         if proc.returncode:
             raise SystemExit("unpublished bundle failed native runtime verification")
     onboarding = verify_refuses_unsafe_onboarding(node, installer, root)
+    node_bootstrap = verify_node_bootstrap_offline(node, candidate / "apps/remote-control-agent/scripts/bootstrap-node.mjs", archive, tag, root)
     # Real bundled manager: status must work without Node/git/worker credentials,
     # and a headless interactive menu must refuse before pairing.
     import os
@@ -227,7 +289,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
             or identity.read_text("utf-8") != "test-only identity fixture"
             or receipt.read_bytes() != b"test-only receipt fixture"):
         raise SystemExit("Packaged manager uninstall safety/receipt preservation failed")
-    print(json.dumps({"onboarding_gate": onboarding, "kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
+    print(json.dumps({"onboarding_gate": onboarding, "node_bootstrap": node_bootstrap, "kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
                       "target": target, "node": manifest["node"],
                       "glibc_min": manifest["glibc_min"],
                       "archive_entries": len(records),

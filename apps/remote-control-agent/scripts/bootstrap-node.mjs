@@ -5,10 +5,12 @@
  * This module is staged only on Draft PR #2; not part of immutable v0.1.1.
  */
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import os from "node:os";
 import { readFileSync, lstatSync, mkdtempSync, chmodSync, mkdirSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync, renameSync, rmSync, readdirSync, constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute, normalize } from "node:path";
 
 const APP="apps/remote-control-agent";
 const DIRS=new Set(["bin","apps",APP,APP+"/src",APP+"/scripts",APP+"/.build"]);
@@ -120,13 +122,6 @@ export function inspectPinnedArchiveFile(filename,expected){
 }
 
 
-// This first Draft only supplies the bounded archive inspector. Do not treat
-// it as a runnable installer until secure staging, lifecycle and JS rca are
-// implemented and exercised on both architectures. No success-shaped no-op.
-if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
-  console.error("Python-free Agent installer is not enabled in this Draft build.");
-  process.exitCode = 1;
-}
 
 /**
  * Atomically promote an already verified archive into a private versioned
@@ -229,4 +224,167 @@ export function stageOrVerifyPinnedProgram(bytes,expected,parent,versionName){
   return pathPresentNoFollow(destination)
     ?verifyExistingPinnedProgram(bytes,expected,parent,versionName)
     :stagePinnedProgram(bytes,expected,parent,versionName);
+}
+
+/** Immutable Worker-origin CLI handoff. Never mutates identity itself. */
+export function parseNodeBootstrapArgs(args){
+  const result={locked:false};
+  const flags=new Set(["--archive","--tag","--commit","--sha256","--endpoint"]);
+  for(let i=0;i<args.length;i++){
+    const flag=args[i];
+    if(flag==="--lock-held"){
+      if(result.locked)throw Error("Duplicate lock marker");
+      result.locked=true;continue;
+    }
+    if(!flags.has(flag)||!args[i+1]||result[flag.slice(2)]!==undefined)
+      throw Error("Missing or duplicate immutable installer parameter");
+    result[flag.slice(2)]=args[++i];
+  }
+  const {archive,tag,commit,sha256,endpoint}=result;
+  if(!isAbsolute(archive||"")||!TAG.test(tag||"")||
+      !/^[a-f0-9]{40}$/.test(commit||"")||!SHA.test(sha256||""))
+    throw Error("Untrusted Release pins");
+  const u=new URL(endpoint);
+  if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash||
+      u.pathname!=="/"||u.port||u.origin+"/"!==endpoint||
+      !/^[a-z0-9.-]+$/i.test(u.hostname))
+    throw Error("Untrusted Worker origin");
+  const target=process.platform==="linux" ?
+    (process.arch==="x64"?"linux-x64-glibc":
+      process.arch==="arm64"?"linux-arm64-glibc":null):null;
+  if(!target||process.getuid()===0)throw Error("Unsupported host or root user");
+  return Object.freeze({archive,tag,commit,sha256,endpoint,target,locked:result.locked});
+}
+function verifyOwnedPath(p,{directory=false,relaxed=false}={}){
+  const st=lstatSync(p);
+  if(st.uid!==process.getuid()||st.isSymbolicLink()||
+    (directory?!st.isDirectory():!st.isFile())||
+    (st.mode&(relaxed?0o022:0o077))!==0||
+    (!directory&&st.nlink!==1))
+    throw Error("Untrusted owner-local path");
+  return st;
+}
+export function ensurePrivatePrograms(home){
+  if(!isAbsolute(home)||normalize(home)!==home)throw Error("Invalid HOME");
+  verifyOwnedPath(home,{directory:true,relaxed:true});
+  const parts=[
+    [".local",true],[".local/share",true],
+    [".local/share/mcp-workers",false],
+    [".local/share/mcp-workers/remote-control",false],
+    [".local/share/mcp-workers/remote-control/programs",false]
+  ];
+  for(const [relative,relaxed] of parts){
+    const next=join(home,relative);
+    try{mkdirSync(next,{mode:0o700});}
+    catch(e){if(e.code!=="EEXIST")throw e;}
+    verifyOwnedPath(next,{directory:true,relaxed});
+  }
+  return join(home,".local/share/mcp-workers/remote-control/programs");
+}
+function supportedGlibc(actual,minimum){
+  if(!/^\d+\.\d+$/.test(actual||"")||!/^\d+\.\d+$/.test(minimum||""))
+    return false;
+  const [am,an]=actual.split(".").map(Number);
+  const [bm,bn]=minimum.split(".").map(Number);
+  return am>bm||(am===bm&&an>=bn);
+}
+function validateOrphan(directory,relative="",counter={n:0}){
+  for(const name of readdirSync(directory)){
+    if(++counter.n>MAX_FILES)throw Error("Untrusted orphan stage size");
+    const member=relative?relative+"/"+name:name;
+    const full=join(directory,name);
+    const st=lstatSync(full);
+    verifyOwnedPath(full,{directory:st.isDirectory()});
+    if(st.isDirectory()){
+      if(!DIRS.has(member))throw Error("Foreign orphan directory");
+      validateOrphan(full,member,counter);
+    }else checkedName(member,false);
+  }
+}
+export function removeSafeOrphanStages(programs){
+  verifyOwnedPath(programs,{directory:true});
+  for(const name of readdirSync(programs)){
+    if(!/^\.unverified-node-[A-Za-z0-9]{6}$/.test(name))continue;
+    const p=join(programs,name);
+    verifyOwnedPath(p,{directory:true});
+    validateOrphan(p);
+    rmSync(p,{recursive:true,force:false,maxRetries:0});
+  }
+}
+
+export function prepareNodeBootstrap(options,{
+  home=os.homedir(),
+  runtimeLibc=process.report?.getReport?.().header?.glibcVersionRuntime,
+}={}){
+  const meta=verifyOwnedPath(options.archive);
+  if(meta.size<128||meta.size>MAX_ARCHIVE)
+    throw Error("Untrusted downloaded Agent archive");
+  const expected={tag:options.tag,target:options.target,
+    expectedSha256:options.sha256};
+  const bytes=readFileSync(options.archive);
+  const {manifest}=inspectPinnedArchiveBytes(bytes,expected);
+  if(!supportedGlibc(runtimeLibc,manifest.glibc_min))
+    throw Error("Bundled Agent glibc ABI is unsupported");
+  const programs=ensurePrivatePrograms(home);
+  if(!options.locked)return {programs,expected};
+  removeSafeOrphanStages(programs);
+  const version=options.tag+"-"+options.target;
+  const root=stageOrVerifyPinnedProgram(bytes,expected,programs,version);
+  const bin=join(root,"bin/node");
+  const install=join(root,APP,"scripts/install-v2.mjs");
+  const shim=join(root,APP,"scripts/rca.sh");
+  for(const [p,mode] of [[bin,0o700],[install,0o600],[shim,0o700]]){
+    const stat=verifyOwnedPath(p);
+    if((stat.mode&0o777)!==mode)throw Error("Untrusted installed Agent mode");
+  }
+  return {programs,expected,root,bin,install};
+}
+export function executeNodeBootstrap(options,{
+  home=os.homedir(),invoke=spawnSync,
+  stdin=process.stdin,stdout=process.stdout,
+  bootstrap=fileURLToPath(import.meta.url),
+}={}){
+  if(!stdin.isTTY||!stdout.isTTY)
+    throw Error("Owner-approved pairing requires a real local terminal");
+  const prepared=prepareNodeBootstrap(options,{home});
+  if(!options.locked){
+    verifyOwnedPath(bootstrap);
+    const lock=join(dirname(prepared.programs),"v2-installer.lock");
+    try{
+      const fd=openSync(lock,constants.O_WRONLY|constants.O_CREAT|
+        constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+      closeSync(fd);
+    }catch(e){if(e.code!=="EEXIST")throw e;}
+    if((verifyOwnedPath(lock).mode&0o777)!==0o600)
+      throw Error("Untrusted Agent installer lock");
+    const processResult=invoke("flock",[
+      "-n","-E","75","-F",lock,process.execPath,bootstrap,
+      "--archive",options.archive,"--tag",options.tag,
+      "--commit",options.commit,"--sha256",options.sha256,
+      "--endpoint",options.endpoint,"--lock-held"
+    ],{stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""}});
+    if(processResult.error||processResult.signal||processResult.status!==0)
+      throw Error("Exclusive v2 installation could not complete");
+    return 0;
+  }
+  // install-v2.mjs handles the existing lifetime selection, owner challenge,
+  // permission gates, signed device registration and systemd rollback.
+  // RC_V2_INSTALL_FLOCKED prevents relocking the SAME already-held kernel flock.
+  const child=invoke(prepared.bin,[prepared.install,
+    "--endpoint",options.endpoint],{stdio:"inherit",env:{
+    ...process.env,RC_V2_INSTALL_FLOCKED:"1",RC_AGENT_NO_POST_START:"1",
+    NODE_OPTIONS:"",NODE_PATH:"",
+  }});
+  if(child.error||child.signal||child.status!==0)
+    throw Error("Local pairing or service activation incomplete; identity preserved");
+  return 0;
+}
+if(process.argv[1]===fileURLToPath(import.meta.url)){
+  try{
+    process.exitCode=executeNodeBootstrap(
+      parseNodeBootstrapArgs(process.argv.slice(2)));
+  }catch{
+    console.error("Pinned Node installation refused; prior identity retained.");
+    process.exitCode=1;
+  }
 }
