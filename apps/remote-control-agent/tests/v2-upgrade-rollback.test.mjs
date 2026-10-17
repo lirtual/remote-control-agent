@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile, access, chmod } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, access, chmod, symlink } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { installUnit, recoverInterruptedUpgrade, renderV2Service, UNIT } from "../scripts/install-v2.mjs";
+import { ReceiptStore } from "../src/operations.ts";
 
 async function withFakeUserService(callback, {blockRestart = false} = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "rc-v2-t08-inject-"));
@@ -60,7 +62,23 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
     await writeFile(key, "private-unchanged", {mode:0o600});
     await writeFile(key + ".device-id", "e11d9c70-16fe-4d47-aafc-d01db72750fd", {mode:0o600});
     const receipt = path.join(preserved, "operation-receipts.sqlite");
-    await writeFile(receipt, "receipts-must-not-change", {mode:0o600});
+    const store = new ReceiptStore(preserved);
+    await store.open();
+    await store.admit("t08-unknown-guarded", "start_process", "a".repeat(64));
+    await store.update("t08-unknown-guarded", "unknown", "Effect cannot be established.");
+    await store.admit("t08-completed", "write_file", "b".repeat(64));
+    await store.update("t08-completed", "completed", "Effect completed.");
+    await store.close();
+    const beforeReceiptBytes = await readFile(receipt);
+    const db = new DatabaseSync(receipt, {readOnly:true});
+    try {
+      const states = db.prepare("SELECT operation_id, state, guarded FROM receipts ORDER BY operation_id").all();
+      assert.deepEqual(states, [
+        {operation_id:"t08-completed", state:"completed", guarded:0},
+        {operation_id:"t08-unknown-guarded", state:"unknown", guarded:1},
+      ]);
+      assert.equal(db.prepare("PRAGMA quick_check").get().quick_check, "ok");
+    } finally { db.close(); }
     const unitPath = path.join(home, ".config", "systemd", "user", UNIT);
     const target = process.arch === "arm64" ? "linux-arm64-glibc" : "linux-x64-glibc";
     const oldRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs/v0.1.0-" + target);
@@ -83,10 +101,10 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
       keyPath:key,endpoint:"https://rc.example.org/",entryExt:"js"});
     const to = renderV2Service({node:newRoot+"/bin/node",home,repoRoot:newRoot,
       keyPath:key,endpoint:"https://rc.example.org/",entryExt:"js"});
-    await callback({unitPath, from, to, key, receipt, logs, activeOk, home, restartReached, restartOnce, releaseRestart});
+    await callback({unitPath, from, to, key, receipt, beforeReceiptBytes, logs, activeOk, home, restartReached, restartOnce, releaseRestart});
     assert.equal(await readFile(key, "utf8"), "private-unchanged");
     assert.equal(await readFile(key + ".device-id", "utf8"), "e11d9c70-16fe-4d47-aafc-d01db72750fd");
-    assert.equal(await readFile(receipt, "utf8"), "receipts-must-not-change");
+    assert.deepEqual(await readFile(receipt), beforeReceiptBytes);
   } finally {
     for(const [k,v] of Object.entries(oldEnv)) {
       if(v === undefined) delete process.env[k];
@@ -97,7 +115,7 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
 }
 
 test("#77 SIGKILL during unit activation is recovered from a durable previous-unit backup", async()=> {
-  await withFakeUserService(async ({unitPath,from,to,key,receipt,home,restartReached,releaseRestart})=> {
+  await withFakeUserService(async ({unitPath,from,to,key,receipt,beforeReceiptBytes,home,restartReached,releaseRestart})=> {
     await writeFile(unitPath,from,{mode:0o600});
     const installerUrl = new URL("../scripts/install-v2.mjs", import.meta.url).href;
     const childSource = "import { installUnit } from " + JSON.stringify(installerUrl) + ";\n" +
@@ -124,12 +142,44 @@ test("#77 SIGKILL during unit activation is recovered from a durable previous-un
       assert.equal(await readFile(unitPath,"utf8"),from);
       await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
       assert.equal(await readFile(key,"utf8"),"private-unchanged");
-      assert.equal(await readFile(receipt,"utf8"),"receipts-must-not-change");
+      assert.deepEqual(await readFile(receipt), beforeReceiptBytes);
     } finally {
       if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
       await writeFile(releaseRestart,"release",{mode:0o600}).catch(()=>{});
     }
   },{blockRestart:true});
+});
+
+test("#77 interrupted recovery refuses a linked backup without changing unit or identity", async()=>{
+  await withFakeUserService(async ({unitPath,from,key})=>{
+    await writeFile(unitPath,from,{mode:0o600});
+    await symlink(key,unitPath+".upgrade-backup");
+    await assert.rejects(recoverInterruptedUpgrade({home:path.resolve(unitPath,"..","..","..",".."),unitPath}),/backup is unsafe/);
+    assert.equal(await readFile(unitPath,"utf8"),from);
+    assert.equal(await readFile(key,"utf8"),"private-unchanged");
+  });
+});
+
+test("#77 interrupted recovery keeps backup if existing unit is absent", async()=>{
+  await withFakeUserService(async ({unitPath,from,home})=>{
+    const backup=unitPath+".upgrade-backup";
+    await writeFile(backup,from,{mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is missing/);
+    assert.equal(await readFile(backup,"utf8"),from);
+  });
+});
+
+test("#77 interrupted recovery retries only once when old unit already exists", async()=>{
+  await withFakeUserService(async ({unitPath,from,home,activeOk,logs})=>{
+    await writeFile(unitPath,from,{mode:0o600});
+    await writeFile(unitPath+".upgrade-backup",from,{mode:0o600});
+    await writeFile(activeOk,"active",{mode:0o600});
+    assert.equal(await recoverInterruptedUpgrade({home,unitPath}),true);
+    assert.equal(await recoverInterruptedUpgrade({home,unitPath}),false);
+    await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
+    const lines=(await readFile(logs,"utf8")).split("\n");
+    assert.equal(lines.filter(line=>line.includes("restart "+UNIT)).length,1);
+  });
 });
 
 test("#77 local upgrade activation failure restores exact owned v2 unit and keeps identity/SQLite", async()=>{
