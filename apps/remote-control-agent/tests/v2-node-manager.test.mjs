@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { dispatchLocalManager, localManagerInventory, localManagerStatus, runInteractiveLocalManager } from "../scripts/manage-v2.mjs";
+import { dispatchLocalManager, localManagerInventory, localManagerStatus, runInteractiveLocalManager, safeManagerCliFailure } from "../scripts/manage-v2.mjs";
 
 const source=fileURLToPath(new URL("../scripts/manage-v2.mjs",import.meta.url));
 const UUID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
@@ -212,6 +212,24 @@ test("a rejected upgrade prepare cannot invoke a new binary",async()=>{
       activateUpgrade:()=>{invoked++;}
     }),/untrusted pinned release/);
     assert.equal(invoked,0);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+
+test("failed manual upgrade activation reports safe actionable guidance",async()=>{
+  const f=fixture();
+  try{
+    const state=localManagerInventory({home:f.home,source:f.manager});
+    const message="Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-v2-agent.service` before retrying; do not re-pair or replay operations.";
+    await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3","a".repeat(40)],{
+      home:f.home,inventory:()=>state,
+      stdin:{isTTY:true},stdout:{isTTY:true,write(){}},
+      prepareUpgrade:async()=>({program:"/synthetic/owned/new-version"}),
+      activateUpgrade:()=>{throw Error("Reviewed Agent upgrade failed; inspect local rollback and service");}
+    }),error=>error.message===message);
+    assert.equal(safeManagerCliFailure(new Error(message)),message);
+    assert.equal(safeManagerCliFailure(new Error("secret-like exception")),
+      "rca refused unsafe or unsupported local operation.");
     assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
   }finally{cleanup(f);}
 });
