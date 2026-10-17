@@ -48,7 +48,7 @@ def verify_refuses_unsafe_onboarding(node, installer, root):
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Choose 1 = Permanent (systemd); 2 = Temporary (24h):" in transcript and not challenged:
+            if b"Choose [1-2]:" in transcript and not challenged:
                 os.write(master, b"x\n")
                 challenged = True
             if proc.poll() is not None:
@@ -109,7 +109,7 @@ def verify_node_bootstrap_offline(node, bootstrap, archive, tag, work):
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Choose 1 = Permanent (systemd); 2 = Temporary (24h):" in transcript and not rejected:
+            if b"Choose [1-2]:" in transcript and not rejected:
                 os.write(master,b"x\n")
                 rejected = True
             if proc.poll() is not None:
@@ -234,6 +234,9 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
             raise SystemExit("Packaged manager interactive PTY menu/status/exit failed")
     finally:
         os.close(master)
+    menu = b"1. Status\r\n2. Pair / repair\r\n3. Logs\r\n4. Upgrade\r\n5. Uninstall\r\n6. Exit"
+    if menu not in transcript:
+        raise SystemExit("Packaged Node manager menu must show one option per line")
     # Uninstall is local-only: remove precisely the owned command; never erase
     # identity or historical SQLite receipts and never claim cloud revocation.
     bin_dir = home / ".local/bin"

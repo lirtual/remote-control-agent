@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { installManagerLauncher, preflightManagerLauncher, assertRepeatInstallSameVersion } from "../scripts/install-v2.mjs";
+import { installManagerLauncher, preflightManagerLauncher, assertRepeatInstallSameVersion, printPortableCliHint } from "../scripts/install-v2.mjs";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -211,14 +211,26 @@ test("rca status does not create __pycache__ inside its versioned program",async
   } finally {await rm(f.home,{recursive:true,force:true});}
 });
 
-test("portable installer exits cleanly without reopening local manager twice",async()=>{
+test("portable installer prints a single CLI path, without promising to open the manager",async()=>{
   const source=await readFile(path.join(root,"apps/remote-control-agent/scripts/install-v2.mjs"),"utf8");
-  assert.doesNotMatch(source,/Open Agent manager now/);
-  assert.match(source,/Open the Agent manager now:/);
-  assert.match(source,/To use rca in this terminal:/);
-  assert.match(source,/New Bash terminals can use rca if/);
-  // A shell child cannot change its parent Bash PATH: show the explicit fix.
+  assert.doesNotMatch(source,/Open Agent manager now|Open the Agent manager now:/);
+  assert.doesNotMatch(source,/New Bash terminals can use rca if/);
+  assert.doesNotMatch(source,/Pending 10-minute pairing code|Choose 1 = Permanent/);
+  assert.match(source,/Pairing code \(10 min\):/);
+  assert.match(source,/MCP challenge \(12 chars\):/);
+  assert.match(source,/Ready: v2 service active/);
   assert.match(source,/export PATH=/);
+});
+test("portable CLI hint prints PATH only when missing in the current terminal",()=>{
+  const home="/home/rca-output-test";
+  const launcher=home+"/.local/bin/rca";
+  const out={value:"",write(text){this.value+=text;}};
+  printPortableCliHint(out,launcher,home,"/usr/local/bin:/usr/bin");
+  assert.equal(out.value,
+    'CLI: '+launcher+'\nTo use rca here: export PATH="$HOME/.local/bin:$PATH"\n');
+  out.value="";
+  printPortableCliHint(out,launcher,home,"/usr/bin:"+home+"/.local/bin:/bin");
+  assert.equal(out.value,"CLI: "+launcher+"\n");
 });
 
 test("short prerelease shell bootstrap syntax and noninteractive fail-closed before GitHub",()=>{

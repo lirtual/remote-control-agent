@@ -185,8 +185,8 @@ export async function runInteractiveLocalManager(args,{
     try {
       for(;;){
         stdout.write("\nRemote Control Agent "+inventory().info.version+"\n");
-        stdout.write("1. Status   2. Pair / repair   3. Logs\n");
-        stdout.write("4. Upgrade  5. Uninstall       6. Exit\n");
+        stdout.write("1. Status\n2. Pair / repair\n3. Logs\n");
+        stdout.write("4. Upgrade\n5. Uninstall\n6. Exit\n");
         const choice=(await rl.question("Choose an option: ")).trim();
         if(choice==="6"||choice.toLowerCase()==="q")return 0;
         if(choice==="1"){

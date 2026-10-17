@@ -416,14 +416,14 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
     options.grantType ?? "permanent");
   const terminal = createInterface({ input: stdin, output: stdout, terminal: true });
   try {
-    stdout.write("Pending 10-minute pairing code: " + enrollment.code + "\n");
+    stdout.write("Pairing code (10 min): " + enrollment.code + "\n");
     if (options.showFingerprint) {
       stdout.write("Local public key fingerprint (optional check): " + enrollment.fingerprint + "\n");
     }
-    stdout.write("In authenticated MCP: pairing_lookup, then pairing_prepare. Enter only the 12-character challenge here.\n");
+    stdout.write("Approve via MCP (pairing_lookup → pairing_prepare).\n");
     let challenge;
     for (let attempt = 0; attempt < 3; attempt++) {
-      const typed = (await terminal.question("12-character MCP confirmation challenge: ")).trim().toUpperCase();
+      const typed = (await terminal.question("MCP challenge (12 chars): ")).trim().toUpperCase();
       if (/^[A-Z2-7]{12}$/.test(typed)) {
         challenge = typed;
         break;
@@ -820,6 +820,14 @@ export async function installManagerLauncher(home, program) {
   return launcher;
 }
 
+/** Print one CLI path and only the PATH action this terminal may need. */
+export function printPortableCliHint(stdout, launcher, home, currentPath = process.env.PATH ?? "") {
+  stdout.write("CLI: " + launcher + "\n");
+  if (!currentPath.split(path.delimiter).includes(path.join(home, ".local", "bin"))) {
+    stdout.write('To use rca here: export PATH="$HOME/.local/bin:$PATH"\n');
+  }
+}
+
 /** Hold a kernel flock through the full interactive CLI, released even on SIGKILL. */
 export async function runLockedInstallerCli(argv, {
   home = os.homedir(), invoke = spawnSync, node = process.execPath,
@@ -877,15 +885,16 @@ export async function runInstaller(args, {
     }
     const prompt = createInterface({input:stdin,output:stdout,terminal:true});
     try {
-      stdout.write("Remote Control v2 — read-only by default. Worker endpoint: " +
-        trustedEndpoint(options.endpoint) + "\nTarget label: " +
-        (options.name ?? os.hostname()) + "\n");
-      const choice=(await prompt.question("Choose 1 = Permanent (systemd); 2 = Temporary (24h): ")).trim();
+      stdout.write("Remote Control Agent " +
+        (portable ? JSON.parse(readFileSync(manifestPath, "utf8")).version : "v2") + "\n");
+      stdout.write("Device: " + (options.name ?? os.hostname()) + "\n");
+      stdout.write("1. Permanent (systemd)\n2. Temporary (24h)\n");
+      const choice=(await prompt.question("Choose [1-2]: ")).trim();
       // Mode choice binds the signed Agent pending request and owner MCP review.
       Object.assign(options, choosePortableInstallMode(choice, args));
-      stdout.write(choice === "2"
-        ? "Temporary: foreground only; cloud expires 24 hours after owner approval. Terminal stop is not a cloud revoke.\n"
-        : "Permanent: only the installer-owned v2 user service is started.\n");
+      if (choice === "2") {
+        stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
+      }
     } finally {prompt.close();}
   }
   const unitPath = path.join(home, ".config", "systemd", "user", UNIT);
@@ -897,11 +906,7 @@ export async function runInstaller(args, {
   if (portable && options.action !== "uninstall") {
     await preflightManagerLauncher(home, path.resolve(packageRoot, "..", ".."));
   }
-  if (host === "wsl2" && !options.foreground && options.action !== "uninstall") {
-    stdout.write("WSL2 detected. This systemd user service cannot wake a stopped WSL distribution. " +
-      "After Windows restart, open the distribution and verify the v2 service; " +
-      "while WSL is stopped, the device is unavailable. See docs/remote-control/WSL2-V2-LIFECYCLE.md.\n");
-  }
+  // WSL2 lifecycle reminder is shown once, after successful activation.
   const previous = await readOwnedUnit(unitPath);
   // Ordinary repeat install must not silently accept a different Worker target.
   // Explicit --upgrade remains the separate path for intentional endpoint changes.
@@ -971,10 +976,10 @@ export async function runInstaller(args, {
           }
           if (portable) {
             const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-            stdout.write("Local CLI: " + launcher + " (run this path now).\n");
-            stdout.write('To use rca in this terminal: export PATH="$HOME/.local/bin:$PATH"\n');
+            printPortableCliHint(stdout, launcher, home);
           }
-          stdout.write("v2 user service already installed; approved identity preserved.\n");
+          stdout.write("Ready: v2 service active; existing identity retained.\n");
+          if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
           return;
         }
         stdout.write("Existing approved identity recovered; continuing v2 installation.\n");
@@ -990,10 +995,10 @@ export async function runInstaller(args, {
   if (options.foreground) {
     if (portable) {
       const launcher=await installManagerLauncher(home,path.resolve(packageRoot,"..",".."));
-      stdout.write("==> Local Agent manager available: " + launcher + "\n");
+      printPortableCliHint(stdout, launcher, home);
     }
-    stdout.write("v2 " + (options.grantType === "temporary" ? "temporary 24-hour" : "foreground") +
-      " identity ready. Starting foreground Agent. Closing the terminal or stopping WSL2 disconnects it; no service is installed and no cloud revoke is implied.\n");
+    stdout.write("Starting " + (options.grantType === "temporary" ? "temporary (24h)" : "foreground") +
+      " Agent; terminal stop disconnects, not revokes.\n");
     await startForeground({ endpoint: trustedEndpoint(options.endpoint), keyPath });
     return;
   }
@@ -1009,12 +1014,13 @@ export async function runInstaller(args, {
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-    stdout.write("==> Agent management CLI installed: " + launcher + "\n");
-    stdout.write("==> Open the Agent manager now: " + launcher + "\n");
-    stdout.write('==> To use rca in this terminal: export PATH="$HOME/.local/bin:$PATH"\n');
-    stdout.write("==> New Bash terminals can use rca if ~/.bashrc was safely updated.\n");
+    stdout.write("Ready: v2 service active (read-only).\n");
+    printPortableCliHint(stdout, launcher, home);
+    if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
   }
-  stdout.write("v2 user service active. Use list_devices and an approved nonsensitive read fixture to verify connectivity.\n");
+  if (!portable) {
+    stdout.write("v2 service active. Verify connectivity using authenticated MCP.\n");
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
