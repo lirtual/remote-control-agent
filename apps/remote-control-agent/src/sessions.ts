@@ -296,14 +296,39 @@ export class ManagedSessions {
     }
     if (this.ownsRunningProcess(session)) {
       // SIGKILL writes to the same existing pidfd-backed supervisor channel.
-      // An unacknowledged signal must be surfaced as unknown, not success.
-      void this.signalOwnedProcess(session, "SIGKILL").catch(() => false);
+      // Wait for the bounded write/exit reconciliation before reporting an
+      // uncertain result. Marking unknown immediately after dispatch races
+      // with the ordinary child.close event and produces false unknown states.
+      let killWriteTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.signalOwnedProcess(session, "SIGKILL").catch(() => false),
+          new Promise<boolean>((resolve) => {
+            killWriteTimer = setTimeout(() => resolve(false), 500);
+          }),
+        ]);
+      } finally {
+        if (killWriteTimer) clearTimeout(killWriteTimer);
+      }
+      if (this.ownsRunningProcess(session)) {
+        let closeTimer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            session.closed,
+            new Promise<void>((resolve) => {
+              closeTimer = setTimeout(resolve, 500);
+            }),
+          ]);
+        } finally {
+          if (closeTimer) clearTimeout(closeTimer);
+        }
+      }
     }
     if (this.ownsRunningProcess(session)) {
+      // No confirmed exit after bounded reconciliation: preserve capacity
+      // and report unknown, not a fabricated failed/completed result.
       session.state = "unknown";
       session.lastObservedAt = Date.now();
-      // Preserve the unresolved session locally until normal shutdown; never
-      // free the active capacity merely because the termination signal failed.
     }
   }
 
