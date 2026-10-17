@@ -186,6 +186,16 @@ test("rca status does not create __pycache__ inside its versioned program",async
   } finally {await rm(f.home,{recursive:true,force:true});}
 });
 
+test("portable installer exits cleanly without reopening local manager twice",async()=>{
+  const source=await readFile(path.join(root,"apps/remote-control-agent/scripts/install-v2.mjs"),"utf8");
+  assert.doesNotMatch(source,/Open Agent manager now\\? \\[y\\/N\\]/);
+  assert.match(source,/Open the Agent manager now:/);
+  assert.match(source,/To use rca in this terminal:/);
+  assert.match(source,/New Bash terminals can use rca if/);
+  // A shell child cannot change its parent Bash PATH: show the explicit fix.
+  assert.match(source,/export PATH=/);
+});
+
 test("short prerelease shell bootstrap syntax and noninteractive fail-closed before GitHub",()=>{
   const sh=path.join(root,"install.sh");
   const parsed=spawnSync("sh",["-n",sh],{encoding:"utf8",timeout:3000});
