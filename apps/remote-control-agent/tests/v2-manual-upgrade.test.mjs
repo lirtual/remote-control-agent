@@ -22,11 +22,10 @@ async function createReceiptDatabase(home, version = 1, mode = 0o600) {
   await chmod(directory, 0o700);
   const file = path.join(directory, "operation-receipts.sqlite");
   await rm(file, {force:true});
-  if (version === 1) {
-    const store = new ReceiptStore(directory);
-    await store.open();
-    await store.close();
-  } else {
+  const store = new ReceiptStore(directory);
+  await store.open();
+  await store.close();
+  if (version !== 1) {
     const db = new DatabaseSync(file);
     db.exec("PRAGMA user_version = " + version);
     db.close();
