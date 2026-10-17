@@ -432,6 +432,9 @@ async function atomicUnitWrite(unitPath, content) {
   try {
     run("systemd-analyze", ["--user", "verify", temporary]);
     await rename(temporary, unitPath);
+    // fsync the containing directory so the old-unit backup/name survives
+    // a host crash, not just an ordinary process SIGKILL.
+    await syncParent(unitPath);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
@@ -594,6 +597,21 @@ export async function installUnit(unitPath, content, previous) {
     }
     try { run("systemctl", ["--user", "daemon-reload"]); } catch { /* unavailable */ }
     throw new Error("The v2 user service could not be activated; original v1 services were not touched.");
+  }
+}
+
+/**
+ * Re-running the reviewed permanent install must complete a SIGKILL that
+ * occurred after writing the unit but before systemctl enable --now.
+ * It must not rotate identity or restart an already active service.
+ */
+export function ensureApprovedPermanentService(invoke = run) {
+  invoke("systemctl", ["--user", "daemon-reload"]);
+  invoke("systemctl", ["--user", "enable", UNIT]);
+  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
+  catch {
+    invoke("systemctl", ["--user", "start", UNIT]);
+    invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
   }
 }
 
@@ -1172,12 +1190,7 @@ export async function runInstaller(args, {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
           // Never restart v1 or replace this approved local identity.
-          try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-          catch {
-            run("systemctl", ["--user", "daemon-reload"]);
-            run("systemctl", ["--user", "start", UNIT]);
-            run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-          }
+          ensureApprovedPermanentService();
           if (portable) {
             const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
             printPortableCliHint(stdout, launcher, home);
