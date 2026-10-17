@@ -232,14 +232,14 @@ test("foreground reuses signed read-only v2 entrypoint and skips systemd preflig
   assert.doesNotMatch(src, /nohup|supervisord|cron|pm2/);
 });
 
-test("first enrollment prompts for one challenge, not the original pairing code again", async () => {
+test("#97 first enrollment shows only one code and awaits owner MCP approval", async () => {
   const src = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
     "..", "scripts", "install-v2.mjs"), "utf8");
   assert.doesNotMatch(src, /Repeat original 10-character code:/);
-  assert.match(src, /await confirmDeviceLocally\(enrollment\.code, challenge, options\.endpoint, keyPath\)/);
-  assert.match(src, /\^\[A-Z2-7\]\{12\}\$/);
-  assert.match(src, /attempt < 3/);
-  assert.match(src, /Invalid local challenge format/);
+  assert.match(src, /await awaitOwnerMcpApproval\(options\.endpoint, keyPath\)/);
+  assert.match(src, /pairing_lookup, then explicitly pairing_approve/);
+  assert.doesNotMatch(src, /MCP challenge \(12 chars\)/);
+  assert.doesNotMatch(src, /await confirmDeviceLocally\(/);
   assert.match(src, /if \(!stdin\.isTTY \|\| !stdout\.isTTY\)/);
 });
 
@@ -268,8 +268,9 @@ test("first pairing hides fingerprint by default, but optional display matches p
     assert.equal(parseInstallArgs(["--show-fingerprint", "--endpoint", "https://rc.example.org"]).showFingerprint, true);
     assert.match(script, /if \(options\.showFingerprint\)/);
     assert.match(script, /Local public key fingerprint \(optional check\): " \+ enrollment\.fingerprint/);
-    assert.match(script, /Approve via MCP \(pairing_lookup → pairing_prepare\)/);
-    assert.match(script, /MCP challenge \(12 chars\): /);
+    assert.match(script, /MCP pairing_lookup, then explicitly pairing_approve/);
+    assert.match(script, /no local challenge is needed/);
+    assert.doesNotMatch(script, /MCP challenge \(12 chars\)/);
     assert.doesNotMatch(script, /openssl pkey|Repeat original 10-character code/);
   } finally {
     await rm(folder, { recursive: true, force: true });
