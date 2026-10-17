@@ -109,7 +109,7 @@ test("untrusted user-local bin symlink blocks new launcher",async()=>{
 
 test("#76 interrupted verified-download staging cleanup preserves identities and refuses hostile entries",()=>{
   const bootstrap=path.join(root,"apps/remote-control-agent/scripts/bootstrap-v2.py");
-  const source=String.raw\`import importlib.util,pathlib,tempfile,stat,sys
+  const source=String.raw`import importlib.util,pathlib,tempfile,stat,sys
 spec=importlib.util.spec_from_file_location("bootstrap_v2_recovery",sys.argv[1])
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
@@ -141,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
     else: raise AssertionError("refused unsafe staging permissions expected")
     assert wrong_mode.read_bytes()==b"untouched"
     assert receipts.read_bytes()==b"unknown-receipt"
-\`;
+`;
   const result=spawnSync("python3",["-B","-c",source,bootstrap],{
     encoding:"utf8",timeout:10000
   });
