@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, rmSync, symlinkSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { inspectPinnedArchiveBytes } from "../scripts/bootstrap-node.mjs";
+import { inspectPinnedArchiveBytes, stagePinnedProgram } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -80,4 +80,63 @@ test("corrupt tar data with self-consistent outer sha still fails inner header v
     const digest=createHash("sha256").update(bad).digest("hex");
     assert.throws(()=>inspectPinnedArchiveBytes(bad,{...params(x),expectedSha256:digest}));
   }finally{rmSync(x.dir,{recursive:true,force:true});}
+});
+
+test("verified Node archive stages atomically with private files and no Python",()=>{
+  const x=fixture();
+  const parent=mkdtempSync(path.join(tmpdir(),"rca-node-programs-"));
+  try {
+    chmodSync(parent,0o700);
+    const dst=stagePinnedProgram(x.bytes,params(x),parent,"v0.1.2-linux-x64-glibc");
+    assert.equal(readFileSync(path.join(dst,"bundle.json"),"utf8"),JSON.stringify(manifest));
+    assert.ok(lstatSync(path.join(dst,"bin/node")).isFile());
+    assert.equal(lstatSync(dst).mode&0o777,0o700);
+    assert.equal(lstatSync(path.join(dst,"bin/node")).mode&0o777,0o700);
+    assert.equal(lstatSync(path.join(dst,"bundle.json")).mode&0o777,0o600);
+    assert.deepEqual(readdirSync(parent),["v0.1.2-linux-x64-glibc"]);
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),parent,"v0.1.2-linux-x64-glibc"),/already exists/);
+    assert.equal(readFileSync(path.join(dst,"bundle.json"),"utf8"),JSON.stringify(manifest));
+  }finally{
+    rmSync(x.dir,{recursive:true,force:true});
+    rmSync(parent,{recursive:true,force:true});
+  }
+});
+
+test("atomic staging refuses wrong digest and preserves foreign destination",()=>{
+  const x=fixture(),parent=mkdtempSync(path.join(tmpdir(),"rca-node-programs-"));
+  try{
+    chmodSync(parent,0o700);
+    const dst=path.join(parent,"v0.1.2-linux-x64-glibc");
+    writeFileSync(dst,"FOREIGN NO CLOBBER",{mode:0o600});
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),parent,"v0.1.2-linux-x64-glibc"),/already exists/);
+    assert.equal(readFileSync(dst,"utf8"),"FOREIGN NO CLOBBER");
+    assert.throws(()=>stagePinnedProgram(x.bytes,{...params(x),expectedSha256:"0".repeat(64)},parent,"v0.1.2-linux-x64-glibc"),/SHA mismatch/);
+    assert.deepEqual(readdirSync(parent),["v0.1.2-linux-x64-glibc"]);
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(parent,{recursive:true,force:true});}
+});
+
+test("staging never overwrites a dangling symlink version destination",()=>{
+  const x=fixture(),parent=mkdtempSync(path.join(tmpdir(),"rca-node-programs-"));
+  try{
+    chmodSync(parent,0o700);
+    const dst=path.join(parent,"v0.1.2-linux-x64-glibc");
+    symlinkSync(path.join(parent,"does-not-exist"),dst);
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),parent,"v0.1.2-linux-x64-glibc"),/already exists/);
+    assert.ok(lstatSync(dst).isSymbolicLink());
+    assert.deepEqual(readdirSync(parent),["v0.1.2-linux-x64-glibc"]);
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(parent,{recursive:true,force:true});}
+});
+test("staging refuses symlinked/untrusted parents and version-label mismatch",()=>{
+  const x=fixture(),root=mkdtempSync(path.join(tmpdir(),"rca-node-parent-"));
+  try{
+    const safe=path.join(root,"private");
+    mkdirSync(safe,{mode:0o700});chmodSync(safe,0o700);
+    const alias=path.join(root,"redirect");
+    symlinkSync(safe,alias);
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),alias,"v0.1.2-linux-x64-glibc"),/Untrusted private/);
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),safe,"v0.1.3-linux-x64-glibc"),/Versioned destination/);
+    chmodSync(safe,0o755);
+    assert.throws(()=>stagePinnedProgram(x.bytes,params(x),safe,"v0.1.2-linux-x64-glibc"),/Untrusted private/);
+    assert.deepEqual(readdirSync(safe),[]);
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(root,{recursive:true,force:true});}
 });

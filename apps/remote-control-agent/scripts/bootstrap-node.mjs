@@ -5,9 +5,10 @@
  * This module is staged only on Draft PR #2; not part of immutable v0.1.1.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, lstatSync } from "node:fs";
+import { readFileSync, lstatSync, mkdtempSync, chmodSync, mkdirSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync, renameSync, rmSync, constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { join, dirname } from "node:path";
 
 const APP="apps/remote-control-agent";
 const DIRS=new Set(["bin","apps",APP,APP+"/src",APP+"/scripts",APP+"/.build"]);
@@ -121,4 +122,56 @@ export function inspectPinnedArchiveFile(filename,expected){
 if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
   console.error("Python-free Agent installer is not enabled in this Draft build.");
   process.exitCode = 1;
+}
+
+/**
+ * Atomically promote an already verified archive into a private versioned
+ * program directory. Does not write identity, systemd, or operation receipts.
+ * Caller is responsible for holding the existing per-user installer flock.
+ */
+function pathPresentNoFollow(filename){
+  try{ lstatSync(filename);return true; }
+  catch(error){ if(error.code==="ENOENT")return false;throw error; }
+}
+export function stagePinnedProgram(bytes,expected,parent,versionName){
+  const {records}=inspectPinnedArchiveBytes(bytes,expected);
+  if(versionName!==expected.tag+"-"+expected.target)
+    throw Error("Versioned destination mismatch");
+  const parentInfo=lstatSync(parent);
+  if(!parentInfo.isDirectory()||parentInfo.isSymbolicLink()||
+     parentInfo.uid!==process.getuid()||(parentInfo.mode&0o077)!==0)
+    throw Error("Untrusted private installation parent");
+  const destination=join(parent,versionName);
+  if(pathPresentNoFollow(destination))throw Error("Installed program already exists; refuse replacement");
+  const stage=mkdtempSync(join(parent,".unverified-node-"));
+  let promoted=false;
+  try{
+    chmodSync(stage,0o700);
+    for(const [name,entry] of records){
+      const target=join(stage,...name.split("/"));
+      if(entry.directory){
+        mkdirSync(target,{recursive:true,mode:0o700});
+        chmodSync(target,0o700);
+      }else{
+        mkdirSync(dirname(target),{recursive:true,mode:0o700});
+        const fd=openSync(target,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,entry.mode);
+        try{
+          let written=0;
+          while(written<entry.data.length){
+            const n=writeSync(fd,entry.data,written,entry.data.length-written);
+            if(n<=0)throw Error("Incomplete program file write");
+            written+=n;
+          }
+          fsyncSync(fd);
+          fchmodSync(fd,entry.mode);
+        }finally{closeSync(fd);}
+      }
+    }
+    if(pathPresentNoFollow(destination))throw Error("Version installed while staging");
+    renameSync(stage,destination);
+    promoted=true;
+    return destination;
+  }finally{
+    if(!promoted)rmSync(stage,{recursive:true,force:true});
+  }
 }
