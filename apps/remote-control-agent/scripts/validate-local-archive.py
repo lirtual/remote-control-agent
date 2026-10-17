@@ -103,26 +103,30 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     home.mkdir(mode=0o700)
     programs = home / ".local/share/mcp-workers/remote-control/programs"
     programs.mkdir(parents=True, mode=0o700)
+    for owned in (home / ".local/share/mcp-workers/remote-control", programs):
+        owned.chmod(0o700)
     version = programs / (tag + "-" + target)
     module.unpack_verified(archive, version, records, tag, target)
-    manager = version / "apps/remote-control-agent/scripts/manage-v2.py"
-    assert manager.stat().st_mode & 0o777 == 0o700
+    manager = version / "apps/remote-control-agent/scripts/manage-v2.mjs"
+    shim = version / "apps/remote-control-agent/scripts/rca.sh"
+    assert manager.stat().st_mode & 0o777 == 0o600
+    assert shim.stat().st_mode & 0o777 == 0o700
     env = {**os.environ, "HOME": str(home)}
-    status = subprocess.run(["python3", "-B", str(manager), "status"], env=env,
+    status = subprocess.run([str(node), str(manager), "status"], env=env,
                             stdin=subprocess.DEVNULL, capture_output=True,
                             text=True, timeout=10)
     if status.returncode or '"cloud_authorization": "unconfirmed"' not in status.stdout:
         raise SystemExit("Packaged manager local status failed")
-    help_out = subprocess.run(["python3", "-B", str(manager), "--help"], env=env,
+    help_out = subprocess.run([str(node), str(manager), "--help"], env=env,
                               stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, timeout=10)
-    version_out = subprocess.run(["python3", "-B", str(manager), "--version"], env=env,
+    version_out = subprocess.run([str(node), str(manager), "--version"], env=env,
                                  stdin=subprocess.DEVNULL, capture_output=True,
                                  text=True, timeout=10)
-    if (help_out.returncode or "Usage: rca" not in help_out.stdout
+    if (help_out.returncode or "rca [status" not in help_out.stdout
             or version_out.returncode or version_out.stdout.strip() != tag):
         raise SystemExit("Packaged management help/version commands failed")
-    menu = subprocess.run(["python3", "-B", str(manager)], env=env,
+    menu = subprocess.run([str(node), str(manager)], env=env,
                           stdin=subprocess.DEVNULL, capture_output=True,
                           text=True, timeout=10)
     if menu.returncode == 0:
@@ -133,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     import select
     import time
     master, slave = pty.openpty()
-    proc = subprocess.Popen(["python3", "-B", str(manager)], env=env,
+    proc = subprocess.Popen([str(node), str(manager)], env=env,
                             stdin=slave, stdout=slave, stderr=slave,
                             start_new_session=True, close_fds=True)
     os.close(slave)
@@ -167,7 +171,12 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     bin_dir = home / ".local/bin"
     bin_dir.mkdir(mode=0o700)
     launcher = bin_dir / "rca"
-    launcher.symlink_to(manager)
+    launcher.symlink_to(shim)
+    shell_status = subprocess.run([str(launcher), "status"], env=env,
+                                  stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, timeout=10)
+    if shell_status.returncode or "installed_versions" not in shell_status.stdout:
+        raise SystemExit("Bundled Node rca shim failed")
     base = home / ".local/share/mcp-workers/remote-control"
     identity = base / "v2-identity.pem"
     identity.write_text("test-only identity fixture", encoding="utf-8")
@@ -177,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     receipt = receipts / "operation-receipts.sqlite"
     receipt.write_bytes(b"test-only receipt fixture")
     uninstall_master, uninstall_slave = pty.openpty()
-    removing = subprocess.Popen(["python3", "-B", str(manager), "uninstall"], env=env,
+    removing = subprocess.Popen([str(node), str(manager), "uninstall"], env=env,
                                 stdin=uninstall_slave, stdout=uninstall_slave,
                                 stderr=uninstall_slave, start_new_session=True,
                                 close_fds=True)

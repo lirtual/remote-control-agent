@@ -179,6 +179,42 @@ export async function runInteractiveLocalManager(args,{
   ask=null,plan=planLocalUninstall,execute=executeLocalUninstall,
   ...rest
 }={}){
+  if(args.length===0){
+    if(!stdin.isTTY||!stdout.isTTY)throw Error("Interactive Agent manager requires a local terminal");
+    const rl=createInterface({input:stdin,output:stdout,terminal:true});
+    try {
+      for(;;){
+        stdout.write("\nRemote Control Agent "+inventory().info.version+"\n");
+        stdout.write("1. Status   2. Pair / repair   3. Logs\n");
+        stdout.write("4. Upgrade  5. Uninstall       6. Exit\n");
+        const choice=(await rl.question("Choose an option: ")).trim();
+        if(choice==="6"||choice.toLowerCase()==="q")return 0;
+        if(choice==="1"){
+          dispatchLocalManager(["status"],{inventory,stdin,stdout,...rest});
+          continue;
+        }
+        if(choice==="3"){
+          dispatchLocalManager(["logs"],{inventory,stdin,stdout,...rest});
+          continue;
+        }
+        if(choice==="4"){
+          const pin=(await rl.question("Reviewed Release tag and Git commit: ")).trim().split(/\s+/);
+          if(pin.length!==2)throw Error("Manual upgrade needs tag and commit");
+          rl.close();
+          return runInteractiveLocalManager(["upgrade",...pin],{
+            inventory,home,stdin,stdout,ask,plan,execute,...rest,
+          });
+        }
+        if(choice==="2"||choice==="5"){
+          rl.close();
+          return runInteractiveLocalManager([choice==="2"?"pair":"uninstall"],{
+            inventory,home,stdin,stdout,ask,plan,execute,...rest,
+          });
+        }
+        stdout.write("Choose 1–6.\n");
+      }
+    }finally{rl.close();}
+  }
   if(args[0]==="upgrade"){
     if(args.length!==3)throw Error("Use rca upgrade <reviewed-tag> <reviewed-40-char-commit>");
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");

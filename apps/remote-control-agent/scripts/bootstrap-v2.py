@@ -275,7 +275,8 @@ def unpack_verified(archive, destination, records, tag, target):
                         os.fsync(stream.fileno())
                 except Exception:
                     raise
-                if name in EXEC_FILES:
+                if name in EXEC_FILES or name in (
+                        APP + "/scripts/manage-v2.py", APP + "/scripts/rca.sh"):
                     output.chmod(0o700)
         # Under this private parent and exclusive flock, only the current user
         # can create destination; never replace it, even on a repeated run.
