@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
+import { ReceiptStore } from "../src/operations.ts";
 import { assertSafePortableUpgrade, renderV2Service } from "../scripts/install-v2.mjs";
 
 const profile = {name:"remote-control-agent", artifact_schema:1,
@@ -21,10 +22,15 @@ async function createReceiptDatabase(home, version = 1, mode = 0o600) {
   await chmod(directory, 0o700);
   const file = path.join(directory, "operation-receipts.sqlite");
   await rm(file, {force:true});
-  const db = new DatabaseSync(file);
-  db.exec("CREATE TABLE receipts (operation_id TEXT PRIMARY KEY NOT NULL, tool_name TEXT NOT NULL, argument_digest TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, safe_result_summary TEXT, session_id TEXT, guarded INTEGER NOT NULL CHECK(guarded IN (0, 1)));");
-  db.exec("PRAGMA user_version = " + version);
-  db.close();
+  if (version === 1) {
+    const store = new ReceiptStore(directory);
+    await store.open();
+    await store.close();
+  } else {
+    const db = new DatabaseSync(file);
+    db.exec("PRAGMA user_version = " + version);
+    db.close();
+  }
   await chmod(file, mode);
   return file;
 }
