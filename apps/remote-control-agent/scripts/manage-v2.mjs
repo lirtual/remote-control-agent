@@ -17,6 +17,13 @@ const UNIT="remote-control-v2-agent.service";
 const MARKER="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
 const VERSION=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc$/;
 const ID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const MANUAL_UPGRADE_ACTIVATION_FAILURE = "Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-v2-agent.service` before retrying; do not re-pair or replay operations.";
+const GENERIC_LOCAL_FAILURE = "rca refused unsafe or unsupported local operation.";
+export function safeManagerCliFailure(error) {
+  return error instanceof Error && error.message === MANUAL_UPGRADE_ACTIVATION_FAILURE
+    ? MANUAL_UPGRADE_ACTIVATION_FAILURE
+    : GENERIC_LOCAL_FAILURE;
+}
 
 function lstatSafe(filename){
   try { return lstatSync(filename); }
@@ -222,7 +229,9 @@ export async function runInteractiveLocalManager(args,{
     const activate=rest.activateUpgrade??activateManualUpgrade;
     const state=inventory();
     const prepared=await upgrade(state,{tag:args[1],commit:args[2]},{home});
-    const result=activate(prepared);
+    let result;
+    try { result=activate(prepared); }
+    catch { throw new Error(MANUAL_UPGRADE_ACTIVATION_FAILURE); }
     stdout.write("Manual upgrade completed; independent cloud verification remains required.\n");
     stdout.write(JSON.stringify(result,null,2)+"\n");
     return 0;
@@ -253,6 +262,6 @@ export async function runInteractiveLocalManager(args,{
 if(process.argv[1]===fileURLToPath(import.meta.url)){
   runInteractiveLocalManager(process.argv.slice(2)).then(
     code=>{process.exitCode=code;},
-    ()=>{console.error("rca refused unsafe or unsupported local operation.");process.exitCode=1;}
+    error=>{console.error(safeManagerCliFailure(error));process.exitCode=1;}
   );
 }
