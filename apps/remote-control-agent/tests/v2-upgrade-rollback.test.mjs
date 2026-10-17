@@ -240,6 +240,7 @@ test("#77 local upgrade activation failure restores exact owned v2 unit and keep
     await writeFile(unitPath, from, {mode:0o600});
     await assert.rejects(installUnit(unitPath,to,from), /could not be activated/);
     assert.equal(await readFile(unitPath,"utf8"),from);
+    await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
     const calls=(await readFile(logs,"utf8")).trim().split("\n");
     assert.ok(calls.filter(x=>x.includes("restart " + UNIT)).length>=2);
     assert.ok(calls.some(x=>x.includes("is-active --quiet " + UNIT)));
@@ -253,6 +254,7 @@ test("#77 successful local upgrade writes new v2 unit without identity reset", a
     await writeFile(activeOk,"preauthorized",{mode:0o600});
     await installUnit(unitPath,to,from);
     assert.equal(await readFile(unitPath,"utf8"),to);
+    await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
     const calls=await readFile(logs,"utf8");
     assert.match(calls,/--user restart remote-control-v2-agent\.service/);
   });
