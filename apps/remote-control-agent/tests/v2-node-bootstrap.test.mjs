@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { inspectPinnedArchiveBytes, stagePinnedProgram } from "../scripts/bootstrap-node.mjs";
+import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -139,4 +139,46 @@ test("staging refuses symlinked/untrusted parents and version-label mismatch",()
     assert.throws(()=>stagePinnedProgram(x.bytes,params(x),safe,"v0.1.2-linux-x64-glibc"),/Untrusted private/);
     assert.deepEqual(readdirSync(safe),[]);
   }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(root,{recursive:true,force:true});}
+});
+
+test("repeat-install verifies exact immutable Node files with no mutation",()=>{
+  const x=fixture(),p=mkdtempSync(path.join(tmpdir(),"rca-node-repeat-"));
+  try{
+    chmodSync(p,0o700);
+    const dst=stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc");
+    const before=readFileSync(path.join(dst,"bundle.json"));
+    const again=stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc");
+    assert.equal(again,dst);
+    assert.ok(readFileSync(path.join(dst,"bundle.json")).equals(before));
+    assert.deepEqual(readdirSync(p),["v0.1.2-linux-x64-glibc"]);
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(p,{recursive:true,force:true});}
+});
+test("repeat-install rejects injected Python cache, modified file and mode drift",()=>{
+  const x=fixture(),p=mkdtempSync(path.join(tmpdir(),"rca-node-tamper-"));
+  try{
+    chmodSync(p,0o700);
+    const dst=stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc");
+    const scripts=path.join(dst,APP,"scripts");
+    mkdirSync(path.join(scripts,"__pycache__"),{mode:0o700});
+    assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"),/differs/);
+    rmSync(path.join(scripts,"__pycache__"),{recursive:true});
+    const file=path.join(dst,"bundle.json");
+    writeFileSync(file,"TAMPERED");
+    assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"),/Modified/);
+    writeFileSync(file,JSON.stringify(manifest));chmodSync(file,0o644);
+    assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"),/Unexpected|differs/);
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(p,{recursive:true,force:true});}
+});
+test("repeat-install rejects symlink member and dangling symlink root",()=>{
+  const x=fixture(),p=mkdtempSync(path.join(tmpdir(),"rca-node-links-"));
+  try{
+    chmodSync(p,0o700);
+    const dst=stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc");
+    const member=path.join(dst,"bundle.json");
+    rmSync(member);symlinkSync("/etc/passwd",member);
+    assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"),/Unexpected/);
+    rmSync(dst,{recursive:true});
+    symlinkSync(path.join(p,"missing"),dst);
+    assert.throws(()=>stageOrVerifyPinnedProgram(x.bytes,params(x),p,"v0.1.2-linux-x64-glibc"));
+  }finally{rmSync(x.dir,{recursive:true,force:true});rmSync(p,{recursive:true,force:true});}
 });

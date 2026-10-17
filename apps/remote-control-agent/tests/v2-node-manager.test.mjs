@@ -1,0 +1,136 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+import { dispatchLocalManager, localManagerInventory, localManagerStatus } from "../scripts/manage-v2.mjs";
+
+const source=fileURLToPath(new URL("../scripts/manage-v2.mjs",import.meta.url));
+const UUID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
+function fixture(){
+  const home=mkdtempSync(path.join(os.tmpdir(),"rca-node-manager-"));chmodSync(home,0o700);
+  function directory(relative){const p=path.join(home,relative);mkdirSync(p,{recursive:true,mode:0o700});chmodSync(p,0o700);return p;}
+  const rel=".local/share/mcp-workers/remote-control";
+  const root=directory(rel+"/programs/v0.1.2-linux-x64-glibc");
+  const scripts=directory(rel+"/programs/v0.1.2-linux-x64-glibc/apps/remote-control-agent/scripts");
+  const manager=path.join(scripts,"manage-v2.mjs");
+  copyFileSync(source,manager);chmodSync(manager,0o600);
+  const info={version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
+    device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
+  writeFileSync(path.join(root,"bundle.json"),JSON.stringify(info),{mode:0o600});
+  const ids=directory(rel);
+  writeFileSync(path.join(ids,"v2-identity.pem.device-id"),UUID,{mode:0o600});
+  const units=directory(".config/systemd/user");
+  const unit=path.join(units,"remote-control-v2-agent.service");
+  writeFileSync(unit,"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n[Service]\nEnvironment=REMOTE_CONTROL_V2_ENDPOINT=https://remote-control-v2-preview.aiyaya.workers.dev/\nWorkingDirectory="+path.join(root,"apps/remote-control-agent")+"\nExecStart="+path.join(root,"bin/node")+" "+path.join(root,"apps/remote-control-agent/src/v2-main.js")+"\n",{mode:0o600});
+  mkdirSync(path.join(root,"bin"),{recursive:true,mode:0o700});
+  writeFileSync(path.join(root,"bin/node"),"SYNTHETIC-DUMMY-NODE",{mode:0o700});
+  writeFileSync(path.join(scripts,"install-v2.mjs"),"SYNTHETIC-DUMMY-INSTALLER",{mode:0o600});
+  const receipts=path.join(directory(".local/state/mcp-workers/remote-control-agent"),"operation-receipts.sqlite");
+  writeFileSync(receipts,"SIMULATED_RECEIPT_KEEP",{mode:0o600});
+  return {home,manager,root,ids,unit,receipts,info};
+}
+function cleanup(f){rmSync(f.home,{recursive:true,force:true});}
+test("Node-only rca status and version preserve identity and receipts",()=>{
+  const f=fixture();
+  try{
+    const opts={home:f.home,source:f.manager};
+    const inv=localManagerInventory(opts);
+    assert.equal(inv.info.version,"v0.1.2");
+    assert.equal(inv.ids.permanent,UUID);
+    const status=localManagerStatus(opts,()=>({status:0,error:null}));
+    assert.equal(status.local_permanent_service,"active");
+    assert.equal(status.cloud_authorization,"unconfirmed");
+    assert.equal(status.device_ids.permanent,UUID);
+    assert.equal(status.cli_version,"v0.1.2");
+    assert.equal(status.sqlite_receipts,"preserved");
+    const stdout={text:"",write(value){this.text+=value;}};
+    assert.equal(dispatchLocalManager(["--version"],{inventory:()=>inv,stdout}),0);
+    assert.equal(stdout.text,"v0.1.2\n");
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+    assert.equal(readFileSync(path.join(f.ids,"v2-identity.pem.device-id"),"utf8"),UUID);
+  }finally{cleanup(f);}
+});
+test("Node manager refuses foreign identities and does not read private keys",()=>{
+  const f=fixture();
+  try{
+    const opts={home:f.home,source:f.manager};
+    const identity=path.join(f.ids,"v2-identity.pem.device-id");
+    rmSync(identity);symlinkSync("/etc/passwd",identity);
+    assert.throws(()=>localManagerInventory(opts),/Untrusted/);
+    rmSync(identity);writeFileSync(identity,"non-uuid",{mode:0o600});
+    assert.throws(()=>localManagerInventory(opts),/Invalid local device/);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+test("not-yet-reviewed mutations and noninteractive logs fail closed",()=>{
+  const f=fixture();
+  try{
+    const opts={home:f.home,source:f.manager};
+    const inv=()=>localManagerInventory(opts);
+    for(const action of ["upgrade","uninstall","purge","bash"])
+      assert.throws(()=>dispatchLocalManager([action],{inventory:inv}),/not yet implemented/);
+    assert.throws(()=>dispatchLocalManager(["logs"],{
+      inventory:inv,stdin:{isTTY:false},stdout:{isTTY:false,write(){}}
+    }),/local terminal/);
+    const result=spawnSync(process.execPath,[f.manager,"uninstall"],{
+      env:{...process.env,HOME:f.home},encoding:"utf8",timeout:3000
+    });
+    assert.equal(result.status,1);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+test("Node-only pair dispatch reuses owned installer and only bound endpoint with local TTY",()=>{
+  const f=fixture();
+  try{
+    const state=localManagerInventory({home:f.home,source:f.manager});
+    const actions=[];
+    const invoke=(cmd,args,opts)=>{
+      actions.push({cmd,args,opts});
+      return {status:0};
+    };
+    const tty={isTTY:true,write(){}};
+    assert.equal(dispatchLocalManager(["pair"],{
+      inventory:()=>state,stdin:tty,stdout:tty,invoke
+    }),0);
+    assert.equal(actions.length,1);
+    assert.equal(actions[0].cmd,path.join(f.root,"bin/node"));
+    assert.deepEqual(actions[0].args,[
+      path.join(f.root,"apps/remote-control-agent/scripts/install-v2.mjs"),
+      "--endpoint","https://remote-control-v2-preview.aiyaya.workers.dev/"
+    ]);
+    assert.equal(actions[0].opts.env.RC_AGENT_NO_POST_START,"1");
+    assert.throws(()=>dispatchLocalManager(["pair"],{
+      inventory:()=>state,stdin:{isTTY:false},stdout:tty,invoke
+    }),/real local terminal/);
+    assert.throws(()=>dispatchLocalManager(["pair","https://evil.example/"],{
+      inventory:()=>state,stdin:tty,stdout:tty,invoke
+    }),/Cannot silently change/);
+    assert.equal(actions.length,1);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+test("Node manager rejects a systemd unit retargeted to an unrelated process",()=>{
+  const f=fixture();
+  try{
+    const unit=readFileSync(f.unit,"utf8");
+    writeFileSync(f.unit,unit.replace(/ExecStart=[^\n]+/,"ExecStart=/bin/sh -c something"));
+    assert.throws(()=>localManagerInventory({home:f.home,source:f.manager}),/Service does not reference/);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});
+test("Node manager creates no Python cache or program mutations",()=>{
+  const f=fixture();
+  try{
+    const result=spawnSync(process.execPath,[f.manager,"status"],{
+      env:{...process.env,HOME:f.home},encoding:"utf8",timeout:3000
+    });
+    assert.equal(result.status,0,result.stderr);
+    assert.equal(JSON.parse(result.stdout.split("\nLocal service")[0]).cli_version,"v0.1.2");
+    const programFiles=readFileSync(f.manager,"utf8");
+    assert.doesNotMatch(programFiles,/python3|manage-v2\.py|exec python/i);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+  }finally{cleanup(f);}
+});

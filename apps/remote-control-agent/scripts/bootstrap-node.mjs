@@ -5,7 +5,7 @@
  * This module is staged only on Draft PR #2; not part of immutable v0.1.1.
  */
 import { createHash } from "node:crypto";
-import { readFileSync, lstatSync, mkdtempSync, chmodSync, mkdirSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync, renameSync, rmSync, constants } from "node:fs";
+import { readFileSync, lstatSync, mkdtempSync, chmodSync, mkdirSync, openSync, writeSync, fsyncSync, fchmodSync, closeSync, renameSync, rmSync, readdirSync, constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { join, dirname } from "node:path";
@@ -174,4 +174,55 @@ export function stagePinnedProgram(bytes,expected,parent,versionName){
   }finally{
     if(!promoted)rmSync(stage,{recursive:true,force:true});
   }
+}
+
+/** Repeat-install may reuse only an exact, owner-protected release tree.
+ * Any extra file (including __pycache__), missing file, modified bytes,
+ * hardlink, symlink, or permissions drift is refused with no mutation.
+ */
+export function verifyExistingPinnedProgram(bytes,expected,parent,versionName){
+  const {records}=inspectPinnedArchiveBytes(bytes,expected);
+  if(versionName!==expected.tag+"-"+expected.target)
+    throw Error("Versioned destination mismatch");
+  const parentInfo=lstatSync(parent);
+  if(!parentInfo.isDirectory()||parentInfo.isSymbolicLink()||
+     parentInfo.uid!==process.getuid()||(parentInfo.mode&0o077)!==0)
+    throw Error("Untrusted private installation parent");
+  const root=join(parent,versionName);
+  const rootInfo=lstatSync(root);
+  if(!rootInfo.isDirectory()||rootInfo.isSymbolicLink()||
+    rootInfo.uid!==process.getuid()||(rootInfo.mode&0o077)!==0)
+    throw Error("Untrusted installed version root");
+  const actual=new Set();
+  function walk(dir,rel=""){
+    for(const de of readdirSync(dir,{withFileTypes:true})){
+      const member=rel?rel+"/"+de.name:de.name;
+      const full=join(dir,de.name);
+      const meta=lstatSync(full);
+      if(meta.uid!==process.getuid()||(meta.mode&0o077)!==0 ||
+          (meta.nlink!==1&&!meta.isDirectory())||
+          (!meta.isDirectory()&&!meta.isFile()) ||
+          meta.isSymbolicLink())throw Error("Unexpected installed program entry");
+      const record=records.get(member);
+      if(!record||record.directory!==meta.isDirectory()||
+          (meta.mode&0o777)!==record.mode)
+        throw Error("Installed program differs from verified archive");
+      if(meta.isFile() &&
+        !readFileSync(full).equals(record.data))
+        throw Error("Modified installed program file");
+      actual.add(member);
+      if(meta.isDirectory())walk(full,member);
+    }
+  }
+  walk(root);
+  if(actual.size!==records.size ||
+    [...records.keys()].some(member=>!actual.has(member)))
+    throw Error("Missing installed program file");
+  return root;
+}
+export function stageOrVerifyPinnedProgram(bytes,expected,parent,versionName){
+  const destination=join(parent,versionName);
+  return pathPresentNoFollow(destination)
+    ?verifyExistingPinnedProgram(bytes,expected,parent,versionName)
+    :stagePinnedProgram(bytes,expected,parent,versionName);
 }
