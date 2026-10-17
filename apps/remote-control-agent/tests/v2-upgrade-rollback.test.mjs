@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile, access } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, access, chmod } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -100,7 +100,7 @@ test("#77 SIGKILL during unit activation is recovered from a durable previous-un
   await withFakeUserService(async ({unitPath,from,to,key,receipt,home,restartReached,releaseRestart})=> {
     await writeFile(unitPath,from,{mode:0o600});
     const installerUrl = new URL("../scripts/install-v2.mjs", import.meta.url).href;
-    const childSource = "import { installUnit } from " + JSON.stringify(installerUrl) + ";\\n" +
+    const childSource = "import { installUnit } from " + JSON.stringify(installerUrl) + ";\n" +
       "await installUnit(" + JSON.stringify(unitPath) + "," + JSON.stringify(to) + "," + JSON.stringify(from) + ");\\n";
     const child = spawn(process.execPath, ["--experimental-strip-types","--input-type=module","-e",childSource],
       {stdio:"ignore",env:process.env});
