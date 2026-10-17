@@ -8,6 +8,7 @@ import { test } from "node:test";
 import {
   validateManualUpgrade,prepareManualUpgrade,activateManualUpgrade
 } from "../scripts/upgrade-v2.mjs";
+import { runInteractiveLocalManager } from "../scripts/manage-v2.mjs";
 
 const APP="apps/remote-control-agent";
 const ID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
@@ -76,6 +77,24 @@ function fixture({newSource=MAIN}={}){
   return {home,programs,oldRoot,state,ids,receipt,archive,digest,release};
 }
 const cleanup=f=>rmSync(f.home,{recursive:true,force:true});
+
+test("retrying rca upgrade recovers an interrupted unit before inventory and release validation",async()=>{
+  const calls=[];
+  const home="/tmp/rca-recovery-order-test";
+  const stdout={isTTY:true,write:()=>{}};
+  const stdin={isTTY:true};
+  const state={unit:"owned-unit",root:"old-root",info:{version:"v0.1.2"},ids:{permanent:ID}};
+  const prepared={version:tag,program:"new-root"};
+  const result=await runInteractiveLocalManager(["upgrade",tag,commit],{
+    home,stdin,stdout,
+    recoverInterruptedUpgrade:async options=>{calls.push("recover");assert.equal(options.home,home);},
+    inventory:()=>{calls.push("inventory");return state;},
+    prepareUpgrade:async()=>{calls.push("prepare");return prepared;},
+    activateUpgrade:()=>{calls.push("activate");return prepared;},
+  });
+  assert.equal(result,0);
+  assert.deepEqual(calls,["recover","inventory","prepare","activate"]);
+});
 
 test("preflight accepts explicit newer release and unchanged Worker endpoint",()=>{
   const f=fixture();
