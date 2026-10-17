@@ -167,6 +167,12 @@ export function build(args) {
   const installer=readFileSync(path.join(root,"scripts/install-v2.mjs"),"utf8");
   writeFileSync(path.join(work,"apps/remote-control-agent/scripts/install-v2.mjs"),
     rewriteExtensions(installer),{mode:0o600});
+  for (const name of ["bootstrap-v2.py", "manage-v2.py"]) {
+    const sourceFile=path.join(root,"scripts",name);
+    const dest=path.join(work,"apps/remote-control-agent/scripts",name);
+    copyFileSync(sourceFile,dest);
+    chmodSync(dest,name==="manage-v2.py" ? 0o700 : 0o600);
+  }
   writeFileSync(path.join(work,"apps/remote-control-agent/package.json"),JSON.stringify({type:"module"})+"\n",{mode:0o600});
   writeFileSync(path.join(work,"bundle.json"),JSON.stringify({
     name:"remote-control-agent",version:args.version,target:args.target,

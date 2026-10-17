@@ -11,7 +11,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { constants, existsSync, readFileSync } from "node:fs";
-import { access, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, open, readFile, readlink, readdir, rename, rm, rmdir, symlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
@@ -700,6 +700,70 @@ export async function inspectInstallIdentity(options, keyPath, previous, {
 }
 
 
+/** Publish only our own user-local launcher. Never overwrite foreign commands.
+ * Called after successful service activation, not at download or pairing time.
+ */
+export async function installManagerLauncher(home, program) {
+  const parent = path.join(home, ".local");
+  const bin = path.join(parent, "bin");
+  for (const directory of [home, parent, bin]) {
+    let stat;
+    try { stat = await lstat(directory); }
+    catch (error) {
+      if (error.code !== "ENOENT" || directory === home) throw error;
+      await mkdir(directory, {mode:0o700});
+      stat = await lstat(directory);
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() ||
+        stat.uid !== process.getuid()) {
+      throw new Error("Untrusted user-local launcher directory.");
+    }
+  }
+  const target = path.join(program, "apps/remote-control-agent/scripts/manage-v2.py");
+  const file = await lstat(target);
+  if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
+      !(file.mode & 0o100) || file.mode & 0o077) {
+    throw new Error("Reviewed Agent manager executable is missing or unsafe.");
+  }
+  const launcher = path.join(bin, "remote-control-agent");
+  const installedRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs");
+  try {
+    const current = await lstat(launcher);
+    if (!current.isSymbolicLink()) {
+      throw new Error("A foreign remote-control-agent command already exists.");
+    }
+    const destination = await readlink(launcher);
+    if (!destination.startsWith(installedRoot + path.sep) ||
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/]manage-v2[.]py$/.test(
+          destination.slice(installedRoot.length + 1))) {
+      throw new Error("Existing launcher is not owned by the versioned Agent.");
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const temporary = path.join(bin, ".remote-control-agent-" + process.pid);
+  await symlink(target, temporary);
+  try { await rename(temporary, launcher); }
+  finally { await rm(temporary, {force:true}); }
+  // User-local Bash convenience only. No modification of unknown/symlinked rc files.
+  const rc=path.join(home, ".bashrc");
+  try {
+    const stat=await lstat(rc);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.uid===process.getuid() &&
+        stat.size <= 1024*1024) {
+      const contents=await readFile(rc,"utf8");
+      if (!contents.includes("# remote-control-agent local CLI")) {
+        const fd=await open(rc,constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
+        try { await fd.writeFile("\n# remote-control-agent local CLI\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"); }
+        finally { await fd.close(); }
+      }
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return launcher;
+}
+
 /** Hold a kernel flock through the full interactive CLI, released even on SIGKILL. */
 export async function runLockedInstallerCli(argv, {
   home = os.homedir(), invoke = spawnSync, node = process.execPath,
@@ -841,6 +905,10 @@ export async function runInstaller(args, {
             run("systemctl", ["--user", "start", UNIT]);
             run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
           }
+          if (portable) {
+            const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+            stdout.write("Local CLI: " + launcher + " (open with remote-control-agent).\n");
+          }
           stdout.write("v2 user service already installed; approved identity preserved.\n");
           return;
         }
@@ -855,6 +923,10 @@ export async function runInstaller(args, {
   await ownerOnly(keyPath, 0o600);
   await ownerOnly(keyPath + ".device-id", 0o600);
   if (options.foreground) {
+    if (portable) {
+      const launcher=await installManagerLauncher(home,path.resolve(packageRoot,"..",".."));
+      stdout.write("==> Local Agent manager available: " + launcher + "\n");
+    }
     stdout.write("v2 " + (options.grantType === "temporary" ? "temporary 24-hour" : "foreground") +
       " identity ready. Starting foreground Agent. Closing the terminal or stopping WSL2 disconnects it; no service is installed and no cloud revoke is implied.\n");
     await startForeground({ endpoint: trustedEndpoint(options.endpoint), keyPath });
@@ -870,12 +942,30 @@ export async function runInstaller(args, {
   }
   await installUnit(unitPath, rendered, previous);
   await finishRevokedPromotion(keyPath);
+  if (portable) {
+    const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+    stdout.write("==> Agent management CLI installed: " + launcher + "\n");
+    stdout.write("==> Future terminals: run remote-control-agent\n");
+    stdout.write("==> If command is not found: export PATH=\"$HOME/.local/bin:$PATH\"\n");
+  }
   stdout.write("v2 user service active. Use list_devices and an approved nonsensitive read fixture to verify connectivity.\n");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  runLockedInstallerCli(process.argv.slice(2)).then(code => {
+  runLockedInstallerCli(process.argv.slice(2)).then(async code => {
     process.exitCode = code;
+    if (code === 0 && portable && process.stdin.isTTY && process.stdout.isTTY &&
+        process.env.RC_AGENT_NO_POST_START !== "1") {
+      const prompt=createInterface({input:process.stdin,output:process.stdout,terminal:true});
+      let reply;
+      try { reply=(await prompt.question("Open Agent manager now? [y/N] ")).trim(); }
+      finally { prompt.close(); }
+      if (/^y(es)?$/i.test(reply)) {
+        const cmd=path.join(os.homedir(), ".local/bin/remote-control-agent");
+        const result=spawnSync(cmd,[],{stdio:"inherit"});
+        if (result.error || result.status !== 0) process.exitCode = 1;
+      }
+    }
   }).catch(error => {
     // Only print fixed, hard-coded classifications; never echo external
     // exception messages, endpoint query strings or private credential data.

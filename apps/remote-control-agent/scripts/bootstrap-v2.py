@@ -43,9 +43,11 @@ ALLOWED_DIRS = frozenset((
 ))
 ALLOWED_FILES = frozenset((
     "bin/node", "bundle.json", APP + "/package.json",
-    APP + "/scripts/install-v2.mjs", APP + "/.build/session-supervisor",
+    APP + "/scripts/install-v2.mjs", APP + "/scripts/bootstrap-v2.py",
+    APP + "/scripts/manage-v2.py", APP + "/.build/session-supervisor",
 ))
-EXEC_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))
+ELF_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))
+EXEC_FILES = ELF_FILES | frozenset((APP + "/scripts/manage-v2.py",))
 TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HASH = re.compile(r"sha256:([0-9a-f]{64})\Z")
@@ -171,7 +173,9 @@ def inspect_archive(archive, tag, target):
             records.append((name, member))
         if not EXEC_FILES.issubset(names) or "bundle.json" not in names \
                 or APP + "/src/v2-main.js" not in names \
-                or APP + "/scripts/install-v2.mjs" not in names:
+                or APP + "/scripts/install-v2.mjs" not in names \
+                or APP + "/scripts/bootstrap-v2.py" not in names \
+                or APP + "/scripts/manage-v2.py" not in names:
             raise ValueError("Incomplete Agent Release archive")
         manifest = json.load(tf.extractfile(tf.getmember("bundle.json")))
         if (manifest.get("artifact_schema") != 1 or manifest.get("name") != "remote-control-agent"
@@ -189,7 +193,7 @@ def inspect_archive(archive, tag, target):
                    tuple(map(int, minimum.split(".")))):
             raise ValueError("Release requires a newer glibc ABI; no execution attempted")
         machine = 62 if target.startswith("linux-x64-") else 183
-        for binary in EXEC_FILES:
+        for binary in ELF_FILES:
             b = tf.extractfile(tf.getmember(binary)).read(64)
             if (len(b) < 64 or b[:4] != b"\x7fELF" or b[4:6] != b"\x02\x01"
                     or struct.unpack_from("<H", b, 18)[0] != machine):
@@ -343,6 +347,7 @@ def preflight(tag, commit, endpoint):
 
 def install(tag, commit, endpoint, name=None, upgrade=False):
     target = preflight(tag, commit, endpoint)
+    print("==> Detected Linux target: " + target + " | Release " + tag, flush=True)
     location = program_home(os.path.expanduser("~"))
     version = location / (tag + "-" + target)
     # Existing lock + protected OS state: no new installer state database.
@@ -353,18 +358,21 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         except BlockingIOError:
             raise ValueError("Another v2 standalone installer is already running")
         clean_orphaned_staging(location)
+        print("==> Resolving immutable GitHub Release and exact source commit", flush=True)
         pinned = resolve_pinned(tag, commit, target)
         archive_path = None
         try:
             with tempfile.NamedTemporaryFile(prefix=".download-", dir=location, delete=False) as f:
                 archive_path = pathlib.Path(f.name)
                 os.chmod(archive_path, 0o600)
+                print("==> Downloading verified native Agent package", flush=True)
                 data = fetch(pinned["download"], "application/octet-stream", MAX_ARCHIVE)
                 if (len(data) != pinned["size"] or hashlib.sha256(data).hexdigest() != pinned["digest"]):
                     raise ValueError("Official GitHub SHA-256 or byte length mismatch")
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
+            print("==> SHA-256 verified; inspecting archive and system ABI", flush=True)
             records = inspect_archive(archive_path, tag, target)
             if version.exists() or version.is_symlink():
                 verify_existing_program(archive_path, version, records)
@@ -373,6 +381,7 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         finally:
             if archive_path is not None:
                 archive_path.unlink(missing_ok=True)
+        print("==> Verified runtime staged: " + str(version), flush=True)
         binary = version / "bin/node"
         command = [str(binary), str(version / APP / "scripts/install-v2.mjs"),
                    "--endpoint", endpoint]
@@ -533,10 +542,32 @@ def no_running_programs(versions, proc_root=pathlib.Path("/proc")):
     return True
 
 
+def owned_manager_launcher(home, versions):
+    """Only an exact owned CLI symlink may be removed; foreign bin entries fail closed."""
+    home = pathlib.Path(home)
+    parent = home / ".local"
+    directory = parent / "bin"
+    for path in (parent, directory):
+        if path.is_symlink() or (path.exists() and (
+                not path.is_dir() or path.stat().st_uid != os.getuid())):
+            raise ValueError("Untrusted user-local command directory")
+    launcher = directory / "remote-control-agent"
+    if launcher.is_symlink():
+        info = launcher.lstat()
+        expected = [str(v / APP / "scripts/manage-v2.py") for v in versions]
+        if info.st_uid != os.getuid() or os.readlink(launcher) not in expected:
+            raise ValueError("Foreign Agent manager launcher: refuse uninstall")
+        return launcher
+    if launcher.exists():
+        raise ValueError("Foreign command named remote-control-agent: refuse uninstall")
+    return None
+
+
 def local_uninstall(home, confirm, systemctl=None, process_check=no_running_programs):
     if os.getuid() == 0 or not confirm:
         raise ValueError("Owner-only explicit local uninstall required")
     programs, versions, unit_file, unit, ids = local_inventory(home)
+    launcher = owned_manager_launcher(home, versions)
     owned = owned_unit_root(unit, versions)
     for version in versions:
         validated_owned_version(version)
@@ -554,6 +585,8 @@ def local_uninstall(home, confirm, systemctl=None, process_check=no_running_prog
         systemctl(["--user", "daemon-reload"])
     for version in versions:
         shutil.rmtree(version)
+    if launcher is not None:
+        launcher.unlink()
     return {"removed_versions": [v.name for v in versions],
             "removed_owned_v2_service": owned is not None,
             "preserved_device_ids": ids, "preserved_keys_and_sqlite": True,

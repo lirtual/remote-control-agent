@@ -96,6 +96,49 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
         if proc.returncode:
             raise SystemExit("unpublished bundle failed native runtime verification")
     onboarding = verify_refuses_unsafe_onboarding(node, installer, root)
+    # Real bundled manager: status must work without Node/git/worker credentials,
+    # and a headless interactive menu must refuse before pairing.
+    import os
+    home = root / "disposable-cli-home"
+    home.mkdir(mode=0o700)
+    programs = home / ".local/share/mcp-workers/remote-control/programs"
+    programs.mkdir(parents=True, mode=0o700)
+    version = programs / (tag + "-" + target)
+    module.unpack_verified(archive, version, records, tag, target)
+    manager = version / "apps/remote-control-agent/scripts/manage-v2.py"
+    assert manager.stat().st_mode & 0o777 == 0o700
+    env = {**os.environ, "HOME": str(home)}
+    status = subprocess.run(["python3", "-B", str(manager), "status"], env=env,
+                            stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, timeout=10)
+    if status.returncode or '"cloud_authorization": "unconfirmed"' not in status.stdout:
+        raise SystemExit("Packaged manager local status failed")
+    menu = subprocess.run(["python3", "-B", str(manager)], env=env,
+                          stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, timeout=10)
+    if menu.returncode == 0:
+        raise SystemExit("Packaged manager menu accepted headless invocation")
+    # Uninstall is local-only: remove precisely the owned command; never erase
+    # identity or historical SQLite receipts and never claim cloud revocation.
+    bin_dir = home / ".local/bin"
+    bin_dir.mkdir(mode=0o700)
+    launcher = bin_dir / "remote-control-agent"
+    launcher.symlink_to(manager)
+    base = home / ".local/share/mcp-workers/remote-control"
+    identity = base / "v2-identity.pem"
+    identity.write_text("test-only identity fixture", encoding="utf-8")
+    identity.chmod(0o600)
+    receipts = home / ".local/state/mcp-workers/remote-control-agent"
+    receipts.mkdir(parents=True,mode=0o700)
+    receipt = receipts / "operation-receipts.sqlite"
+    receipt.write_bytes(b"test-only receipt fixture")
+    removed = module.local_uninstall(str(home), True,
+                                     process_check=lambda unused: True)
+    if (launcher.exists() or launcher.is_symlink() or version.exists()
+            or identity.read_text("utf-8") != "test-only identity fixture"
+            or receipt.read_bytes() != b"test-only receipt fixture"
+            or removed["cloud_revocation"] != "NOT_PERFORMED"):
+        raise SystemExit("Packaged manager uninstall safety/receipt preservation failed")
     print(json.dumps({"onboarding_gate": onboarding, "kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
                       "target": target, "node": manifest["node"],
                       "glibc_min": manifest["glibc_min"],

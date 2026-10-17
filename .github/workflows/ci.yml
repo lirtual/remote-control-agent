@@ -10,7 +10,7 @@ on:
         description: Reviewed test Release tag (build candidate only)
         required: true
         type: choice
-        options: [v0.1.0]
+        options: [v0.1.0, v0.1.1]
 
 permissions:
   contents: read
@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           candidate_tag="${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.0.0-ci' }}"
-          if [[ "$candidate_tag" != v0.0.0-ci && "$candidate_tag" != v0.1.0 ]]; then
+          if [[ "$candidate_tag" != v0.0.0-ci && "$candidate_tag" != v0.1.0 && "$candidate_tag" != v0.1.1 ]]; then
             echo "Unreviewed candidate tag refused" >&2
             exit 1
           fi
@@ -113,7 +113,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: v0.1.0-${{ matrix.os }}
+          name: ${{ inputs.release_tag }}-${{ matrix.os }}
           path: release-candidate/
           retention-days: 2
           if-no-files-found: error
