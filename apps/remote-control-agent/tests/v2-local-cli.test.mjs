@@ -188,7 +188,7 @@ test("rca status does not create __pycache__ inside its versioned program",async
 
 test("portable installer exits cleanly without reopening local manager twice",async()=>{
   const source=await readFile(path.join(root,"apps/remote-control-agent/scripts/install-v2.mjs"),"utf8");
-  assert.doesNotMatch(source,/Open Agent manager now\\? \\[y\\/N\\]/);
+  assert.doesNotMatch(source,/Open Agent manager now/);
   assert.match(source,/Open the Agent manager now:/);
   assert.match(source,/To use rca in this terminal:/);
   assert.match(source,/New Bash terminals can use rca if/);
