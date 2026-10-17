@@ -118,6 +118,41 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                           text=True, timeout=10)
     if menu.returncode == 0:
         raise SystemExit("Packaged manager menu accepted headless invocation")
+    # A REAL target-local PTY must display the manager menu, report local-only
+    # status on option 1, and exit cleanly on 6. No Worker or device identity.
+    import pty
+    import select
+    import time
+    master, slave = pty.openpty()
+    proc = subprocess.Popen(["python3", "-B", str(manager)], env=env,
+                            stdin=slave, stdout=slave, stderr=slave,
+                            start_new_session=True, close_fds=True)
+    os.close(slave)
+    transcript = b""
+    sent = False
+    try:
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                transcript += chunk
+            if b"Choose an option:" in transcript and not sent:
+                os.write(master, b"1\n6\n")
+                sent = True
+            if proc.poll() is not None:
+                break
+        if proc.poll() is None:
+            proc.kill()
+        if proc.wait(timeout=3) != 0 or not sent or b"installed_versions" not in transcript:
+            raise SystemExit("Packaged manager interactive PTY menu/status/exit failed")
+    finally:
+        os.close(master)
     # Uninstall is local-only: remove precisely the owned command; never erase
     # identity or historical SQLite receipts and never claim cloud revocation.
     bin_dir = home / ".local/bin"
