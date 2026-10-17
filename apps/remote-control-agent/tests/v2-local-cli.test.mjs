@@ -217,7 +217,8 @@ test("portable installer prints a single CLI path, without promising to open the
   assert.doesNotMatch(source,/New Bash terminals can use rca if/);
   assert.doesNotMatch(source,/Pending 10-minute pairing code|Choose 1 = Permanent/);
   assert.match(source,/Pairing code \(10 min\):/);
-  assert.match(source,/MCP challenge \(12 chars\):/);
+  assert.match(source,/pairing_lookup, then explicitly pairing_approve/);
+  assert.doesNotMatch(source,/MCP challenge \(12 chars\):/);
   assert.match(source,/Ready: v2 service active/);
   assert.match(source,/export PATH=/);
 });
