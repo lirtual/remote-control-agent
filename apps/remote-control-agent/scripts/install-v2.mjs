@@ -1028,6 +1028,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exitCode = code;
 
   }).catch(error => {
+    // Upgrade failures need local-service guidance, not the pairing-specific
+    // fallback used for enrollment failures. Keep output fixed and sanitized.
+    if (process.argv.slice(2).includes("--upgrade")) {
+      process.stderr.write("Manual v2 upgrade failed. Verify the local service before retrying; no v1 service was changed.\\n");
+      process.exitCode = 1;
+      return;
+    }
     // Only print fixed, hard-coded classifications; never echo external
     // exception messages, endpoint query strings or private credential data.
     const safeErrors = [
