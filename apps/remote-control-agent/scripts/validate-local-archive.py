@@ -176,12 +176,41 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     receipts.mkdir(parents=True,mode=0o700)
     receipt = receipts / "operation-receipts.sqlite"
     receipt.write_bytes(b"test-only receipt fixture")
-    removed = module.local_uninstall(str(home), True,
-                                     process_check=lambda unused: True)
+    uninstall_master, uninstall_slave = pty.openpty()
+    removing = subprocess.Popen(["python3", "-B", str(manager), "uninstall"], env=env,
+                                stdin=uninstall_slave, stdout=uninstall_slave,
+                                stderr=uninstall_slave, start_new_session=True,
+                                close_fds=True)
+    os.close(uninstall_slave)
+    transcript = b""
+    confirmed = False
+    try:
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([uninstall_master], [], [], 0.1)
+            if ready:
+                try:
+                    chunk = os.read(uninstall_master, 8192)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                transcript += chunk
+            if b"Type UNINSTALL-V2 to confirm" in transcript and not confirmed:
+                os.write(uninstall_master, b"UNINSTALL-V2\n")
+                confirmed = True
+            if removing.poll() is not None:
+                break
+        if removing.poll() is None:
+            removing.kill()
+        if (removing.wait(timeout=3) != 0 or not confirmed
+                or b"NOT_PERFORMED" not in transcript):
+            raise SystemExit("Packaged manager real-TTY uninstall failed closed")
+    finally:
+        os.close(uninstall_master)
     if (launcher.exists() or launcher.is_symlink() or version.exists()
             or identity.read_text("utf-8") != "test-only identity fixture"
-            or receipt.read_bytes() != b"test-only receipt fixture"
-            or removed["cloud_revocation"] != "NOT_PERFORMED"):
+            or receipt.read_bytes() != b"test-only receipt fixture"):
         raise SystemExit("Packaged manager uninstall safety/receipt preservation failed")
     print(json.dumps({"onboarding_gate": onboarding, "kind": "UNPUBLISHED_SOURCE_CI_CANDIDATE",
                       "target": target, "node": manifest["node"],

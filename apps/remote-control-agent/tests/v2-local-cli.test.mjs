@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { installManagerLauncher } from "../scripts/install-v2.mjs";
+import { installManagerLauncher, preflightManagerLauncher } from "../scripts/install-v2.mjs";
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -46,6 +46,27 @@ test("foreign real executable or unrelated symlink is never replaced",async()=>{
     await symlink("/tmp/definitely-not-our-agent.py",link);
     await assert.rejects(installManagerLauncher(f.home,f.program),/not owned/);
     assert.equal(await readlink(link),"/tmp/definitely-not-our-agent.py");
+  } finally { await rm(f.home,{recursive:true,force:true}); }
+});
+
+test("read-only launcher preflight rejects collisions before any pairing state exists",async()=>{
+  const f=await fixture();
+  try {
+    const bin=path.join(f.home,".local/bin");
+    assert.equal(await preflightManagerLauncher(f.home,f.program),undefined);
+    await assert.rejects(lstat(bin),/ENOENT/);
+    await mkdir(bin,{recursive:true,mode:0o700});
+    const link=path.join(bin,"rca");
+    await writeFile(link,"foreign-owned-by-user",{mode:0o700});
+    await assert.rejects(preflightManagerLauncher(f.home,f.program),/foreign rca/);
+    assert.equal(await readFile(link,"utf8"),"foreign-owned-by-user");
+    await rm(link);
+    await symlink("/tmp/other-command",link);
+    await assert.rejects(preflightManagerLauncher(f.home,f.program),/not owned/);
+    assert.equal(await readlink(link),"/tmp/other-command");
+    const identity=path.join(f.home,".local/share/mcp-workers/remote-control/v2-identity.pem");
+    await assert.rejects(lstat(identity),/ENOENT/);
+    assert.equal(await readFile(path.join(f.home,".bashrc"),"utf8"),"# existing commands\n");
   } finally { await rm(f.home,{recursive:true,force:true}); }
 });
 

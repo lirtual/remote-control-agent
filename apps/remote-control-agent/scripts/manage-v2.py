@@ -115,6 +115,8 @@ def upgrade(bootstrap, arguments):
     print("Only immutable verified GitHub Releases are accepted. Identity and receipts are preserved.")
     if input("Type UPGRADE to confirm: ").strip() != "UPGRADE":
         raise ValueError("Upgrade not confirmed.")
+    # Bootstrap execs bundled Node. Do not open a second manager inside this menu.
+    os.environ["RC_AGENT_NO_POST_START"] = "1"
     return bootstrap_action(bootstrap, ["--tag", arguments[0], "--commit", arguments[1],
                                          "--endpoint", endpoint, "--upgrade"])
 

@@ -529,6 +529,14 @@ def no_running_programs(versions, proc_root=pathlib.Path("/proc")):
             argv = (p / "cmdline").read_bytes().split(b"\0")
             if any(arg.startswith(prefix) for arg in argv for prefix in prefixes):
                 return False
+            # On systemd Linux, the exact per-user session managers may have
+            # unreadable /proc/PID/exe and cwd. They cannot run our bundled Node
+            # as their executable. Do not mistake their EACCES for an Agent.
+            proc_name = re.search(r"^Name:\s*([^\n]+)", status, re.MULTILINE)
+            if proc_name and argv and (proc_name.group(1).strip(), argv[0]) in (
+                    ("systemd", b"/usr/lib/systemd/systemd"),
+                    ("(sd-pam)", b"(sd-pam)")):
+                continue
             for link in ("exe", "cwd"):
                 resolved = os.fsencode(os.readlink(p / link))
                 if any(resolved.startswith(prefix) for prefix in prefixes):

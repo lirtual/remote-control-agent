@@ -700,10 +700,51 @@ export async function inspectInstallIdentity(options, keyPath, previous, {
 }
 
 
+/** Read-only check: reject a foreign short command before ANY pairing/approval.
+ * Also refuses untrusted launcher parents even when an old binary is present.
+ */
+export async function preflightManagerLauncher(home, program) {
+  const target = path.join(program, "apps/remote-control-agent/scripts/manage-v2.py");
+  const file = await lstat(target);
+  if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
+      !(file.mode & 0o100) || file.mode & 0o077) {
+    throw new Error("Reviewed Agent manager executable is missing or unsafe.");
+  }
+  const parent = path.join(home, ".local");
+  const bin = path.join(parent, "bin");
+  for (const directory of [home, parent, bin]) {
+    try {
+      const stat = await lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) {
+        throw new Error("Untrusted user-local launcher directory.");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT" || directory === home) throw error;
+    }
+  }
+  const launcher = path.join(bin, "rca");
+  const installedRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs");
+  try {
+    const current = await lstat(launcher);
+    if (!current.isSymbolicLink()) {
+      throw new Error("A foreign rca command already exists.");
+    }
+    const destination = await readlink(launcher);
+    if (!destination.startsWith(installedRoot + path.sep) ||
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/]manage-v2[.]py$/.test(
+          destination.slice(installedRoot.length + 1))) {
+      throw new Error("Existing launcher is not owned by the versioned Agent.");
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
 /** Publish only our own user-local launcher. Never overwrite foreign commands.
  * Called after successful service activation, not at download or pairing time.
  */
 export async function installManagerLauncher(home, program) {
+  await preflightManagerLauncher(home, program);
   const parent = path.join(home, ".local");
   const bin = path.join(parent, "bin");
   for (const directory of [home, parent, bin]) {
@@ -837,6 +878,10 @@ export async function runInstaller(args, {
   systemdLiteral(home);
   const host = await preflight(options.action, options.foreground);
   if (options.action !== "uninstall") trustedEndpoint(options.endpoint);
+  // Read-only collision gate BEFORE creating a device key or pending cloud grant.
+  if (portable && options.action !== "uninstall") {
+    await preflightManagerLauncher(home, path.resolve(packageRoot, "..", ".."));
+  }
   if (host === "wsl2" && !options.foreground && options.action !== "uninstall") {
     stdout.write("WSL2 detected. This systemd user service cannot wake a stopped WSL distribution. " +
       "After Windows restart, open the distribution and verify the v2 service; " +
@@ -907,7 +952,7 @@ export async function runInstaller(args, {
           }
           if (portable) {
             const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-            stdout.write("Local CLI: " + launcher + " (open with remote-control-agent).\n");
+            stdout.write("Local CLI: " + launcher + " (open with rca).\n");
           }
           stdout.write("v2 user service already installed; approved identity preserved.\n");
           return;

@@ -96,6 +96,17 @@ with tempfile.TemporaryDirectory(prefix="rc-process-owner-") as d:
     assert b.no_running_programs([version],processes)
     (pid/"exe").unlink()
     assert not b.no_running_programs([version],processes), "uncertain process silently allowed"
+    # Exact session-manager processes are harmless despite protected proc links.
+    (pid/"cmdline").write_bytes(b"/usr/lib/systemd/systemd\0")
+    (pid/"status").write_text("Name:\tsystemd\nState:\tS (sleeping)\n")
+    assert b.no_running_programs([version],processes), "systemd user manager false positive"
+    (pid/"cmdline").write_bytes(b"(sd-pam)\0")
+    (pid/"status").write_text("Name:\t(sd-pam)\nState:\tS (sleeping)\n")
+    assert b.no_running_programs([version],processes), "sd-pam false positive"
+    (pid/"cmdline").write_bytes(b"/usr/lib/systemd/systemd\0" +
+                                 (str(version)+"/bin/node").encode()+b"\0")
+    (pid/"status").write_text("Name:\tsystemd\nState:\tS (sleeping)\n")
+    assert not b.no_running_programs([version],processes), "systemd argv hid Agent"
     (pid/"status").write_text("Name:\tuserprocess\nState:\tZ (zombie)\n")
     assert b.no_running_programs([version],processes)
 print("PROCESS_OWNER_FAIL_CLOSED_OK")
@@ -213,12 +224,23 @@ with tempfile.TemporaryDirectory(prefix="rc-v2-identity-cli-") as home:
             break
     os.close(master)
     if child.poll() is None:child.kill()
-    assert child.wait(timeout=5)==0,output.decode(errors="replace")
-    assert written and not key.exists() and not did.exists()
+    code=child.wait(timeout=5)
+    assert written,output.decode(errors="replace")
+    # A running *other* v2 Agent on a developer host legitimately blocks
+    # destructive identity purge; never weaken the runtime guard for a test.
+    import importlib.util
+    spec=importlib.util.spec_from_file_location("bootstrap",script)
+    b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+    if b.no_live_v2_identity_processes():
+        assert code==0,output.decode(errors="replace")
+        assert not key.exists() and not did.exists()
+    else:
+        assert code!=0 and b"purge blocked" in output
+        assert key.exists() and did.exists()
     assert receipt.read_text()=="unknown-v1-v2-receipt"
-print("PTY_CONFIRMED_KEY_ONLY_PURGE_OK")
+print("PTY_KEY_PURGE_EITHER_CONFIRMED_OR_SAFELY_BLOCKED")
 `;
  const r=spawnSync("python3",["-B","-c",code,script],{encoding:"utf8",timeout:17000});
  assert.equal(r.status,0,r.stderr);
- assert.match(r.stdout,/PTY_CONFIRMED_KEY_ONLY_PURGE_OK/);
+ assert.match(r.stdout,/PTY_KEY_PURGE_EITHER_CONFIRMED_OR_SAFELY_BLOCKED/);
 });
