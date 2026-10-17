@@ -28,3 +28,26 @@ jobs:
         run: corepack pnpm --filter remote-control-agent typecheck
       - name: Build native supervisor and test
         run: corepack pnpm --filter remote-control-agent test
+      - name: Build and unpack unpublished native candidate (no Release publishing)
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) target=linux-x64-glibc ;;
+            aarch64) target=linux-arm64-glibc ;;
+            *) echo "Unsupported CPU for native bundle smoke"; exit 1 ;;
+          esac
+          node_bin="$(readlink -f "$(command -v node)")"
+          native_bin="$(realpath apps/remote-control-agent/.build/session-supervisor)"
+          command -v readelf >/dev/null
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          node apps/remote-control-agent/scripts/build-v2-release.mjs \
+            --version v0.0.0-ci --target "$target" \
+            --node-bin "$node_bin" --node-sha256 "$(sha256sum "$node_bin" | cut -d' ' -f1)" \
+            --native "$native_bin" --native-sha256 "$(sha256sum "$native_bin" | cut -d' ' -f1)" \
+            --out "$temp_dir/build"
+          archive="$temp_dir/build/remote-control-agent-v0.0.0-ci-$target.tar.gz"
+          python3 -B apps/remote-control-agent/scripts/validate-local-archive.py \
+            "$archive" v0.0.0-ci "$target"
+          echo "Candidate was verified locally and deleted. No Release was published."
