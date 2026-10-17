@@ -78,7 +78,7 @@ def pair(root, bootstrap, arguments):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise ValueError("Pairing/repair requires a real local terminal.")
     if len(arguments) > 1:
-        raise ValueError("Usage: remote-control-agent pair [--endpoint origin]")
+        raise ValueError("Usage: remote-control-agent pair [https://approved-worker-origin/]")
     endpoint = installed_endpoint(bootstrap)
     if arguments:
         if not arguments[0].startswith("https://") or arguments[0].count("/") > 3:
@@ -120,6 +120,14 @@ def upgrade(bootstrap, arguments):
 
 
 def dispatch(command, args, root, info, bootstrap):
+    if command in ("--help", "-h", "help"):
+        print("Usage: remote-control-agent [status|pair|logs|upgrade|uninstall]")
+        print("Without arguments: open the interactive local Agent manager.")
+        print("Upgrade requires: upgrade <immutable-tag> <reviewed-40-char-commit>.")
+        return 0
+    if command in ("--version", "version"):
+        print(info["version"])
+        return 0
     if command == "status":
         if args:
             raise ValueError("status takes no arguments")

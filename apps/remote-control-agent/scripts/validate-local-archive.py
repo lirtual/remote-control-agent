@@ -113,6 +113,15 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                             text=True, timeout=10)
     if status.returncode or '"cloud_authorization": "unconfirmed"' not in status.stdout:
         raise SystemExit("Packaged manager local status failed")
+    help_out = subprocess.run(["python3", "-B", str(manager), "--help"], env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, timeout=10)
+    version_out = subprocess.run(["python3", "-B", str(manager), "--version"], env=env,
+                                 stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, timeout=10)
+    if (help_out.returncode or "Usage: remote-control-agent" not in help_out.stdout
+            or version_out.returncode or version_out.stdout.strip() != tag):
+        raise SystemExit("Packaged management help/version commands failed")
     menu = subprocess.run(["python3", "-B", str(manager)], env=env,
                           stdin=subprocess.DEVNULL, capture_output=True,
                           text=True, timeout=10)
