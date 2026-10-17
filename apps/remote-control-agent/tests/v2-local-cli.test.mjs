@@ -162,6 +162,30 @@ with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
   assert.equal(result.status,0,result.stderr);
 });
 
+test("rca status does not create __pycache__ inside its versioned program",async()=>{
+  const f=await fixture();
+  try {
+    const src=path.join(root,"apps/remote-control-agent/scripts");
+    for(const name of ["manage-v2.py","bootstrap-v2.py"])
+      await writeFile(path.join(f.script,name),await readFile(path.join(src,name)),{mode:0o600});
+    await chmod(path.join(f.script,"manage-v2.py"),0o700);
+    await writeFile(path.join(f.program,"bundle.json"),JSON.stringify({
+      version:"v0.1.1",target:"linux-x64-glibc",artifact_schema:1,
+      device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"
+    }),{mode:0o600});
+    const env={...process.env,HOME:f.home};
+    delete env.PYTHONDONTWRITEBYTECODE;
+    delete env.PYTHONPYCACHEPREFIX;
+    for(let n=0;n<2;n++){
+      const result=spawnSync("python3",[path.join(f.script,"manage-v2.py"),"status"],
+        {encoding:"utf8",env,timeout:10000});
+      assert.equal(result.status,0,result.stderr);
+      assert.match(result.stdout,/"cli_version": "v0.1.1"/);
+      await assert.rejects(lstat(path.join(f.script,"__pycache__")),{code:"ENOENT"});
+    }
+  } finally {await rm(f.home,{recursive:true,force:true});}
+});
+
 test("short prerelease shell bootstrap syntax and noninteractive fail-closed before GitHub",()=>{
   const sh=path.join(root,"install.sh");
   const parsed=spawnSync("sh",["-n",sh],{encoding:"utf8",timeout:3000});
