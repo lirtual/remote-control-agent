@@ -72,7 +72,7 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
     const beforeReceiptBytes = await readFile(receipt);
     const db = new DatabaseSync(receipt, {readOnly:true});
     try {
-      const states = db.prepare("SELECT operation_id, state, guarded FROM receipts ORDER BY operation_id").all();
+      const states = db.prepare("SELECT operation_id, state, guarded FROM receipts ORDER BY operation_id").all().map(row=>({...row}));
       assert.deepEqual(states, [
         {operation_id:"t08-completed", state:"completed", guarded:0},
         {operation_id:"t08-unknown-guarded", state:"unknown", guarded:1},
