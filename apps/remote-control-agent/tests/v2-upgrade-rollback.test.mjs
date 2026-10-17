@@ -164,7 +164,7 @@ test("#77 interrupted recovery rejects noncanonical backup directives", async()=
   await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
     // The backup can name the expected old binary but must not add arbitrary
     // systemd activation directives or change the approved service template.
-    const altered=from.replace("RestartSec=15s", "ExecStartPost=/usr/bin/true\\nRestartSec=15s");
+    const altered=from.replace("RestartSec=15s", ["ExecStartPost=/usr/bin/true", "RestartSec=15s"].join(String.fromCharCode(10)));
     await writeFile(unitPath,to,{mode:0o600});
     const backup=unitPath+".upgrade-backup";
     await writeFile(backup,altered,{mode:0o600});
