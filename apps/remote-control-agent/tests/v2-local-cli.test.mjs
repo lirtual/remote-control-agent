@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -30,6 +30,30 @@ test("user-local Agent launcher is installed idempotently and PATH is appended o
     assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
     await installManagerLauncher(f.home,f.program);
     assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
+  } finally { await rm(f.home,{recursive:true,force:true}); }
+});
+
+test("optional PATH customization skips hardlinks and unsafe Bash rc modes",async()=>{
+  const f=await fixture();
+  const rc=path.join(f.home,".bashrc");
+  try {
+    await rm(rc);
+    const unrelated=path.join(f.home,"unrelated-private-text");
+    await writeFile(unrelated,"# unrelated\\n",{mode:0o600});
+    await link(unrelated,rc);
+    await installManagerLauncher(f.home,f.program);
+    assert.equal(await readFile(unrelated,"utf8"),"# unrelated\\n");
+    assert.equal(await readFile(rc,"utf8"),"# unrelated\\n");
+    await rm(rc);
+    await writeFile(rc,"# read only\\n",{mode:0o400});
+    await installManagerLauncher(f.home,f.program);
+    assert.equal(await readFile(rc,"utf8"),"# read only\\n");
+    await rm(rc);
+    await writeFile(rc,"# group writable\\n",{mode:0o620});
+    await installManagerLauncher(f.home,f.program);
+    assert.equal(await readFile(rc,"utf8"),"# group writable\\n");
+    assert.equal(await readlink(path.join(f.home,".local/bin/rca")),
+      path.join(f.script,"manage-v2.py"));
   } finally { await rm(f.home,{recursive:true,force:true}); }
 });
 
