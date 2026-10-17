@@ -438,7 +438,7 @@ async function atomicUnitWrite(unitPath, content) {
   }
 }
 
-async function assertRecoverablePreviousUnit(unit, home) {
+function assertCanonicalV2UnitTemplate(unit, home) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Interrupted upgrade backup is not an owned v2 unit.");
   }
@@ -474,6 +474,11 @@ async function assertRecoverablePreviousUnit(unit, home) {
   if (unit !== canonical) {
     throw new Error("Interrupted upgrade backup differs from the managed service template.");
   }
+  return {root, endpoint:endpointValue, keyPath:keyValue};
+}
+
+async function assertRecoverablePreviousUnit(unit, home) {
+  const {root, endpoint:endpointValue, keyPath:keyValue} = assertCanonicalV2UnitTemplate(unit, home);
   const rootInfo = await lstat(root);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() ||
       rootInfo.uid !== process.getuid() || (rootInfo.mode & 0o077) !== 0) {
@@ -526,6 +531,11 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   try { current = await readOwnedUnit(unitPath); }
   catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
   if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
+  // A crashed activation may reference a staged program that is not yet
+  // runnable. Validate its exact systemd template, but do not require the
+  // interrupted new binary to exist in order to restore the old one.
+  try { assertCanonicalV2UnitTemplate(current, home); }
+  catch { throw new Error("Current v2 unit is noncanonical; recovery backup preserved."); }
   // A recovered binary must keep the same approved cloud endpoint and device
   // identity. Reject drift before touching systemd or deleting the backup.
   const settings = current.split("\n");
