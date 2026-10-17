@@ -953,7 +953,8 @@ export async function runInstaller(args, {
           }
           if (portable) {
             const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-            stdout.write("Local CLI: " + launcher + " (open with rca).\n");
+            stdout.write("Local CLI: " + launcher + " (run this path now).\n");
+            stdout.write('To use rca in this terminal: export PATH="$HOME/.local/bin:$PATH"\n');
           }
           stdout.write("v2 user service already installed; approved identity preserved.\n");
           return;
@@ -991,8 +992,9 @@ export async function runInstaller(args, {
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
     stdout.write("==> Agent management CLI installed: " + launcher + "\n");
-    stdout.write("==> Future terminals: run rca\n");
-    stdout.write("==> If command is not found: export PATH=\"$HOME/.local/bin:$PATH\"\n");
+    stdout.write("==> Open the Agent manager now: " + launcher + "\n");
+    stdout.write('==> To use rca in this terminal: export PATH="$HOME/.local/bin:$PATH"\n');
+    stdout.write("==> New Bash terminals can use rca if ~/.bashrc was safely updated.\n");
   }
   stdout.write("v2 user service active. Use list_devices and an approved nonsensitive read fixture to verify connectivity.\n");
 }
@@ -1000,18 +1002,7 @@ export async function runInstaller(args, {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   runLockedInstallerCli(process.argv.slice(2)).then(async code => {
     process.exitCode = code;
-    if (code === 0 && portable && process.stdin.isTTY && process.stdout.isTTY &&
-        process.env.RC_AGENT_NO_POST_START !== "1") {
-      const prompt=createInterface({input:process.stdin,output:process.stdout,terminal:true});
-      let reply;
-      try { reply=(await prompt.question("Open Agent manager now? [y/N] ")).trim(); }
-      finally { prompt.close(); }
-      if (/^y(es)?$/i.test(reply)) {
-        const cmd=path.join(os.homedir(), ".local/bin/rca");
-        const result=spawnSync(cmd,[],{stdio:"inherit"});
-        if (result.error || result.status !== 0) process.exitCode = 1;
-      }
-    }
+
   }).catch(error => {
     // Only print fixed, hard-coded classifications; never echo external
     // exception messages, endpoint query strings or private credential data.
