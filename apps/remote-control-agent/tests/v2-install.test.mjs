@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, ensureApprovedPermanentService, trustedEndpoint } from "../scripts/install-v2.mjs";
+import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, assertRepeatInstallSameVersion, ensureApprovedPermanentService, trustedEndpoint } from "../scripts/install-v2.mjs";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 import { DeviceSessionRejectedError, recoverDeviceId, verifyApprovedDeviceId, signedSessionProof } from "../src/v2-session-client.ts";
@@ -69,6 +69,22 @@ test("separate v2 systemd unit never references v1 credentials, tunnel or write/
     { ...example, repoRoot: "/tmp/%h" }, { ...example, keyPath: "/tmp/a\\b" },
     { ...example, endpoint: "https://user:pass@rc.example.org" },
   ]) assert.throws(() => renderV2Service(unsafe));
+});
+
+test("same-version retry validates full owner unit and expected key before enabling", () => {
+  const home="/home/agent";
+  const root=home+"/.local/share/mcp-workers/remote-control/programs/v0.1.1-linux-x64-glibc";
+  const keyPath=home+"/.local/share/mcp-workers/remote-control/v2-identity.pem";
+  const opts={home,repoRoot:root,node:root+"/bin/node",endpoint:"https://rc.example.org/",keyPath,entryExt:"js"};
+  const unit=renderV2Service(opts);
+  assert.doesNotThrow(()=>assertRepeatInstallSameVersion(unit,root,{home,keyPath}));
+  const extra=unit.replace("RestartSec=15s",
+    ["ExecStartPost=/usr/bin/true","RestartSec=15s"].join(String.fromCharCode(10)));
+  assert.throws(()=>assertRepeatInstallSameVersion(extra,root,{home,keyPath}),/noncanonical/);
+  const identityDrift=renderV2Service({...opts,keyPath:keyPath+".other"});
+  assert.throws(()=>assertRepeatInstallSameVersion(identityDrift,root,{home,keyPath}),/identity or program differs/);
+  const differentVersion=unit.replaceAll("v0.1.1-linux-x64-glibc","v0.1.2-linux-x64-glibc");
+  assert.throws(()=>assertRepeatInstallSameVersion(differentVersion,root,{home,keyPath}),/another version/);
 });
 
 test("approved permanent retry enables a unit interrupted before systemctl enable", () => {
