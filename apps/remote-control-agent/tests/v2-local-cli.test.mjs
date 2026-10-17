@@ -121,7 +121,7 @@ with tempfile.TemporaryDirectory(prefix="rc-recovery-isolated-") as tmp:
     interrupted=programs/".unverified-interrupted";interrupted.mkdir(mode=0o700)
     nested=interrupted/"bin";nested.mkdir(mode=0o700)
     (nested/"node").write_bytes(b"not-a-verified-executable")
-    partial=programs/".download-incomplete";partial.write_bytes(b"partial-github-download")
+    partial=programs/".download-incomplete";partial.write_bytes(b"partial-github-download");partial.chmod(0o600)
     untouched=programs/"foreign-file";untouched.write_bytes(b"never-remove")
     module.clean_orphaned_staging(programs)
     assert not interrupted.exists() and not partial.exists()
