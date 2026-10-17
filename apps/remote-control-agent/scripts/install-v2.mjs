@@ -455,6 +455,25 @@ async function assertRecoverablePreviousUnit(unit, home) {
   if (!root.startsWith(programs + path.sep) || starts[0] !== expectedStart) {
     throw new Error("Interrupted upgrade backup does not reference a versioned Agent.");
   }
+  // Require the exact installer-generated service, not merely a matching
+  // ExecStart with arbitrary extra systemd directives in a stale backup.
+  const endpoint = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_ENDPOINT="));
+  const keys = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_KEY_PATH="));
+  if (endpoint.length !== 1 || keys.length !== 1) {
+    throw new Error("Interrupted upgrade backup has ambiguous endpoint or identity.");
+  }
+  const endpointValue = endpoint[0].slice("Environment=REMOTE_CONTROL_V2_ENDPOINT=".length);
+  const keyValue = keys[0].slice("Environment=REMOTE_CONTROL_V2_KEY_PATH=".length);
+  let canonical;
+  try {
+    canonical = renderV2Service({node:path.join(root, "bin", "node"), home,
+      repoRoot:root, endpoint:endpointValue, keyPath:keyValue, entryExt:"js"});
+  } catch {
+    throw new Error("Interrupted upgrade backup has invalid service settings.");
+  }
+  if (unit !== canonical) {
+    throw new Error("Interrupted upgrade backup differs from the managed service template.");
+  }
   const rootInfo = await lstat(root);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() ||
       rootInfo.uid !== process.getuid() || (rootInfo.mode & 0o077) !== 0) {
@@ -482,7 +501,7 @@ async function assertRecoverablePreviousUnit(unit, home) {
       !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))) {
     throw new Error("Previous Agent does not prove the reviewed read-only profile.");
   }
-  return root;
+  return {root, endpoint:endpointValue, keyPath:keyValue};
 }
 
 /**
@@ -502,11 +521,23 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   let previous;
   try { previous = await readFile(backupPath, "utf8"); }
   catch { throw new Error("Interrupted upgrade backup cannot be read; manual review required."); }
-  await assertRecoverablePreviousUnit(previous, home);
+  const oldUnit = await assertRecoverablePreviousUnit(previous, home);
   let current;
   try { current = await readOwnedUnit(unitPath); }
   catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
   if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
+  // A recovered binary must keep the same approved cloud endpoint and device
+  // identity. Reject drift before touching systemd or deleting the backup.
+  const settings = current.split("\n");
+  for (const [name, expected] of [
+    ["REMOTE_CONTROL_V2_ENDPOINT", oldUnit.endpoint],
+    ["REMOTE_CONTROL_V2_KEY_PATH", oldUnit.keyPath],
+  ]) {
+    const values = settings.filter(line => line.startsWith("Environment=" + name + "="));
+    if (values.length !== 1 || values[0] !== "Environment=" + name + "=" + expected) {
+      throw new Error("Interrupted upgrade changes the endpoint or device identity; manual review required.");
+    }
+  }
   try {
     if (current !== previous) await atomicUnitWrite(unitPath, previous);
     // Always restart the previous executable. An active PID alone does not
