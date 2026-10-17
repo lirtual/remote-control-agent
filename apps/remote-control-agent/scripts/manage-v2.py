@@ -78,7 +78,7 @@ def pair(root, bootstrap, arguments):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise ValueError("Pairing/repair requires a real local terminal.")
     if len(arguments) > 1:
-        raise ValueError("Usage: remote-control-agent pair [https://approved-worker-origin/]")
+        raise ValueError("Usage: rca pair [https://approved-worker-origin/]")
     endpoint = installed_endpoint(bootstrap)
     if arguments:
         if not arguments[0].startswith("https://") or arguments[0].count("/") > 3:
@@ -106,7 +106,7 @@ def bootstrap_action(bootstrap, arguments):
 
 def upgrade(bootstrap, arguments):
     if len(arguments) != 2 or not VERSION.fullmatch(arguments[0]) or not SHA.fullmatch(arguments[1]):
-        raise ValueError("Usage: remote-control-agent upgrade <published-tag> <reviewed-40-char-commit>")
+        raise ValueError("Usage: rca upgrade <published-tag> <reviewed-40-char-commit>")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         raise ValueError("Upgrade requires local interactive confirmation.")
     endpoint = installed_endpoint(bootstrap)
@@ -121,7 +121,7 @@ def upgrade(bootstrap, arguments):
 
 def dispatch(command, args, root, info, bootstrap):
     if command in ("--help", "-h", "help"):
-        print("Usage: remote-control-agent [status|pair|logs|upgrade|uninstall]")
+        print("Usage: rca [status|pair|logs|upgrade|uninstall]")
         print("Without arguments: open the interactive local Agent manager.")
         print("Upgrade requires: upgrade <immutable-tag> <reviewed-40-char-commit>.")
         return 0
@@ -146,7 +146,7 @@ def dispatch(command, args, root, info, bootstrap):
         if args:
             raise ValueError("uninstall takes no arguments")
         return bootstrap_action(bootstrap, ["--uninstall"])
-    raise ValueError("Usage: remote-control-agent [status|logs|pair|upgrade|uninstall]")
+    raise ValueError("Usage: rca [status|logs|pair|upgrade|uninstall]")
 
 
 def main():

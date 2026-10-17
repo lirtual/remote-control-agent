@@ -25,11 +25,11 @@ test("user-local Agent launcher is installed idempotently and PATH is appended o
   const f=await fixture();
   try {
     const link=await installManagerLauncher(f.home,f.program);
-    assert.equal(link,path.join(f.home,".local/bin/remote-control-agent"));
+    assert.equal(link,path.join(f.home,".local/bin/rca"));
     assert.equal(await readlink(link),path.join(f.script,"manage-v2.py"));
-    assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# remote-control-agent local CLI/g)?.length,1);
+    assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
     await installManagerLauncher(f.home,f.program);
-    assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# remote-control-agent local CLI/g)?.length,1);
+    assert.equal((await readFile(path.join(f.home,".bashrc"),"utf8")).match(/# rca local CLI/g)?.length,1);
   } finally { await rm(f.home,{recursive:true,force:true}); }
 });
 
@@ -38,7 +38,7 @@ test("foreign real executable or unrelated symlink is never replaced",async()=>{
   try {
     const bin=path.join(f.home,".local/bin");
     await mkdir(bin,{recursive:true});
-    const link=path.join(bin,"remote-control-agent");
+    const link=path.join(bin,"rca");
     await writeFile(link,"foreign",{mode:0o700});
     await assert.rejects(installManagerLauncher(f.home,f.program),/foreign/);
     assert.equal(await readFile(link,"utf8"),"foreign");

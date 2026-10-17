@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     version_out = subprocess.run(["python3", "-B", str(manager), "--version"], env=env,
                                  stdin=subprocess.DEVNULL, capture_output=True,
                                  text=True, timeout=10)
-    if (help_out.returncode or "Usage: remote-control-agent" not in help_out.stdout
+    if (help_out.returncode or "Usage: rca" not in help_out.stdout
             or version_out.returncode or version_out.stdout.strip() != tag):
         raise SystemExit("Packaged management help/version commands failed")
     menu = subprocess.run(["python3", "-B", str(manager)], env=env,
@@ -166,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     # identity or historical SQLite receipts and never claim cloud revocation.
     bin_dir = home / ".local/bin"
     bin_dir.mkdir(mode=0o700)
-    launcher = bin_dir / "remote-control-agent"
+    launcher = bin_dir / "rca"
     launcher.symlink_to(manager)
     base = home / ".local/share/mcp-workers/remote-control"
     identity = base / "v2-identity.pem"

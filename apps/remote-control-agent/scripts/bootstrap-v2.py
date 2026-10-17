@@ -551,7 +551,7 @@ def owned_manager_launcher(home, versions):
         if path.is_symlink() or (path.exists() and (
                 not path.is_dir() or path.stat().st_uid != os.getuid())):
             raise ValueError("Untrusted user-local command directory")
-    launcher = directory / "remote-control-agent"
+    launcher = directory / "rca"
     if launcher.is_symlink():
         info = launcher.lstat()
         expected = [str(v / APP / "scripts/manage-v2.py") for v in versions]
@@ -559,7 +559,7 @@ def owned_manager_launcher(home, versions):
             raise ValueError("Foreign Agent manager launcher: refuse uninstall")
         return launcher
     if launcher.exists():
-        raise ValueError("Foreign command named remote-control-agent: refuse uninstall")
+        raise ValueError("Foreign command named rca: refuse uninstall")
     return None
 
 

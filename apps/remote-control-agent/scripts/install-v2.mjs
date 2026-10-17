@@ -725,12 +725,12 @@ export async function installManagerLauncher(home, program) {
       !(file.mode & 0o100) || file.mode & 0o077) {
     throw new Error("Reviewed Agent manager executable is missing or unsafe.");
   }
-  const launcher = path.join(bin, "remote-control-agent");
+  const launcher = path.join(bin, "rca");
   const installedRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs");
   try {
     const current = await lstat(launcher);
     if (!current.isSymbolicLink()) {
-      throw new Error("A foreign remote-control-agent command already exists.");
+      throw new Error("A foreign rca command already exists.");
     }
     const destination = await readlink(launcher);
     if (!destination.startsWith(installedRoot + path.sep) ||
@@ -741,7 +741,7 @@ export async function installManagerLauncher(home, program) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const temporary = path.join(bin, ".remote-control-agent-" + process.pid);
+  const temporary = path.join(bin, ".rca-" + process.pid);
   await symlink(target, temporary);
   try { await rename(temporary, launcher); }
   finally { await rm(temporary, {force:true}); }
@@ -752,9 +752,9 @@ export async function installManagerLauncher(home, program) {
     if (stat.isFile() && !stat.isSymbolicLink() && stat.uid===process.getuid() &&
         stat.size <= 1024*1024) {
       const contents=await readFile(rc,"utf8");
-      if (!contents.includes("# remote-control-agent local CLI")) {
+      if (!contents.includes("# rca local CLI")) {
         const fd=await open(rc,constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
-        try { await fd.writeFile("\n# remote-control-agent local CLI\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"); }
+        try { await fd.writeFile("\n# rca local CLI\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"); }
         finally { await fd.close(); }
       }
     }
@@ -945,7 +945,7 @@ export async function runInstaller(args, {
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
     stdout.write("==> Agent management CLI installed: " + launcher + "\n");
-    stdout.write("==> Future terminals: run remote-control-agent\n");
+    stdout.write("==> Future terminals: run rca\n");
     stdout.write("==> If command is not found: export PATH=\"$HOME/.local/bin:$PATH\"\n");
   }
   stdout.write("v2 user service active. Use list_devices and an approved nonsensitive read fixture to verify connectivity.\n");
@@ -961,7 +961,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       try { reply=(await prompt.question("Open Agent manager now? [y/N] ")).trim(); }
       finally { prompt.close(); }
       if (/^y(es)?$/i.test(reply)) {
-        const cmd=path.join(os.homedir(), ".local/bin/remote-control-agent");
+        const cmd=path.join(os.homedir(), ".local/bin/rca");
         const result=spawnSync(cmd,[],{stdio:"inherit"});
         if (result.error || result.status !== 0) process.exitCode = 1;
       }
