@@ -175,6 +175,20 @@ test("#77 interrupted recovery rejects noncanonical backup directives", async()=
   });
 });
 
+test("#77 interrupted recovery refuses a noncanonical current unit before systemctl", async()=>{
+  await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
+    const altered=to.replace("RestartSec=15s",
+      ["ExecStartPost=/usr/bin/true","RestartSec=15s"].join(String.fromCharCode(10)));
+    await writeFile(unitPath,altered,{mode:0o600});
+    const backup=unitPath+".upgrade-backup";
+    await writeFile(backup,from,{mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is noncanonical/);
+    assert.equal(await readFile(unitPath,"utf8"),altered);
+    assert.equal(await readFile(backup,"utf8"),from);
+    await assert.rejects(access(logs),{code:"ENOENT"});
+  });
+});
+
 test("#77 interrupted recovery refuses endpoint drift before touching systemd", async()=>{
   await withFakeUserService(async ({unitPath,from,to,home,logs})=>{
     const moved=to.replace("https://rc.example.org/", "https://other.example.org/");
