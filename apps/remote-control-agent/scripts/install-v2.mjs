@@ -527,6 +527,13 @@ async function assertRecoverablePreviousUnit(unit, home) {
  * Recover an interrupted program switch from a durable copy of the prior unit.
  * If the prior unit is already restored, only ensure that service is active.
  */
+async function clearCompletedUpgradeBackup(backupPath) {
+  await rm(backupPath);
+  // Deletion is part of commit: a host crash must not resurrect a stale
+  // previous-version backup and trigger an unwanted rollback on next launch.
+  await syncParent(backupPath);
+}
+
 export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = {}) {
   unitPath ??= path.join(home, ".config", "systemd", "user", UNIT);
   const backupPath = unitPath + ".upgrade-backup";
@@ -569,7 +576,7 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
     run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", "restart", UNIT]);
     run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-    await rm(backupPath, {force:true});
+    await clearCompletedUpgradeBackup(backupPath);
     return true;
   } catch {
     throw new Error("Interrupted upgrade recovery failed; previous service backup was preserved.");
@@ -589,7 +596,7 @@ export async function installUnit(unitPath, content, previous) {
     run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", previous ? "restart" : "enable", ...(previous ? [] : ["--now"]), UNIT]);
     run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-    if (previous) await rm(backupPath, {force:true});
+    if (previous) await clearCompletedUpgradeBackup(backupPath);
   } catch {
     // If SIGKILL bypasses this catch, recoverInterruptedUpgrade uses the same
     // durable backup on the next install/upgrade invocation.
@@ -603,7 +610,7 @@ export async function installUnit(unitPath, content, previous) {
         run("systemctl", ["--user", "daemon-reload"]);
         run("systemctl", ["--user", "restart", UNIT]);
         run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-        await rm(backupPath, {force:true});
+        await clearCompletedUpgradeBackup(backupPath);
       } catch { /* Keep the durable backup for a later recovery attempt. */ }
     }
     try { run("systemctl", ["--user", "daemon-reload"]); } catch { /* unavailable */ }
