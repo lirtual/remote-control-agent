@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, trustedEndpoint } from "../scripts/install-v2.mjs";
+import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, ensureApprovedPermanentService, trustedEndpoint } from "../scripts/install-v2.mjs";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 import { DeviceSessionRejectedError, recoverDeviceId, verifyApprovedDeviceId, signedSessionProof } from "../src/v2-session-client.ts";
@@ -69,6 +69,42 @@ test("separate v2 systemd unit never references v1 credentials, tunnel or write/
     { ...example, repoRoot: "/tmp/%h" }, { ...example, keyPath: "/tmp/a\\b" },
     { ...example, endpoint: "https://user:pass@rc.example.org" },
   ]) assert.throws(() => renderV2Service(unsafe));
+});
+
+test("approved permanent retry enables a unit interrupted before systemctl enable", () => {
+  const calls=[];
+  let running=false;
+  const invoke=(binary,args)=>{
+    assert.equal(binary,"systemctl");
+    calls.push(args.join(" "));
+    if(args[1]==="is-active" && !running)throw Error("inactive");
+    if(args[1]==="start")running=true;
+  };
+  ensureApprovedPermanentService(invoke);
+  assert.equal(running,true);
+  assert.deepEqual(calls,[
+    "--user daemon-reload",
+    "--user enable "+UNIT,
+    "--user is-active --quiet "+UNIT,
+    "--user start "+UNIT,
+    "--user is-active --quiet "+UNIT,
+  ]);
+});
+
+test("approved permanent retry preserves an already-active service and fails closed on enable error", () => {
+  const calls=[];
+  ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));});
+  assert.deepEqual(calls,[
+    "--user daemon-reload",
+    "--user enable "+UNIT,
+    "--user is-active --quiet "+UNIT,
+  ]);
+  const failed=[];
+  assert.throws(()=>ensureApprovedPermanentService((binary,args)=>{
+    failed.push(args.join(" "));
+    if(args[1]==="enable")throw Error("cannot enable");
+  }),/cannot enable/);
+  assert.deepEqual(failed,["--user daemon-reload","--user enable "+UNIT]);
 });
 
 test("ordinary repeat install rejects changed Worker origin before identity rotation", () => {
