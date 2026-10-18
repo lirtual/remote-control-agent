@@ -52,19 +52,35 @@ printf '%s  %s\n' "$expected_sha" "$installer" | sha256sum --check --status || d
 sh -n "$installer" || die "Invalid Preview installer shell"
 grep -Fq 'remote-control-agent-v0.1.6' "$installer" || die "Wrong new version"
 
+# A terminal can close while a WSL service is restarting. Persist a
+# result only after all checks and cleanup, never retroactively from state.
+verdict="$snapshot/rc77-result.txt"
+test ! -e "$verdict" || die "Existing acceptance receipt; never overwrite"
+printf 'RC77_STATUS=STARTED\n' > "$verdict"
+chmod 600 "$verdict"
 armed=0
+product_verified=0
+emergency_used=0
 cleanup() {
   local prior_rc=$?
   trap - EXIT INT TERM HUP
   if test "$armed" -eq 1; then
-    rm -f -- "$dropin"
+    if ! rm -f -- "$dropin"; then
+      echo 'RC77_CLEANUP=FAILED_DROPIN' >&2
+      prior_rc=1
+    fi
     rmdir "$dropdir" 2>/dev/null || true
     if ! systemctl --user daemon-reload; then
       echo 'RC77_CLEANUP=FAILED_RELOAD' >&2
       prior_rc=1
     fi
+    if test -n "$(systemctl --user show "$svc" -p DropInPaths --value)" || test -e "$dropin"; then
+      echo 'RC77_CLEANUP=DROPIN_REMAINS' >&2
+      prior_rc=1
+    fi
     if ! cmp -s "$unit" "$snapshot/unit.before" || ! systemctl --user is-active --quiet "$svc"; then
       echo 'RC77_PRODUCT_ROLLBACK=FAILED; attempting separately identified emergency recovery' >&2
+      emergency_used=1
       cp -- "$snapshot/unit.before" "$unit"
       chmod 600 "$unit"
       systemctl --user daemon-reload && systemctl --user restart "$svc" || echo 'RC77_EMERGENCY_RECOVERY=FAILED' >&2
@@ -74,6 +90,16 @@ cleanup() {
       echo 'RC77_IDENTITY_PRESERVATION=FAILED' >&2
       prior_rc=1
     fi
+  fi
+  if test "$prior_rc" -eq 0 && test "$product_verified" -eq 1 && test "$emergency_used" -eq 0; then
+    printf 'RC77_STATUS=PRODUCT_ROLLBACK_PASS\n' >> "$verdict"
+    echo 'RC77_PRODUCT_ROLLBACK=PASS (finalized after clean systemd recovery)'
+  elif test "$emergency_used" -eq 1; then
+    printf 'RC77_STATUS=EMERGENCY_RECOVERY_USED\n' >> "$verdict"
+    echo 'RC77_STATUS=EMERGENCY_RECOVERY_USED' >&2
+  else
+    printf 'RC77_STATUS=INCOMPLETE_OR_FAILED\n' >> "$verdict"
+    echo 'RC77_STATUS=INCOMPLETE_OR_FAILED' >&2
   fi
   exit "$prior_rc"
 }
@@ -108,6 +134,7 @@ sh "$installer" --upgrade
 upgrade_status=$?
 set -e
 echo "RC77_UPGRADE_EXIT=$upgrade_status (expected nonzero)"
+printf 'RC77_UPGRADE_EXIT=%s\n' "$upgrade_status" >> "$verdict"
 test "$upgrade_status" -ne 0 || die "Upgrade succeeded despite forced new-service failure"
 test -f "$snapshot/fault-fired" || die "Real new-version ExecStartPre was not triggered"
 cmp -s "$unit" "$snapshot/unit.before" || die "Installer did not restore original unit"
@@ -115,6 +142,7 @@ test ! -e "$unit.upgrade-backup" || die "Installer left interrupted-upgrade back
 test "$("$home/.local/bin/rca" version)" = v0.1.3 || die "Old CLI version not retained"
 systemctl --user is-active --quiet "$svc" || die "Old v0.1.3 service is not active"
 sha256sum --status -c "$snapshot/identity.sha256" || die "Device identity changed"
-echo 'RC77_PRODUCT_ROLLBACK=PASS (real systemd failure, v0.1.3 restored)'
+product_verified=1
+echo 'RC77_PRODUCT_CHECKS=PASS; waiting for final cleanup verification'
 echo 'RC77_IDENTITY_PRESERVED=PASS'
 echo 'RC77_CLEANUP=ON_EXIT'

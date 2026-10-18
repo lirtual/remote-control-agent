@@ -28,3 +28,19 @@ test("#77 operator rollback script refuses an unknown WSL distro before operatio
   assert.notEqual(result.status,0);
   assert.match(result.stderr,/RC77_BLOCKED: Wrong WSL distribution/);
 });
+
+test("#77 operator rollback receipt is recorded after cleanup; never predeclared",async()=>{
+  const {readFileSync}=await import("node:fs");
+  const source=readFileSync(script,"utf8");
+  assert.match(source,/RC77_STATUS=STARTED/);
+  assert.match(source,/RC77_STATUS=PRODUCT_ROLLBACK_PASS/);
+  assert.match(source,/RC77_STATUS=EMERGENCY_RECOVERY_USED/);
+  assert.match(source,/RC77_STATUS=INCOMPLETE_OR_FAILED/);
+  assert.match(source,/RC77_UPGRADE_EXIT=%s/);
+  assert.match(source,/test "\$product_verified" -eq 1 && test "\$emergency_used" -eq 0/);
+  const cleanupAt=source.indexOf("cleanup() {");
+  const successReceiptAt=source.indexOf("RC77_STATUS=PRODUCT_ROLLBACK_PASS");
+  assert.ok(cleanupAt>0&&successReceiptAt>cleanupAt);
+  assert.match(source,/test -n "\$\(systemctl --user show "\$svc" -p DropInPaths --value\)"/);
+  assert.match(source,/test ! -e "\$verdict" \|\| die/);
+});
