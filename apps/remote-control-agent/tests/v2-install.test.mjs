@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, trustedEndpoint } from "../scripts/install-v2.mjs";
+import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, assertSupportedLinuxHost, assertNativeSupervisorProbe, beginRevokedPromotion, inspectInstallIdentity, parseInstallArgs, promoteRevokedIdentity, resumeRevokedPromotion, runLockedInstallerCli, renderV2Service, assertRepeatInstallSameVersion, ensureApprovedPermanentService, awaitOwnerMcpApproval, trustedEndpoint } from "../scripts/install-v2.mjs";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 import { DeviceSessionRejectedError, recoverDeviceId, verifyApprovedDeviceId, signedSessionProof } from "../src/v2-session-client.ts";
@@ -20,6 +20,38 @@ const example = {
   endpoint: "https://rc.example.org/",
   keyPath: "/home/agent/.local/share/mcp-workers/remote-control/v2-identity.pem",
 };
+
+test("#97 one-code Agent waits for owner-MCP approval, not local terminal challenge",async()=>{
+  let clock=0,calls=0;
+  const claim=async()=>{
+    calls++;
+    if(calls<3) throw new DeviceSessionRejectedError("pending",404);
+    return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  };
+  const value=await awaitOwnerMcpApproval("https://rc.example.org/","/tmp/local-agent.pem",{
+    claim,now:()=>clock,delay:async(ms)=>{clock+=ms;},intervalMs:1000,deadlineMs:10000,
+  });
+  assert.equal(value,"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+  assert.equal(calls,3);
+  assert.equal(clock,2000);
+});
+
+test("#97 one-code Agent fails closed on denied or expired owner approval",async()=>{
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{throw new DeviceSessionRejectedError("denied",403);},
+    delay:async()=>{throw new Error("should not poll forbidden identity");},
+  }),/denied/);
+  let clock=0,count=0;
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{count++;throw new DeviceSessionRejectedError("not yet",404);},
+    now:()=>clock,delay:async(ms)=>{clock+=ms;},intervalMs:2000,deadlineMs:5000,
+  }),/not approved within the code lifetime/);
+  assert.equal(clock,5000);
+  assert.equal(count,3);
+  await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
+    claim:async()=>{throw new Error("upstream unavailable");},
+  }),/upstream unavailable/);
+});
 
 test("minimal Linux v2 CLI supports install, explicit paired-key resume, upgrade, and safe uninstall", () => {
   assert.deepEqual(parseInstallArgs(["--endpoint", "https://rc.example.org", "--name", "office"]), {
@@ -71,6 +103,58 @@ test("separate v2 systemd unit never references v1 credentials, tunnel or write/
   ]) assert.throws(() => renderV2Service(unsafe));
 });
 
+test("same-version retry validates full owner unit and expected key before enabling", () => {
+  const home="/home/agent";
+  const root=home+"/.local/share/mcp-workers/remote-control/programs/v0.1.1-linux-x64-glibc";
+  const keyPath=home+"/.local/share/mcp-workers/remote-control/v2-identity.pem";
+  const opts={home,repoRoot:root,node:root+"/bin/node",endpoint:"https://rc.example.org/",keyPath,entryExt:"js"};
+  const unit=renderV2Service(opts);
+  assert.doesNotThrow(()=>assertRepeatInstallSameVersion(unit,root,{home,keyPath}));
+  const extra=unit.replace("RestartSec=15s",
+    ["ExecStartPost=/usr/bin/true","RestartSec=15s"].join(String.fromCharCode(10)));
+  assert.throws(()=>assertRepeatInstallSameVersion(extra,root,{home,keyPath}),/noncanonical/);
+  const identityDrift=renderV2Service({...opts,keyPath:keyPath+".other"});
+  assert.throws(()=>assertRepeatInstallSameVersion(identityDrift,root,{home,keyPath}),/identity or program differs/);
+  const differentVersion=unit.replaceAll("v0.1.1-linux-x64-glibc","v0.1.2-linux-x64-glibc");
+  assert.throws(()=>assertRepeatInstallSameVersion(differentVersion,root,{home,keyPath}),/another version/);
+});
+
+test("approved permanent retry enables a unit interrupted before systemctl enable", () => {
+  const calls=[];
+  let running=false;
+  const invoke=(binary,args)=>{
+    assert.equal(binary,"systemctl");
+    calls.push(args.join(" "));
+    if(args[1]==="is-active" && !running)throw Error("inactive");
+    if(args[1]==="start")running=true;
+  };
+  ensureApprovedPermanentService(invoke);
+  assert.equal(running,true);
+  assert.deepEqual(calls,[
+    "--user daemon-reload",
+    "--user enable "+UNIT,
+    "--user is-active --quiet "+UNIT,
+    "--user start "+UNIT,
+    "--user is-active --quiet "+UNIT,
+  ]);
+});
+
+test("approved permanent retry preserves an already-active service and fails closed on enable error", () => {
+  const calls=[];
+  ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));});
+  assert.deepEqual(calls,[
+    "--user daemon-reload",
+    "--user enable "+UNIT,
+    "--user is-active --quiet "+UNIT,
+  ]);
+  const failed=[];
+  assert.throws(()=>ensureApprovedPermanentService((binary,args)=>{
+    failed.push(args.join(" "));
+    if(args[1]==="enable")throw Error("cannot enable");
+  }),/cannot enable/);
+  assert.deepEqual(failed,["--user daemon-reload","--user enable "+UNIT]);
+});
+
 test("ordinary repeat install rejects changed Worker origin before identity rotation", () => {
   const owned = renderV2Service(example);
   assert.doesNotThrow(() => assertExistingServiceEndpoint(owned, "https://rc.example.org/"));
@@ -107,7 +191,7 @@ test("WSL2 host detection keeps the Linux installer but rejects unsupported WSL1
 test("WSL2 shares the Linux-only Agent, with no Windows Shell or host auto-wakeup hooks", async () => {
   const file = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
     "..", "scripts", "install-v2.mjs"), "utf8");
-  assert.match(file, /cannot wake a stopped WSL distribution/);
+  assert.match(file, /WSL2: stopped distribution = offline/);
   assert.ok(!file.includes("schtasks"));
   assert.ok(!file.includes("TaskScheduler"));
   assert.ok(!file.includes("powershell.exe"));
@@ -148,14 +232,14 @@ test("foreground reuses signed read-only v2 entrypoint and skips systemd preflig
   assert.doesNotMatch(src, /nohup|supervisord|cron|pm2/);
 });
 
-test("first enrollment prompts for one challenge, not the original pairing code again", async () => {
+test("#97 first enrollment shows only one code and awaits owner MCP approval", async () => {
   const src = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
     "..", "scripts", "install-v2.mjs"), "utf8");
   assert.doesNotMatch(src, /Repeat original 10-character code:/);
-  assert.match(src, /await confirmDeviceLocally\(enrollment\.code, challenge, options\.endpoint, keyPath\)/);
-  assert.match(src, /\^\[A-Z2-7\]\{12\}\$/);
-  assert.match(src, /attempt < 3/);
-  assert.match(src, /Invalid local challenge format/);
+  assert.match(src, /await awaitOwnerMcpApproval\(options\.endpoint, keyPath\)/);
+  assert.match(src, /pairing_lookup, then explicitly pairing_approve/);
+  assert.doesNotMatch(src, /MCP challenge \(12 chars\)/);
+  assert.doesNotMatch(src, /await confirmDeviceLocally\(/);
   assert.match(src, /if \(!stdin\.isTTY \|\| !stdout\.isTTY\)/);
 });
 
@@ -184,7 +268,9 @@ test("first pairing hides fingerprint by default, but optional display matches p
     assert.equal(parseInstallArgs(["--show-fingerprint", "--endpoint", "https://rc.example.org"]).showFingerprint, true);
     assert.match(script, /if \(options\.showFingerprint\)/);
     assert.match(script, /Local public key fingerprint \(optional check\): " \+ enrollment\.fingerprint/);
-    assert.match(script, /Enter only the 12-character challenge here/);
+    assert.match(script, /MCP pairing_lookup, then explicitly pairing_approve/);
+    assert.match(script, /no local challenge is needed/);
+    assert.doesNotMatch(script, /MCP challenge \(12 chars\)/);
     assert.doesNotMatch(script, /openssl pkey|Repeat original 10-character code/);
   } finally {
     await rm(folder, { recursive: true, force: true });
@@ -313,12 +399,12 @@ test("default installer auto-classifies approved, pending and signed-revoked ide
 
 test("one installer command dispatches verified revoke to guarded local challenge", async () => {
   const src = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "install-v2.mjs"), "utf8");
-  assert.match(src, /const state = await inspectInstallIdentity\(options, keyPath, previous\)/);
+  assert.match(src, /const state = await inspectInstallIdentity\(options, keyPath, identityPrevious\)/);
   assert.match(src, /if \(state === "revoked"\)/);
-  assert.match(src, /await rePairRevokedDevice\(options, keyPath, previous, stdin, stdout\)/);
+  assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
-  assert.match(src, /stdout.write\("v2 user service already installed/);
-  assert.match(src, /run\("systemctl", \["--user", "start", UNIT\]\)/);
+  assert.match(src, /Ready: v2 service active; existing identity retained/);
+  assert.match(src, /ensureApprovedPermanentService\(\)/);
   assert.match(src, /await pairFreshPending\(options, keyPath, stdin, stdout, state === "pending"\)/);
   assert.match(src, /await assertRemoteRevocation\(options.endpoint, keyPath, oldId\)/);
   assert.doesNotMatch(src, /Type RE-PAIR|Explicit re-pair confirmation was not provided/);
@@ -383,6 +469,49 @@ test("revoked install archives old identity only AFTER new challenged pairing", 
   assert.match(src, /\[keyPath, path\.join\(archive, "identity\.pem"\)\]/);
   assert.match(src, /\[stage, keyPath\]/);
   assert.doesNotMatch(src, /rm\(keyPath\)|unlink\(keyPath\)/);
+});
+
+test("#71 revoked Temporary re-pair uses an independent foreground identity, not permanent systemd", async () => {
+  const src=await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
+    "..","scripts","install-v2.mjs"),"utf8");
+  assert.match(src, /const identityPrevious = options.grantType === "temporary" \? null : previous/);
+  assert.match(src, /await inspectInstallIdentity\(options, keyPath, identityPrevious\)/);
+  assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
+  assert.match(src, /if \(options.foreground && options.grantType !== "temporary"\)/);
+  assert.match(src, /await finishRevokedPromotion\(keyPath\);[\s\S]*?await startForeground/);
+
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rc-t02-temp-repair-"));
+  const oldId="0ded0000-0000-4000-8000-000000000041";
+  const newId="0ded0000-0000-4000-8000-000000000042";
+  const key=path.join(dir,"v2-identity.pem");
+  const stage=key+".re-pair-new";
+  let stops=0;
+  try {
+    await writeFile(key,"old-revoked-key",{mode:0o600});
+    await writeFile(key+".device-id",oldId,{mode:0o600});
+    await writeFile(stage,"new-approved-key",{mode:0o600});
+    await writeFile(stage+".device-id",newId,{mode:0o600});
+    await beginRevokedPromotion(key,oldId,newId);
+    const result=await resumeRevokedPromotion({endpoint:"https://rc.example.org/"},
+      key,null,{
+        verifyRevoked:async(_endpoint,candidate,id)=>{
+          assert.equal(id,oldId);
+          assert.equal(await readFile(candidate,"utf8"),"old-revoked-key");
+        },
+        verifyApproved:async(_endpoint,candidate)=>{
+          assert.equal(await readFile(candidate,"utf8"),"new-approved-key");
+          return newId;
+        },
+        stopService:()=>{stops++;throw Error("Temporary must never stop permanent user service");},
+      });
+    assert.equal(result.newId,newId);
+    assert.equal(stops,0);
+    assert.equal(await readFile(key+".device-id","utf8"),newId);
+    const archive=path.join(dir,"revoked-"+oldId);
+    assert.equal(await readFile(path.join(archive,"identity.pem"),"utf8"),"old-revoked-key");
+    assert.equal(await readFile(path.join(archive,"identity.pem.device-id"),"utf8"),oldId);
+    assert.equal((await stat(key)).mode&0o777,0o600);
+  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test("staged identity promotion archives the revoked key/ID and installs only the new paired identity", async () => {
@@ -588,7 +717,10 @@ test("actual SIGKILL after each identity rename permits guarded operator-only re
     '  await rename(from, to);',
     '  if (++step === Number(process.env.RC_TEST_KILL_AT)) {',
     '    process.send({ completed_renames: step });',
-    '    await new Promise(() => {});',
+    // A never-settling top-level await with no active handles makes Node 24
+    // exit on its own with code 13. Keep the child alive until the OS kills
+    // it, so the test truly proves SIGKILL recovery (not a false process exit).
+    '    await new Promise(() => { setInterval(() => {}, 60_000); });',
     '  }',
     '});',
     'throw Error("Child must be SIGKILLed before the promotion returns");',

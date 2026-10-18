@@ -14,7 +14,8 @@ export interface EnrollmentRequest {
   code_verifier: string;
   proof: string;
   issued_at: number;
-  grant_type?: "temporary"; // Omitted in preexisting permanent protocol
+  grant_type?: "temporary"; // Omitted for permanent grant
+  pairing_protocol: "single-code-v1"; // Signed enrollment version; old pending cannot be silently approved
 }
 
 export function pairingVerifier(code: string): string {
@@ -43,12 +44,13 @@ export function newEnrollment(name: string, existingPrivateKeyPem?: string, gran
   const publicSpki = Buffer.from(publicKey.export({ type: "spki", format: "der" }) as Buffer).toString("base64");
   const verifier = pairingVerifier(code);
   const issuedAt = Date.now();
-  const transcript = Buffer.from(ENROLLMENT_DOMAIN + verifier + ":" + publicSpki + ":" + name + ":" + issuedAt + (grantType === "temporary" ? ":temporary" : ""));
+  const transcript = Buffer.from(ENROLLMENT_DOMAIN + verifier + ":" + publicSpki + ":" + name + ":" + issuedAt + (grantType === "temporary" ? ":temporary" : "") + ":single-code-v1");
   const proof = Buffer.from(sign(null, transcript, privateKey)).toString("base64");
   return {
     code,
     privateKeyPem: String(privateKey.export({ type: "pkcs8", format: "pem" })),
     request: { name, public_key: publicSpki, code_verifier: verifier, proof, issued_at: issuedAt,
+      pairing_protocol: "single-code-v1",
       ...(grantType === "temporary" ? { grant_type: "temporary" as const } : {}) },
   };
 }

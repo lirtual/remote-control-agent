@@ -96,7 +96,7 @@ function rewriteExtensions(text) {
 }
 
 /** Follow static source dependency graph, no tests, checkout or node_modules copied. */
-export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "confirm-device.ts", "v2-repair.ts"]) {
+export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "v2-repair.ts"]) {
   const visited = new Set();
   function walk(name) {
     if (!/^[a-z0-9-]+\.ts$/.test(name)) throw new Error("Unreviewed runtime import: " + name);
@@ -167,6 +167,13 @@ export function build(args) {
   const installer=readFileSync(path.join(root,"scripts/install-v2.mjs"),"utf8");
   writeFileSync(path.join(work,"apps/remote-control-agent/scripts/install-v2.mjs"),
     rewriteExtensions(installer),{mode:0o600});
+  for (const name of ["bootstrap-node.mjs","manage-v2.mjs",
+      "lifecycle-v2.mjs","upgrade-v2.mjs","verify-v2-release.mjs","rca.sh"]) {
+    const sourceFile=path.join(root,"scripts",name);
+    const dest=path.join(work,"apps/remote-control-agent/scripts",name);
+    copyFileSync(sourceFile,dest);
+    chmodSync(dest,name==="rca.sh" ? 0o700 : 0o600);
+  }
   writeFileSync(path.join(work,"apps/remote-control-agent/package.json"),JSON.stringify({type:"module"})+"\n",{mode:0o600});
   writeFileSync(path.join(work,"bundle.json"),JSON.stringify({
     name:"remote-control-agent",version:args.version,target:args.target,

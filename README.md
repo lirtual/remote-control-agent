@@ -26,4 +26,31 @@ The above command has passed a real public-GitHub download and staging smoke tes
 
 The source and archive retain `apps/remote-control-agent` layout for v2 compatibility while the private repository finishes staged migration. No private Git history, private Worker source, Cloudflare secrets, local device keys or SQLite receipt databases are included. Local uninstall does not revoke a cloud grant; cloud revocation is a separate owner MCP action.
 
+### `rca` (Remote Control Agent) local manager — next unreleased version (Draft)
+
+The optional **local Agent-management** command is under development; this is **not an AI chat tool** and has no direct permission to call remote Shell or bypass MCP owner approval. Existing **v0.1.0** remains the immutable published test version without this manager.
+
+The next candidate **v0.1.1** will offer a short pinned GitHub installer (only **after** a separately authorized immutable GitHub Release is actually published):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.1/install.sh | sh
+```
+
+The version-tagged bootstrap checks the *published immutable* GitHub Release and peels the actual tag commit before fetching the exact reviewed Python bootstrap; the Python bootstrap independently checks the matching tag, official asset SHA-256, architecture/ABI, ownership and TTY before executing packaged Node. An actual user terminal is required for endpoint selection, mode choice and the independent 10+12-character pairing flow. There is no "latest" installation fallback.
+
+After successful **permanent** install, only the installer's verified user-owned launcher is created at `~/.local/bin/rca`. The installer adds one Bash PATH line if a normal owned `~/.bashrc` is available, and offers to open the manager. If your current terminal has an old PATH, open a new terminal or run `export PATH="$HOME/.local/bin:$PATH"`.
+
+```sh
+rca             # local interactive menu
+rca status      # local version/systemd; remote signed WSS unconfirmed
+rca logs        # local journalctl; do not publicly share unredacted logs
+rca pair        # explicit owner-mediated existing-identity repair
+rca upgrade v0.1.1 <reviewed-40-character-commit>
+rca uninstall   # local-only, explicit; cloud grant NOT revoked
+```
+
+The manager uses **existing** Agent lifecycle actions, never includes an account secret, refuses foreign `~/.local/bin` entries, and preserves keys/device IDs/SQLite receipts by default on uninstall. CLI status is not a remote-health attestation. Upgrade requires an explicit immutable tag and reviewed 40-character commit, and is restricted to the current read-only/no-Shell profile.
+
+**Do not run the v0.1.1 installer yet:** it has no authorized published Release. This draft change does not modify the running `rc-v010-acceptance` v0.1.0 device, its ongoing 48-hour observation or v1 production.
+
 **No production cutover** is implied by this public prerelease.

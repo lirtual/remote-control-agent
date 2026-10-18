@@ -11,13 +11,13 @@
  */
 import { spawnSync } from "node:child_process";
 import { constants, existsSync, readFileSync } from "node:fs";
-import { access, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
+import { access, lstat, mkdir, open, readFile, readlink, readdir, rename, rm, rmdir, symlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
-import { confirmDeviceLocally } from "../src/confirm-device.ts";
+import { setTimeout as sleep } from "node:timers/promises";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 
@@ -168,6 +168,72 @@ export function renderV2Service({ node, home, repoRoot, endpoint, keyPath, entry
  * Existing systemd activation+rollback in installUnit() switches ONLY the
  * v2 program path; private Ed25519 keys, endpoint and SQLite remain intact.
  */
+async function hasPathNoFollow(file) {
+  try { await lstat(file); return true; }
+  catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function assertReceiptDatabaseCompatible(home, expectedSchema = 1) {
+  const directory = path.join(home, ".local", "state", "mcp-workers", "remote-control-agent");
+  const receiptPath = path.join(directory, "operation-receipts.sqlite");
+  let directoryInfo;
+  try { directoryInfo = await lstat(directory); }
+  catch (error) {
+    // A fresh read-only v2 install may never have created receipt state.
+    // There is no persisted history to preserve if the directory itself is absent.
+    if (error?.code === "ENOENT") return;
+    throw new Error("Receipt database directory cannot be inspected; upgrade blocked.");
+  }
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() ||
+      directoryInfo.uid !== process.getuid() || (directoryInfo.mode & 0o077) !== 0) {
+    throw new Error("Receipt database directory ownership or permissions are unsafe; upgrade blocked.");
+  }
+  let handle;
+  try { handle = await open(receiptPath, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  catch (error) {
+    if (error?.code === "ENOENT") {
+      // Missing SQLite is safe only when no legacy receipt file or migration backup exists.
+      for (const legacyPath of [
+        path.join(directory, "operation-receipts.json"),
+        path.join(directory, "operation-receipts.pre-sqlite.json"),
+      ]) {
+        let legacyExists;
+        try { legacyExists = await hasPathNoFollow(legacyPath); }
+        catch { throw new Error("Legacy receipt data cannot be inspected; upgrade blocked."); }
+        if (legacyExists) {
+          throw new Error("Legacy receipt data exists without SQLite database; upgrade blocked.");
+        }
+      }
+      return;
+    }
+    throw new Error("Receipt database cannot be opened safely; upgrade blocked.");
+  }
+  try {
+    const meta = await handle.stat();
+    if (!meta.isFile() || meta.uid !== process.getuid() ||
+        (meta.mode & 0o077) !== 0 || meta.nlink !== 1) {
+      throw new Error("Receipt database ownership or permissions are unsafe; upgrade blocked.");
+    }
+    const header = Buffer.alloc(100);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead < 100 ||
+        header.subarray(0, 15).toString("ascii") !== "SQLite format 3" || header[15] !== 0) {
+      throw new Error("Receipt database is not a valid SQLite file; upgrade blocked.");
+    }
+    // SQLite stores PRAGMA user_version as a big-endian uint32 at bytes 60–63.
+    // ReceiptStore currently accepts version 0 (uninitialized) and version 1.
+    // Read only the immutable header: the running Agent holds SQLite's exclusive lock.
+    const version = header.readUInt32BE(60);
+    if (version !== 0 && version !== expectedSchema) {
+      throw new Error("Receipt database schema is incompatible; upgrade blocked.");
+    }
+  } finally {
+    await handle.close();
+  }
+}
 export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Manual upgrade requires an owned v2 service.");
@@ -214,7 +280,33 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (previousRoot === path.resolve(path.dirname(newManifestPath))) {
     throw new Error("Already running this program version; use ordinary install.");
   }
+  await assertReceiptDatabaseCompatible(home, 1);
   return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath))};
+}
+
+/** Repeat-install is same-version only. A different installed service
+ * must use explicit pinned rca upgrade and its rollback gate. */
+export function assertRepeatInstallSameVersion(unit, root, {home, keyPath} = {}) {
+  if (!unit || !unit.startsWith(MARKER + "\n")) {
+    throw new Error("An unowned v2 service cannot be reused.");
+  }
+  const values=unit.split("\n").filter(line=>line.startsWith("ExecStart="));
+  const expected="ExecStart="+path.join(root,"bin/node")+" "+
+    path.join(root,"apps/remote-control-agent/src/v2-main.js");
+  if(values.length!==1||values[0]!==expected){
+    throw new Error("Existing Agent runs another version; use reviewed rca upgrade.");
+  }
+  if (home && keyPath) {
+    // The same-version CLI may enable/start the existing service after a crash.
+    // Validate the entire installer-owned unit and its actual private key
+    // binding first, not just a plausible ExecStart and trusted endpoint.
+    let parsed;
+    try { parsed = assertCanonicalV2UnitTemplate(unit, home); }
+    catch { throw new Error("Existing v2 service is noncanonical; manual review required."); }
+    if (parsed.root !== path.resolve(root) || parsed.keyPath !== keyPath) {
+      throw new Error("Existing v2 service identity or program differs; manual review required.");
+    }
+  }
 }
 
 /** The regular installer never silently retargets an installed v2 service. */
@@ -351,32 +443,193 @@ async function atomicUnitWrite(unitPath, content) {
   try {
     run("systemd-analyze", ["--user", "verify", temporary]);
     await rename(temporary, unitPath);
+    // fsync the containing directory so the old-unit backup/name survives
+    // a host crash, not just an ordinary process SIGKILL.
+    await syncParent(unitPath);
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
   }
 }
 
-export async function installUnit(unitPath, content, previous) {
-  await atomicUnitWrite(unitPath, content);
+function assertCanonicalV2UnitTemplate(unit, home) {
+  if (!unit || !unit.startsWith(MARKER + "\n")) {
+    throw new Error("Interrupted upgrade backup is not an owned v2 unit.");
+  }
+  const settings = unit.split("\n");
+  const working = settings.filter(line => line.startsWith("WorkingDirectory="));
+  const starts = settings.filter(line => line.startsWith("ExecStart="));
+  if (working.length !== 1 || starts.length !== 1) {
+    throw new Error("Interrupted upgrade backup has ambiguous executable ownership.");
+  }
+  const root = path.resolve(working[0].slice("WorkingDirectory=".length), "..", "..");
+  const programs = path.join(home, ".local", "share", "mcp-workers", "remote-control", "programs");
+  const expectedStart = "ExecStart=" + path.join(root, "bin", "node") + " " +
+    path.join(root, "apps", "remote-control-agent", "src", "v2-main.js");
+  if (!root.startsWith(programs + path.sep) || starts[0] !== expectedStart) {
+    throw new Error("Interrupted upgrade backup does not reference a versioned Agent.");
+  }
+  // Require the exact installer-generated service, not merely a matching
+  // ExecStart with arbitrary extra systemd directives in a stale backup.
+  const endpoint = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_ENDPOINT="));
+  const keys = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_KEY_PATH="));
+  if (endpoint.length !== 1 || keys.length !== 1) {
+    throw new Error("Interrupted upgrade backup has ambiguous endpoint or identity.");
+  }
+  const endpointValue = endpoint[0].slice("Environment=REMOTE_CONTROL_V2_ENDPOINT=".length);
+  const keyValue = keys[0].slice("Environment=REMOTE_CONTROL_V2_KEY_PATH=".length);
+  let canonical;
   try {
+    canonical = renderV2Service({node:path.join(root, "bin", "node"), home,
+      repoRoot:root, endpoint:endpointValue, keyPath:keyValue, entryExt:"js"});
+  } catch {
+    throw new Error("Interrupted upgrade backup has invalid service settings.");
+  }
+  if (unit !== canonical) {
+    throw new Error("Interrupted upgrade backup differs from the managed service template.");
+  }
+  return {root, endpoint:endpointValue, keyPath:keyValue};
+}
+
+async function assertRecoverablePreviousUnit(unit, home) {
+  const {root, endpoint:endpointValue, keyPath:keyValue} = assertCanonicalV2UnitTemplate(unit, home);
+  const rootInfo = await lstat(root);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() ||
+      rootInfo.uid !== process.getuid() || (rootInfo.mode & 0o077) !== 0) {
+    throw new Error("Previous Agent directory is not safe to recover.");
+  }
+  const manifestPath = path.join(root, "bundle.json");
+  const manifestInfo = await lstat(manifestPath);
+  if (!manifestInfo.isFile() || manifestInfo.isSymbolicLink() ||
+      manifestInfo.uid !== process.getuid() || (manifestInfo.mode & 0o077) !== 0) {
+    throw new Error("Previous Agent manifest is not safe to recover.");
+  }
+  let manifest;
+  try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); }
+  catch { throw new Error("Previous Agent manifest is invalid."); }
+  if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
+      manifest.receipt_schema !== 1 || manifest.upgrade_profile !== "read-only-no-shell-v1" ||
+      manifest.target !== "linux-" + process.arch + "-glibc" ||
+      path.basename(root) !== manifest.version + "-" + manifest.target) {
+    throw new Error("Previous Agent version cannot be safely recovered.");
+  }
+  const entry = path.join(root, "apps", "remote-control-agent", "src", "v2-main.js");
+  const entryInfo = await lstat(entry);
+  if (!entryInfo.isFile() || entryInfo.isSymbolicLink() ||
+      entryInfo.uid !== process.getuid() || (entryInfo.mode & 0o077) !== 0 ||
+      !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))) {
+    throw new Error("Previous Agent does not prove the reviewed read-only profile.");
+  }
+  return {root, endpoint:endpointValue, keyPath:keyValue};
+}
+
+/**
+ * Recover an interrupted program switch from a durable copy of the prior unit.
+ * If the prior unit is already restored, only ensure that service is active.
+ */
+async function clearCompletedUpgradeBackup(backupPath) {
+  await rm(backupPath);
+  // Deletion is part of commit: a host crash must not resurrect a stale
+  // previous-version backup and trigger an unwanted rollback on next launch.
+  await syncParent(backupPath);
+}
+
+export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = {}) {
+  unitPath ??= path.join(home, ".config", "systemd", "user", UNIT);
+  const backupPath = unitPath + ".upgrade-backup";
+  const backupInfo = await exists(backupPath);
+  if (!backupInfo) return false;
+  if (!backupInfo.isFile() || backupInfo.isSymbolicLink() ||
+      backupInfo.uid !== process.getuid() || (backupInfo.mode & 0o077) !== 0 ||
+      backupInfo.nlink !== 1) {
+    throw new Error("Interrupted upgrade backup is unsafe; manual review required.");
+  }
+  let previous;
+  try { previous = await readFile(backupPath, "utf8"); }
+  catch { throw new Error("Interrupted upgrade backup cannot be read; manual review required."); }
+  const oldUnit = await assertRecoverablePreviousUnit(previous, home);
+  let current;
+  try { current = await readOwnedUnit(unitPath); }
+  catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
+  if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
+  // A crashed activation may reference a staged program that is not yet
+  // runnable. Validate its exact systemd template, but do not require the
+  // interrupted new binary to exist in order to restore the old one.
+  try { assertCanonicalV2UnitTemplate(current, home); }
+  catch { throw new Error("Current v2 unit is noncanonical; recovery backup preserved."); }
+  // A recovered binary must keep the same approved cloud endpoint and device
+  // identity. Reject drift before touching systemd or deleting the backup.
+  const settings = current.split("\n");
+  for (const [name, expected] of [
+    ["REMOTE_CONTROL_V2_ENDPOINT", oldUnit.endpoint],
+    ["REMOTE_CONTROL_V2_KEY_PATH", oldUnit.keyPath],
+  ]) {
+    const values = settings.filter(line => line.startsWith("Environment=" + name + "="));
+    if (values.length !== 1 || values[0] !== "Environment=" + name + "=" + expected) {
+      throw new Error("Interrupted upgrade changes the endpoint or device identity; manual review required.");
+    }
+  }
+  try {
+    if (current !== previous) await atomicUnitWrite(unitPath, previous);
+    // Always restart the previous executable. An active PID alone does not
+    // prove it matches the restored unit after an interrupted restart.
+    run("systemctl", ["--user", "daemon-reload"]);
+    run("systemctl", ["--user", "restart", UNIT]);
+    run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    await clearCompletedUpgradeBackup(backupPath);
+    return true;
+  } catch {
+    throw new Error("Interrupted upgrade recovery failed; previous service backup was preserved.");
+  }
+}
+
+export async function installUnit(unitPath, content, previous) {
+  const backupPath = unitPath + ".upgrade-backup";
+  if (previous) {
+    if (await exists(backupPath)) {
+      throw new Error("Interrupted upgrade backup exists; recovery is required before another switch.");
+    }
+    await atomicUnitWrite(backupPath, previous);
+  }
+  try {
+    await atomicUnitWrite(unitPath, content);
     run("systemctl", ["--user", "daemon-reload"]);
     run("systemctl", ["--user", previous ? "restart" : "enable", ...(previous ? [] : ["--now"]), UNIT]);
     run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    if (previous) await clearCompletedUpgradeBackup(backupPath);
   } catch {
-    // Never leave an installed half-started v2 service on first installation.
+    // If SIGKILL bypasses this catch, recoverInterruptedUpgrade uses the same
+    // durable backup on the next install/upgrade invocation.
     if (!previous) {
       try { run("systemctl", ["--user", "disable", "--now", UNIT]); } catch { /* unavailable */ }
       await rm(unitPath, { force: true });
     } else {
-      await atomicUnitWrite(unitPath, previous);
       try {
+        const current = await readOwnedUnit(unitPath);
+        if (current !== previous) await atomicUnitWrite(unitPath, previous);
         run("systemctl", ["--user", "daemon-reload"]);
         run("systemctl", ["--user", "restart", UNIT]);
-      } catch { /* Preserve the old unit even if local service is unhealthy. */ }
+        run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+        await clearCompletedUpgradeBackup(backupPath);
+      } catch { /* Keep the durable backup for a later recovery attempt. */ }
     }
     try { run("systemctl", ["--user", "daemon-reload"]); } catch { /* unavailable */ }
     throw new Error("The v2 user service could not be activated; original v1 services were not touched.");
+  }
+}
+
+/**
+ * Re-running the reviewed permanent install must complete a SIGKILL that
+ * occurred after writing the unit but before systemctl enable --now.
+ * It must not rotate identity or restart an already active service.
+ */
+export function ensureApprovedPermanentService(invoke = run) {
+  invoke("systemctl", ["--user", "daemon-reload"]);
+  invoke("systemctl", ["--user", "enable", UNIT]);
+  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
+  catch {
+    invoke("systemctl", ["--user", "start", UNIT]);
+    invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
   }
 }
 
@@ -390,9 +643,37 @@ async function launchForeground({ endpoint, keyPath }) {
 }
 
 /**
- * Shared manual local challenge. Only the Agent holds the original pairing
- * code in memory, and it never asks the user to repeat it.
+ * One-code pairing: the owner enters the locally displayed code into the
+ * authenticated MCP, then explicitly calls pairing_approve for that key/mode.
+ * The existing session-recovery endpoint only returns a device ID after this
+ * Agent has signed a fresh server nonce with the matching private key.
+ * Polling does not call any owner MCP tool or grant a device by itself.
  */
+export async function awaitOwnerMcpApproval(endpoint, keyPath, {
+  claim = recoverDeviceId,
+  delay = (ms) => sleep(ms),
+  deadlineMs = 10 * 60_000,
+  intervalMs = 5_000,
+  now = Date.now,
+} = {}) {
+  const deadline = now() + deadlineMs;
+  while (now() < deadline) {
+    try {
+      return await claim(endpoint, keyPath);
+    } catch (error) {
+      // An unapproved pending key is 404. Other failures are not evidence
+      // that the owner has approved this pairing; fail without rotating keys.
+      if (!(error instanceof DeviceSessionRejectedError) || error.status !== 404) {
+        throw error;
+      }
+    }
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    await delay(Math.min(intervalMs, remaining));
+  }
+  throw new Error("MCP pairing was not approved within the code lifetime. Re-run the same installer safely.");
+}
+
 async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKey) {
   if (!stdin.isTTY || !stdout.isTTY) {
     throw new Error("Pairing requires a local interactive device terminal.");
@@ -400,25 +681,13 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
   const enrollment = await beginDeviceEnrollment(
     options.name ?? os.hostname(), options.endpoint, keyPath, fetch, reuseExistingKey,
     options.grantType ?? "permanent");
-  const terminal = createInterface({ input: stdin, output: stdout, terminal: true });
-  try {
-    stdout.write("Pending 10-minute pairing code: " + enrollment.code + "\n");
-    if (options.showFingerprint) {
-      stdout.write("Local public key fingerprint (optional check): " + enrollment.fingerprint + "\n");
-    }
-    stdout.write("In authenticated MCP: pairing_lookup, then pairing_prepare. Enter only the 12-character challenge here.\n");
-    let challenge;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const typed = (await terminal.question("12-character MCP confirmation challenge: ")).trim().toUpperCase();
-      if (/^[A-Z2-7]{12}$/.test(typed)) {
-        challenge = typed;
-        break;
-      }
-      if (attempt < 2) stdout.write("Challenge must be 12 characters (A-Z, 2-7). Try again.\n");
-    }
-    if (!challenge) throw new Error("Invalid local challenge format.");
-    await confirmDeviceLocally(enrollment.code, challenge, options.endpoint, keyPath);
-  } finally { terminal.close(); }
+  stdout.write("Pairing code (10 min): " + enrollment.code + "\n");
+  if (options.showFingerprint) {
+    stdout.write("Local public key fingerprint (optional check): " + enrollment.fingerprint + "\n");
+  }
+  stdout.write("Use MCP pairing_lookup, then explicitly pairing_approve for the exact key and mode.\n");
+  stdout.write("Waiting for approval; no local challenge is needed.\n");
+  await awaitOwnerMcpApproval(options.endpoint, keyPath);
 }
 
 /**
@@ -700,6 +969,120 @@ export async function inspectInstallIdentity(options, keyPath, previous, {
 }
 
 
+/** Read-only check: reject a foreign short command before ANY pairing/approval.
+ * Also refuses untrusted launcher parents even when an old binary is present.
+ */
+export async function preflightManagerLauncher(home, program) {
+  const target = path.join(program, "apps/remote-control-agent/scripts/rca.sh");
+  const file = await lstat(target);
+  if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
+      !(file.mode & 0o100) || file.mode & 0o077) {
+    throw new Error("Reviewed Agent manager executable is missing or unsafe.");
+  }
+  const parent = path.join(home, ".local");
+  const bin = path.join(parent, "bin");
+  for (const directory of [home, parent, bin]) {
+    try {
+      const stat = await lstat(directory);
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()) {
+        throw new Error("Untrusted user-local launcher directory.");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT" || directory === home) throw error;
+    }
+  }
+  const launcher = path.join(bin, "rca");
+  const installedRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs");
+  try {
+    const current = await lstat(launcher);
+    if (!current.isSymbolicLink()) {
+      throw new Error("A foreign rca command already exists.");
+    }
+    const destination = await readlink(launcher);
+    if (!destination.startsWith(installedRoot + path.sep) ||
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/](?:manage-v2[.]py|rca[.]sh)$/.test(
+          destination.slice(installedRoot.length + 1))) {
+      throw new Error("Existing launcher is not owned by the versioned Agent.");
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+/** Publish only our own user-local launcher. Never overwrite foreign commands.
+ * Called after successful service activation, not at download or pairing time.
+ */
+export async function installManagerLauncher(home, program) {
+  await preflightManagerLauncher(home, program);
+  const parent = path.join(home, ".local");
+  const bin = path.join(parent, "bin");
+  for (const directory of [home, parent, bin]) {
+    let stat;
+    try { stat = await lstat(directory); }
+    catch (error) {
+      if (error.code !== "ENOENT" || directory === home) throw error;
+      await mkdir(directory, {mode:0o700});
+      stat = await lstat(directory);
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink() ||
+        stat.uid !== process.getuid()) {
+      throw new Error("Untrusted user-local launcher directory.");
+    }
+  }
+  const target = path.join(program, "apps/remote-control-agent/scripts/rca.sh");
+  const file = await lstat(target);
+  if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() ||
+      !(file.mode & 0o100) || file.mode & 0o077) {
+    throw new Error("Reviewed Agent manager executable is missing or unsafe.");
+  }
+  const launcher = path.join(bin, "rca");
+  const installedRoot = path.join(home, ".local/share/mcp-workers/remote-control/programs");
+  try {
+    const current = await lstat(launcher);
+    if (!current.isSymbolicLink()) {
+      throw new Error("A foreign rca command already exists.");
+    }
+    const destination = await readlink(launcher);
+    if (!destination.startsWith(installedRoot + path.sep) ||
+        !/^v[0-9]+[.][0-9]+[.][0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc[/]apps[/]remote-control-agent[/]scripts[/](?:manage-v2[.]py|rca[.]sh)$/.test(
+          destination.slice(installedRoot.length + 1))) {
+      throw new Error("Existing launcher is not owned by the versioned Agent.");
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const temporary = path.join(bin, ".rca-" + process.pid);
+  await symlink(target, temporary);
+  try { await rename(temporary, launcher); }
+  finally { await rm(temporary, {force:true}); }
+  // User-local Bash convenience only. No modification of unknown/symlinked rc files.
+  const rc=path.join(home, ".bashrc");
+  try {
+    const stat=await lstat(rc);
+    if (stat.isFile() && !stat.isSymbolicLink() && stat.uid===process.getuid() &&
+        stat.nlink === 1 && (stat.mode & 0o200) !== 0 &&
+        (stat.mode & 0o022) === 0 && stat.size <= 1024*1024) {
+      const contents=await readFile(rc,"utf8");
+      if (!contents.includes("# rca local CLI")) {
+        const fd=await open(rc,constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW);
+        try { await fd.writeFile("\n# rca local CLI\nexport PATH=\"$HOME/.local/bin:$PATH\"\n"); }
+        finally { await fd.close(); }
+      }
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  return launcher;
+}
+
+/** Print one CLI path and only the PATH action this terminal may need. */
+export function printPortableCliHint(stdout, launcher, home, currentPath = process.env.PATH ?? "") {
+  stdout.write("CLI: " + launcher + "\n");
+  if (!currentPath.split(path.delimiter).includes(path.join(home, ".local", "bin"))) {
+    stdout.write('To use rca here: export PATH="$HOME/.local/bin:$PATH"\n');
+  }
+}
+
 /** Hold a kernel flock through the full interactive CLI, released even on SIGKILL. */
 export async function runLockedInstallerCli(argv, {
   home = os.homedir(), invoke = spawnSync, node = process.execPath,
@@ -757,33 +1140,41 @@ export async function runInstaller(args, {
     }
     const prompt = createInterface({input:stdin,output:stdout,terminal:true});
     try {
-      stdout.write("Remote Control v2 — read-only by default. Worker endpoint: " +
-        trustedEndpoint(options.endpoint) + "\nTarget label: " +
-        (options.name ?? os.hostname()) + "\n");
-      const choice=(await prompt.question("Choose 1 = Permanent (systemd); 2 = Temporary (24h): ")).trim();
+      stdout.write("Remote Control Agent " +
+        (portable ? JSON.parse(readFileSync(manifestPath, "utf8")).version : "v2") + "\n");
+      stdout.write("Device: " + (options.name ?? os.hostname()) + "\n");
+      stdout.write("1. Permanent (systemd)\n2. Temporary (24h)\n");
+      const choice=(await prompt.question("Choose [1-2]: ")).trim();
       // Mode choice binds the signed Agent pending request and owner MCP review.
       Object.assign(options, choosePortableInstallMode(choice, args));
-      stdout.write(choice === "2"
-        ? "Temporary: foreground only; cloud expires 24 hours after owner approval. Terminal stop is not a cloud revoke.\n"
-        : "Permanent: only the installer-owned v2 user service is started.\n");
+      if (choice === "2") {
+        stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
+      }
     } finally {prompt.close();}
   }
   const unitPath = path.join(home, ".config", "systemd", "user", UNIT);
   const keyPath = keyForInstallMode(home, options.grantType ?? "permanent");
   systemdLiteral(home);
   const host = await preflight(options.action, options.foreground);
+  await recoverInterruptedUpgrade({home, unitPath});
   if (options.action !== "uninstall") trustedEndpoint(options.endpoint);
-  if (host === "wsl2" && !options.foreground && options.action !== "uninstall") {
-    stdout.write("WSL2 detected. This systemd user service cannot wake a stopped WSL distribution. " +
-      "After Windows restart, open the distribution and verify the v2 service; " +
-      "while WSL is stopped, the device is unavailable. See docs/remote-control/WSL2-V2-LIFECYCLE.md.\n");
+  // Read-only collision gate BEFORE creating a device key or pending cloud grant.
+  if (portable && options.action !== "uninstall") {
+    await preflightManagerLauncher(home, path.resolve(packageRoot, "..", ".."));
   }
+  // WSL2 lifecycle reminder is shown once, after successful activation.
   const previous = await readOwnedUnit(unitPath);
+  // Temporary foreground identities never own the permanent user service.
+  const identityPrevious = options.grantType === "temporary" ? null : previous;
   // Ordinary repeat install must not silently accept a different Worker target.
   // Explicit --upgrade remains the separate path for intentional endpoint changes.
   if (previous && (options.action === "install" || options.action === "upgrade") &&
       options.grantType !== "temporary") {
     assertExistingServiceEndpoint(previous, options.endpoint);
+  }
+  if (portable && previous && options.action==="install" &&
+      options.grantType!=="temporary"){
+    assertRepeatInstallSameVersion(previous,programRoot,{home,keyPath});
   }
   // A distinct temporary Agent may coexist with the installed permanent unit.
   if (options.foreground && previous && options.grantType !== "temporary") {
@@ -819,29 +1210,32 @@ export async function runInstaller(args, {
   }
   if (options.action === "install") {
     if (await exists(promotionMarker(keyPath))) {
-      if (options.foreground || !stdin.isTTY || !stdout.isTTY) {
+      if ((options.foreground && options.grantType !== "temporary") || !stdin.isTTY || !stdout.isTTY) {
         throw new Error("Interrupted identity promotion requires a local interactive terminal.");
       }
-      const resumed = await resumeRevokedPromotion(options, keyPath, previous);
+      const resumed = await resumeRevokedPromotion(options, keyPath, identityPrevious);
       stdout.write("Verified interrupted identity promotion for " + resumed.newId + ".\n");
     } else {
-      const state = await inspectInstallIdentity(options, keyPath, previous);
+      const state = await inspectInstallIdentity(options, keyPath, identityPrevious);
       if (state === "revoked") {
         // Only an interactive installer can recover a revoked installation.
-        // Foreground mode cannot replace an identity belonging to a systemd unit.
-        if (options.foreground) throw new Error("Revoked foreground identity requires manual review.");
-        await rePairRevokedDevice(options, keyPath, previous, stdin, stdout);
+        // Do not migrate a managed permanent identity through foreground mode;
+        // a separate revoked Temporary key can be replaced after new MCP approval.
+        if (options.foreground && options.grantType !== "temporary") {
+          throw new Error("Revoked non-temporary foreground identity requires manual review.");
+        }
+        await rePairRevokedDevice(options, keyPath, identityPrevious, stdin, stdout);
       } else if (state === "approved") {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
           // Never restart v1 or replace this approved local identity.
-          try { run("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-          catch {
-            run("systemctl", ["--user", "daemon-reload"]);
-            run("systemctl", ["--user", "start", UNIT]);
-            run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+          ensureApprovedPermanentService();
+          if (portable) {
+            const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+            printPortableCliHint(stdout, launcher, home);
           }
-          stdout.write("v2 user service already installed; approved identity preserved.\n");
+          stdout.write("Ready: v2 service active; existing identity retained.\n");
+          if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
           return;
         }
         stdout.write("Existing approved identity recovered; continuing v2 installation.\n");
@@ -855,8 +1249,14 @@ export async function runInstaller(args, {
   await ownerOnly(keyPath, 0o600);
   await ownerOnly(keyPath + ".device-id", 0o600);
   if (options.foreground) {
-    stdout.write("v2 " + (options.grantType === "temporary" ? "temporary 24-hour" : "foreground") +
-      " identity ready. Starting foreground Agent. Closing the terminal or stopping WSL2 disconnects it; no service is installed and no cloud revoke is implied.\n");
+    // A verified Temporary promotion needs no systemd activation to finalize.
+    await finishRevokedPromotion(keyPath);
+    if (portable) {
+      const launcher=await installManagerLauncher(home,path.resolve(packageRoot,"..",".."));
+      printPortableCliHint(stdout, launcher, home);
+    }
+    stdout.write("Starting " + (options.grantType === "temporary" ? "temporary (24h)" : "foreground") +
+      " Agent; terminal stop disconnects, not revokes.\n");
     await startForeground({ endpoint: trustedEndpoint(options.endpoint), keyPath });
     return;
   }
@@ -870,13 +1270,29 @@ export async function runInstaller(args, {
   }
   await installUnit(unitPath, rendered, previous);
   await finishRevokedPromotion(keyPath);
-  stdout.write("v2 user service active. Use list_devices and an approved nonsensitive read fixture to verify connectivity.\n");
+  if (portable) {
+    const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+    stdout.write("Ready: v2 service active (read-only).\n");
+    printPortableCliHint(stdout, launcher, home);
+    if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
+  }
+  if (!portable) {
+    stdout.write("v2 service active. Verify connectivity using authenticated MCP.\n");
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  runLockedInstallerCli(process.argv.slice(2)).then(code => {
+  runLockedInstallerCli(process.argv.slice(2)).then(async code => {
     process.exitCode = code;
+
   }).catch(error => {
+    // Upgrade failures need local-service guidance, not the pairing-specific
+    // fallback used for enrollment failures. Keep output fixed and sanitized.
+    if (process.argv.slice(2).includes("--upgrade")) {
+      process.stderr.write("Manual v2 upgrade failed. Verify the local service before retrying; no v1 service was changed.\n");
+      process.exitCode = 1;
+      return;
+    }
     // Only print fixed, hard-coded classifications; never echo external
     // exception messages, endpoint query strings or private credential data.
     const safeErrors = [

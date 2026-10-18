@@ -43,9 +43,22 @@ ALLOWED_DIRS = frozenset((
 ))
 ALLOWED_FILES = frozenset((
     "bin/node", "bundle.json", APP + "/package.json",
-    APP + "/scripts/install-v2.mjs", APP + "/.build/session-supervisor",
+    APP + "/scripts/install-v2.mjs", APP + "/scripts/bootstrap-v2.py",
+    APP + "/scripts/manage-v2.py", APP + "/.build/session-supervisor",
+    APP + "/scripts/bootstrap-node.mjs", APP + "/scripts/manage-v2.mjs",
+    APP + "/scripts/lifecycle-v2.mjs", APP + "/scripts/upgrade-v2.mjs",
+    APP + "/scripts/verify-v2-release.mjs", APP + "/scripts/rca.sh",
 ))
-EXEC_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))
+ELF_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))
+EXEC_FILES = ELF_FILES
+NODE_REQUIRED = frozenset((
+    APP + "/scripts/bootstrap-node.mjs", APP + "/scripts/manage-v2.mjs",
+    APP + "/scripts/lifecycle-v2.mjs", APP + "/scripts/upgrade-v2.mjs",
+    APP + "/scripts/verify-v2-release.mjs", APP + "/scripts/rca.sh",
+))
+LEGACY_REQUIRED = frozenset((
+    APP + "/scripts/bootstrap-v2.py", APP + "/scripts/manage-v2.py",
+))
 TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 HASH = re.compile(r"sha256:([0-9a-f]{64})\Z")
@@ -173,6 +186,13 @@ def inspect_archive(archive, tag, target):
                 or APP + "/src/v2-main.js" not in names \
                 or APP + "/scripts/install-v2.mjs" not in names:
             raise ValueError("Incomplete Agent Release archive")
+        # CI candidate tags need not use final semver. Choose the reviewed
+        # file profile by presence, never by a mutable/latest version string.
+        # A partial mixed archive must satisfy the full selected profile.
+        node_profile = bool(names & NODE_REQUIRED)
+        required = NODE_REQUIRED if node_profile else LEGACY_REQUIRED
+        if not required.issubset(names):
+            raise ValueError("Missing reviewed Agent manager/bootstrap files")
         manifest = json.load(tf.extractfile(tf.getmember("bundle.json")))
         if (manifest.get("artifact_schema") != 1 or manifest.get("name") != "remote-control-agent"
                 or manifest.get("version") != tag or manifest.get("target") != target
@@ -189,7 +209,7 @@ def inspect_archive(archive, tag, target):
                    tuple(map(int, minimum.split(".")))):
             raise ValueError("Release requires a newer glibc ABI; no execution attempted")
         machine = 62 if target.startswith("linux-x64-") else 183
-        for binary in EXEC_FILES:
+        for binary in ELF_FILES:
             b = tf.extractfile(tf.getmember(binary)).read(64)
             if (len(b) < 64 or b[:4] != b"\x7fELF" or b[4:6] != b"\x02\x01"
                     or struct.unpack_from("<H", b, 18)[0] != machine):
@@ -255,7 +275,8 @@ def unpack_verified(archive, destination, records, tag, target):
                         os.fsync(stream.fileno())
                 except Exception:
                     raise
-                if name in EXEC_FILES:
+                if name in EXEC_FILES or name in (
+                        APP + "/scripts/manage-v2.py", APP + "/scripts/rca.sh"):
                     output.chmod(0o700)
         # Under this private parent and exclusive flock, only the current user
         # can create destination; never replace it, even on a repeated run.
@@ -343,6 +364,7 @@ def preflight(tag, commit, endpoint):
 
 def install(tag, commit, endpoint, name=None, upgrade=False):
     target = preflight(tag, commit, endpoint)
+    print("==> Detected Linux target: " + target + " | Release " + tag, flush=True)
     location = program_home(os.path.expanduser("~"))
     version = location / (tag + "-" + target)
     # Existing lock + protected OS state: no new installer state database.
@@ -353,18 +375,21 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         except BlockingIOError:
             raise ValueError("Another v2 standalone installer is already running")
         clean_orphaned_staging(location)
+        print("==> Resolving immutable GitHub Release and exact source commit", flush=True)
         pinned = resolve_pinned(tag, commit, target)
         archive_path = None
         try:
             with tempfile.NamedTemporaryFile(prefix=".download-", dir=location, delete=False) as f:
                 archive_path = pathlib.Path(f.name)
                 os.chmod(archive_path, 0o600)
+                print("==> Downloading verified native Agent package", flush=True)
                 data = fetch(pinned["download"], "application/octet-stream", MAX_ARCHIVE)
                 if (len(data) != pinned["size"] or hashlib.sha256(data).hexdigest() != pinned["digest"]):
                     raise ValueError("Official GitHub SHA-256 or byte length mismatch")
                 f.write(data)
                 f.flush()
                 os.fsync(f.fileno())
+            print("==> SHA-256 verified; inspecting archive and system ABI", flush=True)
             records = inspect_archive(archive_path, tag, target)
             if version.exists() or version.is_symlink():
                 verify_existing_program(archive_path, version, records)
@@ -373,6 +398,7 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         finally:
             if archive_path is not None:
                 archive_path.unlink(missing_ok=True)
+        print("==> Verified runtime staged: " + str(version), flush=True)
         binary = version / "bin/node"
         command = [str(binary), str(version / APP / "scripts/install-v2.mjs"),
                    "--endpoint", endpoint]
@@ -520,6 +546,14 @@ def no_running_programs(versions, proc_root=pathlib.Path("/proc")):
             argv = (p / "cmdline").read_bytes().split(b"\0")
             if any(arg.startswith(prefix) for arg in argv for prefix in prefixes):
                 return False
+            # On systemd Linux, the exact per-user session managers may have
+            # unreadable /proc/PID/exe and cwd. They cannot run our bundled Node
+            # as their executable. Do not mistake their EACCES for an Agent.
+            proc_name = re.search(r"^Name:\s*([^\n]+)", status, re.MULTILINE)
+            if proc_name and argv and (proc_name.group(1).strip(), argv[0]) in (
+                    ("systemd", b"/usr/lib/systemd/systemd"),
+                    ("(sd-pam)", b"(sd-pam)")):
+                continue
             for link in ("exe", "cwd"):
                 resolved = os.fsencode(os.readlink(p / link))
                 if any(resolved.startswith(prefix) for prefix in prefixes):
@@ -533,10 +567,32 @@ def no_running_programs(versions, proc_root=pathlib.Path("/proc")):
     return True
 
 
+def owned_manager_launcher(home, versions):
+    """Only an exact owned CLI symlink may be removed; foreign bin entries fail closed."""
+    home = pathlib.Path(home)
+    parent = home / ".local"
+    directory = parent / "bin"
+    for path in (parent, directory):
+        if path.is_symlink() or (path.exists() and (
+                not path.is_dir() or path.stat().st_uid != os.getuid())):
+            raise ValueError("Untrusted user-local command directory")
+    launcher = directory / "rca"
+    if launcher.is_symlink():
+        info = launcher.lstat()
+        expected = [str(v / APP / "scripts/manage-v2.py") for v in versions]
+        if info.st_uid != os.getuid() or os.readlink(launcher) not in expected:
+            raise ValueError("Foreign Agent manager launcher: refuse uninstall")
+        return launcher
+    if launcher.exists():
+        raise ValueError("Foreign command named rca: refuse uninstall")
+    return None
+
+
 def local_uninstall(home, confirm, systemctl=None, process_check=no_running_programs):
     if os.getuid() == 0 or not confirm:
         raise ValueError("Owner-only explicit local uninstall required")
     programs, versions, unit_file, unit, ids = local_inventory(home)
+    launcher = owned_manager_launcher(home, versions)
     owned = owned_unit_root(unit, versions)
     for version in versions:
         validated_owned_version(version)
@@ -554,6 +610,8 @@ def local_uninstall(home, confirm, systemctl=None, process_check=no_running_prog
         systemctl(["--user", "daemon-reload"])
     for version in versions:
         shutil.rmtree(version)
+    if launcher is not None:
+        launcher.unlink()
     return {"removed_versions": [v.name for v in versions],
             "removed_owned_v2_service": owned is not None,
             "preserved_device_ids": ids, "preserved_keys_and_sqlite": True,
