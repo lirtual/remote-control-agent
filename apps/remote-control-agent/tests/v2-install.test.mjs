@@ -399,9 +399,9 @@ test("default installer auto-classifies approved, pending and signed-revoked ide
 
 test("one installer command dispatches verified revoke to guarded local challenge", async () => {
   const src = await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "install-v2.mjs"), "utf8");
-  assert.match(src, /const state = await inspectInstallIdentity\(options, keyPath, previous\)/);
+  assert.match(src, /const state = await inspectInstallIdentity\(options, keyPath, identityPrevious\)/);
   assert.match(src, /if \(state === "revoked"\)/);
-  assert.match(src, /await rePairRevokedDevice\(options, keyPath, previous, stdin, stdout\)/);
+  assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
   assert.match(src, /Ready: v2 service active; existing identity retained/);
   assert.match(src, /ensureApprovedPermanentService\(\)/);
@@ -469,6 +469,49 @@ test("revoked install archives old identity only AFTER new challenged pairing", 
   assert.match(src, /\[keyPath, path\.join\(archive, "identity\.pem"\)\]/);
   assert.match(src, /\[stage, keyPath\]/);
   assert.doesNotMatch(src, /rm\(keyPath\)|unlink\(keyPath\)/);
+});
+
+test("#71 revoked Temporary re-pair uses an independent foreground identity, not permanent systemd", async () => {
+  const src=await readFile(path.join(path.dirname(fileURLToPath(import.meta.url)),
+    "..","scripts","install-v2.mjs"),"utf8");
+  assert.match(src, /const identityPrevious = options.grantType === "temporary" \? null : previous/);
+  assert.match(src, /await inspectInstallIdentity\(options, keyPath, identityPrevious\)/);
+  assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
+  assert.match(src, /if \(options.foreground && options.grantType !== "temporary"\)/);
+  assert.match(src, /await finishRevokedPromotion\(keyPath\);[\s\S]*?await startForeground/);
+
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rc-t02-temp-repair-"));
+  const oldId="0ded0000-0000-4000-8000-000000000041";
+  const newId="0ded0000-0000-4000-8000-000000000042";
+  const key=path.join(dir,"v2-identity.pem");
+  const stage=key+".re-pair-new";
+  let stops=0;
+  try {
+    await writeFile(key,"old-revoked-key",{mode:0o600});
+    await writeFile(key+".device-id",oldId,{mode:0o600});
+    await writeFile(stage,"new-approved-key",{mode:0o600});
+    await writeFile(stage+".device-id",newId,{mode:0o600});
+    await beginRevokedPromotion(key,oldId,newId);
+    const result=await resumeRevokedPromotion({endpoint:"https://rc.example.org/"},
+      key,null,{
+        verifyRevoked:async(_endpoint,candidate,id)=>{
+          assert.equal(id,oldId);
+          assert.equal(await readFile(candidate,"utf8"),"old-revoked-key");
+        },
+        verifyApproved:async(_endpoint,candidate)=>{
+          assert.equal(await readFile(candidate,"utf8"),"new-approved-key");
+          return newId;
+        },
+        stopService:()=>{stops++;throw Error("Temporary must never stop permanent user service");},
+      });
+    assert.equal(result.newId,newId);
+    assert.equal(stops,0);
+    assert.equal(await readFile(key+".device-id","utf8"),newId);
+    const archive=path.join(dir,"revoked-"+oldId);
+    assert.equal(await readFile(path.join(archive,"identity.pem"),"utf8"),"old-revoked-key");
+    assert.equal(await readFile(path.join(archive,"identity.pem.device-id"),"utf8"),oldId);
+    assert.equal((await stat(key)).mode&0o777,0o600);
+  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test("staged identity promotion archives the revoked key/ID and installs only the new paired identity", async () => {

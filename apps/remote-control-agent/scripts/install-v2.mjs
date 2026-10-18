@@ -1164,6 +1164,8 @@ export async function runInstaller(args, {
   }
   // WSL2 lifecycle reminder is shown once, after successful activation.
   const previous = await readOwnedUnit(unitPath);
+  // Temporary foreground identities never own the permanent user service.
+  const identityPrevious = options.grantType === "temporary" ? null : previous;
   // Ordinary repeat install must not silently accept a different Worker target.
   // Explicit --upgrade remains the separate path for intentional endpoint changes.
   if (previous && (options.action === "install" || options.action === "upgrade") &&
@@ -1208,18 +1210,21 @@ export async function runInstaller(args, {
   }
   if (options.action === "install") {
     if (await exists(promotionMarker(keyPath))) {
-      if (options.foreground || !stdin.isTTY || !stdout.isTTY) {
+      if ((options.foreground && options.grantType !== "temporary") || !stdin.isTTY || !stdout.isTTY) {
         throw new Error("Interrupted identity promotion requires a local interactive terminal.");
       }
-      const resumed = await resumeRevokedPromotion(options, keyPath, previous);
+      const resumed = await resumeRevokedPromotion(options, keyPath, identityPrevious);
       stdout.write("Verified interrupted identity promotion for " + resumed.newId + ".\n");
     } else {
-      const state = await inspectInstallIdentity(options, keyPath, previous);
+      const state = await inspectInstallIdentity(options, keyPath, identityPrevious);
       if (state === "revoked") {
         // Only an interactive installer can recover a revoked installation.
-        // Foreground mode cannot replace an identity belonging to a systemd unit.
-        if (options.foreground) throw new Error("Revoked foreground identity requires manual review.");
-        await rePairRevokedDevice(options, keyPath, previous, stdin, stdout);
+        // Do not migrate a managed permanent identity through foreground mode;
+        // a separate revoked Temporary key can be replaced after new MCP approval.
+        if (options.foreground && options.grantType !== "temporary") {
+          throw new Error("Revoked non-temporary foreground identity requires manual review.");
+        }
+        await rePairRevokedDevice(options, keyPath, identityPrevious, stdin, stdout);
       } else if (state === "approved") {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
@@ -1244,6 +1249,8 @@ export async function runInstaller(args, {
   await ownerOnly(keyPath, 0o600);
   await ownerOnly(keyPath + ".device-id", 0o600);
   if (options.foreground) {
+    // A verified Temporary promotion needs no systemd activation to finalize.
+    await finishRevokedPromotion(keyPath);
     if (portable) {
       const launcher=await installManagerLauncher(home,path.resolve(packageRoot,"..",".."));
       printPortableCliHint(stdout, launcher, home);
