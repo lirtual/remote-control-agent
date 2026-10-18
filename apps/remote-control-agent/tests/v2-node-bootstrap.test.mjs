@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, chmodSync, writeFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { gzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
@@ -13,7 +13,7 @@ const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
   target:"linux-x64-glibc",node:"v24.21.0",glibc_min:"2.34",device_protocol:2,
   receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
 function ELF(machine=62){const b=Buffer.alloc(64);b.writeUInt32LE(0x464c457f,0);b[4]=2;b[5]=1;b.writeUInt16LE(machine,18);return b;}
-function fixture({corrupt=false,symlink=false,pax=false}={}){
+function fixture({corrupt=false,symlink=false,pax=false,duplicate=false}={}){
   const dir=mkdtempSync(path.join(tmpdir(),"rca-node-unit-"));
   mkdirSync(path.join(dir,"bin"),{recursive:true,mode:0o700});
   for(const p of [APP,APP+"/src",APP+"/scripts",APP+"/.build"])
@@ -36,7 +36,8 @@ function fixture({corrupt=false,symlink=false,pax=false}={}){
   }
   if(symlink)symlinkSync("/etc/passwd",path.join(dir,APP,"scripts","bad.js"));
   const options=["--format="+(pax?"pax":"ustar"),"--owner=0","--group=0",
-    "--numeric-owner","--mode=u+rwX,go-rwx","-cf","-","bin","apps","bundle.json"];
+    "--numeric-owner","--mode=u+rwX,go-rwx",...(duplicate?["--hard-dereference"]:[]),
+    "-cf","-","bin","apps","bundle.json",...(duplicate?["bundle.json"]:[])];
   const tar=spawnSync("tar",options,{cwd:dir,maxBuffer:2048*1024});
   assert.equal(tar.status,0,tar.stderr.toString());
   const bytes=gzipSync(tar.stdout);
@@ -76,6 +77,42 @@ test("archive symlink and PAX/extended entry fail closed",()=>{
     }finally{rmSync(x.dir,{recursive:true,force:true});}
   }
 });
+test("duplicate tar members fail even with a matching outer archive SHA",()=>{
+  const x=fixture({duplicate:true});
+  try{
+    assert.throws(()=>inspectPinnedArchiveBytes(x.bytes,params(x)),/duplicate tar entries/);
+  }finally{rmSync(x.dir,{recursive:true,force:true});}
+});
+
+test("malformed archive name, mode and size fail even with a matching outer archive SHA",()=>{
+  const x=fixture();
+  try{
+    const original=gunzipSync(x.bytes);
+    const start=original.indexOf(Buffer.from("bundle.json"));
+    assert.ok(start>=0 && start%512===0,"bundle.json must be a USTAR header");
+    const variants=[
+      {name:"traversal",edit:(h)=>{h.fill(0,0,100);h.write("../escape",0,"ascii");},error:/Unsafe tar path/},
+      {name:"world-writable",edit:(h)=>{h.fill(0,100,108);h.write("0000666",100,"ascii");},error:/Invalid tar entry size or mode/},
+      {name:"oversized member",edit:(h)=>{h.fill(0,124,136);h.write("77777777777",124,"ascii");},error:/oversized or truncated/},
+    ];
+    for(const scenario of variants){
+      const tar=Buffer.from(original),header=tar.subarray(start,start+512);
+      scenario.edit(header);
+      header.fill(32,148,156);
+      let sum=0;
+      for(const v of header)sum+=v;
+      header.write(sum.toString(8).padStart(6,"0"),148,"ascii");
+      header[154]=0;header[155]=32;
+      const bytes=gzipSync(tar);
+      const digest=createHash("sha256").update(bytes).digest("hex");
+      assert.throws(
+        ()=>inspectPinnedArchiveBytes(bytes,{...params(x),expectedSha256:digest}),
+        scenario.error,scenario.name,
+      );
+    }
+  }finally{rmSync(x.dir,{recursive:true,force:true});}
+});
+
 test("corrupt tar data with self-consistent outer sha still fails inner header verification",()=>{
   const x=fixture();
   try {
