@@ -106,6 +106,45 @@ export function noOwnedAgentProcesses(versions,proc="/proc",self=process.pid){
   }
   return true;
 }
+/** Compare against the exact installer-owned portable unit before STOP.
+ * Deliberately standalone: the shipped CLI must not import the installer,
+ * whose source-only TypeScript dependencies are excluded from native assets.
+ */
+export function assertSafeUninstallUnit(unit,home,versions){
+  const lines=unit.split("\n");
+  const get=(name)=>{
+    const values=lines.filter(line=>line.startsWith(name+"="));
+    if(values.length!==1)throw Error("Ambiguous managed service field");
+    return values[0].slice(name.length+1);
+  };
+  const working=get("WorkingDirectory");
+  const version=versions.find(v=>working===path.join(v,APP));
+  if(!version)throw Error("Foreign managed service program");
+  const endpoint=get("Environment=REMOTE_CONTROL_V2_ENDPOINT");
+  let url;
+  try{url=new URL(endpoint);}catch{throw Error("Invalid managed endpoint");}
+  if(url.protocol!=="https:"||endpoint!==url.origin+"/"||url.username||
+     url.password||url.search||url.hash||url.port)throw Error("Invalid managed endpoint");
+  const key=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
+  const expected=[
+    V2MARKER,"[Unit]",
+    "Description=Remote Control v2 Agent (outbound WSS, independent of v1)",
+    "StartLimitIntervalSec=0","",
+    "[Service]","Type=simple",
+    "WorkingDirectory="+path.join(version,APP),
+    "Environment=REMOTE_CONTROL_V2_ENDPOINT="+endpoint,
+    "Environment=REMOTE_CONTROL_V2_KEY_PATH="+key,
+    "UMask=0077",
+    "ExecStartPre=/usr/bin/test -r "+key,
+    "ExecStartPre=/usr/bin/test -r "+key+".device-id",
+    "ExecStartPre=/usr/bin/test -x "+path.join(version,APP,".build/session-supervisor"),
+    "ExecStart="+path.join(version,"bin/node")+" "+path.join(version,APP,"src/v2-main.js"),
+    "Restart=on-failure","RestartSec=15s","TimeoutStopSec=15s","",
+    "[Install]","WantedBy=default.target","",
+  ].join("\n");
+  if(unit!==expected)throw Error("Managed service differs from canonical installer template");
+}
+
 export function planLocalUninstall(state,{home,scan=noOwnedAgentProcesses}={}){
   if(process.getuid()===0)throw Error("Root cannot uninstall this Agent");
   if(!home||!path.isAbsolute(home))throw Error("Missing trusted home");
@@ -116,7 +155,12 @@ export function planLocalUninstall(state,{home,scan=noOwnedAgentProcesses}={}){
   for(const version of versions)verifyOwnedProgram(version);
   const launcher=verifyOwnedLauncher(home,versions);
   // Inventory already validated exact WorkingDirectory and ExecStart.
-  if(state.unit&&!state.unit.startsWith(V2MARKER+"\n"))throw Error("Foreign unit");
+  if(state.unit){
+    // Uninstall must use the SAME exact installer-owned unit validation as
+    // interrupted-upgrade recovery. A matching marker and ExecStart alone do
+    // not exclude foreign ExecStopPost/ExecStartPost or identity overrides.
+    assertSafeUninstallUnit(state.unit,home,versions);
+  }
   if(!state.unit&&!scan(versions))throw Error("Running or uncertain Agent process");
   const unitPath=state.unit?path.join(home,".config/systemd/user",UNIT):null;
   if(unitPath){

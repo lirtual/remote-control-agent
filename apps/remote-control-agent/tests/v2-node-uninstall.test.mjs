@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
   readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { renderV2Service } from "../scripts/install-v2.mjs";
 import { executeLocalUninstall, planLocalUninstall, noOwnedAgentProcesses }
   from "../scripts/lifecycle-v2.mjs";
 
@@ -33,7 +34,12 @@ function testFixture({withUnit=true,withLauncher=true}={}){
   const receipts=path.join(dir(".local/state/mcp-workers/remote-control-agent"),"operation-receipts.sqlite");
   writeFileSync(receipts,"RECEIPTS_UNTOUCHED",{mode:0o600});
   const unitPath=path.join(dir(".config/systemd/user"),"remote-control-v2-agent.service");
-  const unit=withUnit?"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n":"";
+  const unit=withUnit?renderV2Service({
+    node:path.join(program,"bin/node"),home,repoRoot:program,
+    endpoint:"https://rc.example.org/",
+    keyPath:path.join(home,base,"v2-identity.pem"),
+    entryExt:"js",
+  }):"";
   if(withUnit)writeFileSync(unitPath,unit,{mode:0o600});
   const launcher=path.join(dir(".local/bin"),"rca");
   if(withLauncher)symlinkSync(path.join(program,APP,"scripts/manage-v2.mjs"),launcher);
@@ -158,4 +164,25 @@ test("unit changed after reviewed plan cannot be stopped or unlinked",()=>{
     assert.ok(existsSync(f.unitPath));
     assert.ok(existsSync(f.program));
   }finally{cleanup(f);}
+});
+
+test("#78 reject foreign systemd lifecycle directives BEFORE v2 uninstall stop",()=>{
+  for(const directive of [
+    "ExecStopPost=/usr/bin/touch /tmp/foreign-effect",
+    "ExecStartPost=/usr/bin/true",
+    "Environment=REMOTE_CONTROL_V2_KEY_PATH=/tmp/foreign.pem",
+  ]){
+    const f=testFixture();
+    try{
+      const injected=f.state.unit.replace("RestartSec=15s",directive+"\nRestartSec=15s");
+      writeFileSync(f.unitPath,injected,{mode:0o600});
+      const state={...f.state,unit:injected};
+      assert.throws(()=>planLocalUninstall(state,{home:f.home}),
+        /canonical installer template|ambiguous endpoint|identity/);
+      assert.equal(readFileSync(f.unitPath,"utf8"),injected);
+      assert.ok(existsSync(f.program));
+      assert.equal(readFileSync(f.identity,"utf8"),DEVICE);
+      assert.equal(readFileSync(f.receipts,"utf8"),"RECEIPTS_UNTOUCHED");
+    }finally{cleanup(f);}
+  }
 });
