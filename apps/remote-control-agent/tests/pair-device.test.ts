@@ -177,7 +177,8 @@ test("#76 OS SIGKILL after first pending request preserves private key for repea
       process.env.RC76_TEST_KEY,async(_url,init)=>{
         const request=JSON.parse(init.body);
         process.stdout.write("PENDING_ACCEPTED_NO_REPLY:"+request.public_key+"\\n");
-        await new Promise(()=>{});
+        // Model a real in-flight HTTP request, which holds the event loop open until SIGKILL.
+        await new Promise(()=>{ setInterval(()=>{},60_000); });
         return new Response(null,{status:202});
       });
   `;
