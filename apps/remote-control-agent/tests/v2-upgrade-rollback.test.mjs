@@ -260,6 +260,27 @@ test("#77 successful local upgrade writes new v2 unit without identity reset", a
   });
 });
 
+test("#77 cloud WSS reachability is not a local activation gate or a rollback trigger",async()=>{
+  await withFakeUserService(async ({unitPath,from,to,logs,activeOk})=>{
+    // This intentionally unreachable endpoint remains IDENTICAL across versions.
+    // A successful local systemd unit transition MUST NOT fabricate cloud
+    // authorization/signed WSS or revert merely because cloud cannot be reached.
+    assert.match(from,/https:\/\/rc\.example\.org\//);
+    assert.match(to,/https:\/\/rc\.example\.org\//);
+    await writeFile(unitPath,from,{mode:0o600});
+    await writeFile(activeOk,"locally-active; remote WSS unreachable",{mode:0o600});
+    await installUnit(unitPath,to,from);
+    assert.equal(await readFile(unitPath,"utf8"),to);
+    await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
+    const calls=(await readFile(logs,"utf8")).trim().split("\n");
+    assert.equal(calls.filter(line=>line.includes("restart "+UNIT)).length,1);
+    assert.ok(calls.some(line=>line.includes("is-active --quiet "+UNIT)));
+    assert.equal(calls.some(line=>line.includes("disable --now")),false);
+    // This is strictly a local-only verdict; no network/WSS access is
+    // performed or claimed, and the previous executable remains available.
+  });
+});
+
 test("#77 failed first activation deletes only the newly installed v2 unit", async()=>{
   await withFakeUserService(async ({unitPath,to,logs})=>{
     await assert.rejects(installUnit(unitPath,to,null), /could not be activated/);
