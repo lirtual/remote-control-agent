@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createPrivateKey, createPublicKey } from "node:crypto";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -161,4 +164,61 @@ test("#76 lost initial enrollment reply then owner approval recovers original si
     assert.equal(challengeCount,1);
     assert.equal(recoveryCount,1);
   }finally{await rm(home,{recursive:true,force:true});}
+});
+
+test("#76 OS SIGKILL after first pending request preserves private key for repeat install", async()=>{
+  const home=await mkdtemp(path.join(os.tmpdir(),"rc-v2-sigkill-pending-"));
+  const key=path.join(home,"pending.pem");
+  const pairUrl=pathToFileURL(path.resolve(path.dirname(fileURLToPath(import.meta.url)),
+    "../src/pair-device.ts")).href;
+  const childCode=`
+    import { beginDeviceEnrollment } from ${JSON.stringify(pairUrl)};
+    await beginDeviceEnrollment("sigkill-pending","https://rc.example.org/",
+      process.env.RC76_TEST_KEY,async(_url,init)=>{
+        const request=JSON.parse(init.body);
+        process.stdout.write("PENDING_ACCEPTED_NO_REPLY:"+request.public_key+"\\n");
+        await new Promise(()=>{});
+        return new Response(null,{status:202});
+      });
+  `;
+  const child=spawn(process.execPath,["--experimental-strip-types","--input-type=module",
+    "--eval",childCode],{
+    stdio:["ignore","pipe","pipe"],
+    env:{...process.env,RC76_TEST_KEY:key},
+  });
+  const exited=once(child,"exit");
+  try{
+    let timer: NodeJS.Timeout | undefined;
+    const ready=await Promise.race([
+      once(child.stdout!,"data").then(([chunk])=>String(chunk)),
+      exited.then(([code,signal])=>{throw Error("Pending child exited early: "+code+"/"+signal);}),
+      new Promise<never>((_resolve,reject)=>{
+        timer=setTimeout(()=>reject(Error("Pending child did not reach accepted request")),10_000);
+      }),
+    ]).finally(()=>{if(timer)clearTimeout(timer);});
+    assert.match(ready,/PENDING_ACCEPTED_NO_REPLY:/);
+    const originalPublic=ready.trim().split("PENDING_ACCEPTED_NO_REPLY:").at(1) ?? "";
+    assert.ok(originalPublic.length>30);
+    const originalPem=await readFile(key,"utf8");
+    assert.equal((await stat(key)).mode&0o777,0o600);
+    assert.equal(child.kill("SIGKILL"),true);
+    const [code,signal]=await exited;
+    assert.equal(code,null);
+    assert.equal(signal,"SIGKILL");
+    const retry=await beginDeviceEnrollment("sigkill-pending","https://rc.example.org/",
+      key,async(_url,init)=>{
+        const material=JSON.parse(String(init?.body)) as {public_key:string};
+        assert.equal(material.public_key,originalPublic);
+        return new Response(null,{status:202});
+      },true);
+    assert.match(retry.code,/^[A-Z2-7]{10}$/);
+    assert.equal(await readFile(key,"utf8"),originalPem);
+    await assert.rejects(readFile(key+".device-id"),{code:"ENOENT"});
+  }finally{
+    if(child.exitCode===null && child.signalCode===null){
+      child.kill("SIGKILL");
+      await exited.catch(()=>{});
+    }
+    await rm(home,{recursive:true,force:true});
+  }
 });
