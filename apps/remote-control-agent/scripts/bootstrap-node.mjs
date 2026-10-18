@@ -228,13 +228,17 @@ export function stageOrVerifyPinnedProgram(bytes,expected,parent,versionName){
 
 /** Immutable Worker-origin CLI handoff. Never mutates identity itself. */
 export function parseNodeBootstrapArgs(args){
-  const result={locked:false};
+  const result={locked:false,upgrade:false};
   const flags=new Set(["--archive","--tag","--commit","--sha256","--endpoint"]);
   for(let i=0;i<args.length;i++){
     const flag=args[i];
     if(flag==="--lock-held"){
       if(result.locked)throw Error("Duplicate lock marker");
       result.locked=true;continue;
+    }
+    if(flag==="--upgrade"){
+      if(result.upgrade)throw Error("Duplicate explicit upgrade mode");
+      result.upgrade=true;continue;
     }
     if(!flags.has(flag)||!args[i+1]||result[flag.slice(2)]!==undefined)
       throw Error("Missing or duplicate immutable installer parameter");
@@ -253,7 +257,7 @@ export function parseNodeBootstrapArgs(args){
     (process.arch==="x64"?"linux-x64-glibc":
       process.arch==="arm64"?"linux-arm64-glibc":null):null;
   if(!target||process.getuid()===0)throw Error("Unsupported host or root user");
-  return Object.freeze({archive,tag,commit,sha256,endpoint,target,locked:result.locked});
+  return Object.freeze({archive,tag,commit,sha256,endpoint,target,locked:result.locked,upgrade:result.upgrade});
 }
 function verifyOwnedPath(p,{directory=false,relaxed=false}={}){
   const st=lstatSync(p);
@@ -361,7 +365,8 @@ export function executeNodeBootstrap(options,{
       "-n","-E","75","-F",lock,process.execPath,bootstrap,
       "--archive",options.archive,"--tag",options.tag,
       "--commit",options.commit,"--sha256",options.sha256,
-      "--endpoint",options.endpoint,"--lock-held"
+      "--endpoint",options.endpoint,"--lock-held",
+      ...(options.upgrade?["--upgrade"]:[])
     ],{stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""}});
     if(processResult.error||processResult.signal||processResult.status!==0)
       throw Error("Exclusive v2 installation could not complete");
@@ -371,7 +376,7 @@ export function executeNodeBootstrap(options,{
   // permission gates, signed device registration and systemd rollback.
   // RC_V2_INSTALL_FLOCKED prevents relocking the SAME already-held kernel flock.
   const child=invoke(prepared.bin,[prepared.install,
-    "--endpoint",options.endpoint],{stdio:"inherit",env:{
+    "--endpoint",options.endpoint,...(options.upgrade?["--upgrade"]:[])],{stdio:"inherit",env:{
     ...process.env,RC_V2_INSTALL_FLOCKED:"1",RC_AGENT_NO_POST_START:"1",
     NODE_OPTIONS:"",NODE_PATH:"",
   }});

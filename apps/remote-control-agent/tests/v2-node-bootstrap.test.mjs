@@ -262,6 +262,10 @@ test("Node bootstrap pins only clean Worker origin and strict version+commit",()
     const argv=["--archive",f.archive,"--tag","v0.1.2","--commit","a".repeat(40),
       "--sha256",f.x.sha,"--endpoint",f.opts.endpoint];
     assert.equal(parseNodeBootstrapArgs(argv).target,nativeTarget);
+    assert.equal(parseNodeBootstrapArgs(argv).upgrade,false);
+    assert.equal(parseNodeBootstrapArgs([...argv,"--upgrade"]).upgrade,true);
+    assert.throws(()=>parseNodeBootstrapArgs([...argv,"--upgrade","--upgrade"]),/Duplicate/);
+    assert.throws(()=>parseNodeBootstrapArgs([...argv,"--upgrade=true"]));
     for(const evil of [
       argv.concat("--endpoint","https://evil.example/"),
       argv.slice(0,-1).concat("https://evil.example/?x=1"),
@@ -318,6 +322,26 @@ test("locked bootstrap stages once, reuses identical archive, and passes single 
     assert.equal(events[0].opts.env.RC_V2_INSTALL_FLOCKED,"1");
     const programs=path.join(f.home,".local/share/mcp-workers/remote-control/programs");
     assert.deepEqual(readdirSync(programs),["v0.1.2-"+nativeTarget]);
+  }finally{f.cleanup();}
+});
+
+test("only an explicit upgrade flag passes through the single existing flock and installer",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const upgraded={...f.opts,upgrade:true};
+    const staged=path.join(f.home,"bootstrap.mjs");
+    writeFileSync(staged,"safe local bootstrap",{mode:0o600});
+    const invocations=[];
+    assert.equal(executeNodeBootstrap(upgraded,{home:f.home,
+      stdin:{isTTY:true},stdout:{isTTY:true},bootstrap:staged,
+      invoke:(cmd,args,opts)=>{invocations.push({cmd,args,opts});return {status:0};}}),0);
+    assert.ok(invocations[0].args.includes("--lock-held"));
+    assert.deepEqual(invocations[0].args.slice(-2),["--lock-held","--upgrade"]);
+    assert.equal(executeNodeBootstrap({...upgraded,locked:true},{home:f.home,
+      stdin:{isTTY:true},stdout:{isTTY:true},
+      invoke:(cmd,args,opts)=>{invocations.push({cmd,args,opts});return {status:0};}}),0);
+    assert.deepEqual(invocations[1].args.slice(-3),["--endpoint",f.opts.endpoint,"--upgrade"]);
+    assert.equal(invocations[1].opts.env.RC_V2_INSTALL_FLOCKED,"1");
   }finally{f.cleanup();}
 });
 
