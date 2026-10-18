@@ -3,7 +3,7 @@
  * calls, create a command connection, or install a running background service.
  */
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, unlink } from "node:fs/promises";
+import { lstat, mkdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,9 +73,11 @@ export async function beginDeviceEnrollment(
       .digest("hex").slice(0, 24);
     return { code: material.code, fingerprint, expiresAt: material.request.issued_at + 600_000, keyPath };
   } catch (error) {
-    // Never unlink the original key on a retry or network ambiguity. It may
-    // already be authorized even if the local .device-id is still missing.
-    if (!reuseExistingKey) await unlink(keyPath).catch(() => {});
+    // Keep a freshly generated owner-only key too: a 202 reply can be lost
+    // after the server records a pending request. Removing it would force a
+    // new Ed25519 identity on retry, severing the original pending approval.
+    // A definitive non-202 rejection is still NOT approval; retries must
+    // independently prove the same key and never create a second grant.
     if (error instanceof PendingIdentityConflictError) throw error;
     throw new Error("Pending enrollment could not be completed.");
   }
