@@ -158,5 +158,11 @@ jobs:
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $output 'candidate.zip') -CompressionLevel Optimal
           $zip = Join-Path $output 'candidate.zip'
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-reopened'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extracted -ErrorAction Stop
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Reopened archive file inventory failed' }
+          & (Join-Path $extracted 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Portable rca launcher failed' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 

@@ -42,6 +42,16 @@ For native Windows file operations use drive-absolute paths such as
 paths, ADS and URL schemes are rejected. This preview enables only the
 existing bounded read/list/search tools; writes and Shell remain disabled.
 
+## Unpublished portable candidate
+
+The Windows CI constructs an offline preview containing `bin/node.exe`, the reviewed
+JS runtime, protected identity ACL helper, and a convenient `rca.cmd` launcher.
+In a reviewed/unpacked candidate directory, `.ca.cmd status` works
+without system-wide Node, Git or npm. `.ca.cmd pair --endpoint HTTPS_ORIGIN/`
+and `.ca.cmd run --endpoint HTTPS_ORIGIN/` are **foreground-only**
+development commands. The CI reopens the ZIP, verifies its file inventory
+and runs the bundled manager. No public Windows Release exists yet.
+
 ## Still to implement before production
 
 - Immutable Windows x64 bundled-Node Release and SHA-256 verified one-command

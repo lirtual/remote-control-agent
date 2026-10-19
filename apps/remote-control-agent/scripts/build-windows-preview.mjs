@@ -86,6 +86,11 @@ export function buildWindowsPreview(args) {
     writeFileSync(path.join(stage, name), content, { mode: 0o600 });
     hashes[name] = digest(Buffer.from(content));
   }
+  // The launcher uses only the bundled Node, not a global PATH or npm.
+  const launcherBytes = Buffer.from(readFileSync(path.join(root, "scripts/windows-rca.cmd"), "utf8")
+    .replace(/\r?\n/g, "\r\n"));
+  writeFileSync(path.join(stage, "rca.cmd"), launcherBytes, { mode: 0o600 });
+  hashes["rca.cmd"] = digest(launcherBytes);
   const scripts = ["windows-private-store.ps1"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
