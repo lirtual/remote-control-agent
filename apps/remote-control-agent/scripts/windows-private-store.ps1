@@ -2,8 +2,9 @@
 # PowerShell 5.1 on Windows. No elevation, scheduled task, service or cloud operation.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('Init','Check')][string]$Action,
-  [Parameter(Mandatory=$true)][string]$Directory
+  [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
+  [Parameter(Mandatory=$true)][string]$Directory,
+  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -77,6 +78,28 @@ if ($Action -eq 'Init') {
 } else {
   Assert-PrivateAcl $parent $true
   Assert-PrivateAcl $expected $true
+}
+if ($Action -eq 'Seal') {
+  # Only after a caller proved exclusive create with flag 'wx'. Never seal
+  # arbitrary files or rotate/correct an existing identity silently.
+  if (-not $FileName) { throw 'A newly created identity filename is required' }
+  $file = [IO.Path]::Combine($expected, $FileName)
+  $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Identity is not a regular local file'
+  }
+  $fileAcl = [Security.AccessControl.FileSecurity]::new()
+  $fileAcl.SetOwner($userSid)
+  $fileAcl.SetAccessRuleProtection($true, $false)
+  foreach ($sid in @($userSid, $systemSid)) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      $sid, [Security.AccessControl.FileSystemRights]::FullControl,
+      [Security.AccessControl.AccessControlType]::Allow)
+    $fileAcl.AddAccessRule($rule)
+  }
+  [IO.File]::SetAccessControl($file, $fileAcl)
+  Assert-PrivateAcl $file $false
+  return
 }
 foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id')) {
   $file = [IO.Path]::Combine($expected, $name)

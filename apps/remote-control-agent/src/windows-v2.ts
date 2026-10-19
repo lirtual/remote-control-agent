@@ -63,14 +63,14 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check", directory: string): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
   const powershell = path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
   const result = spawnSync(powershell, [
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", SCRIPT,
-    "-Action", action, "-Directory", directory,
+    "-Action", action, "-Directory", directory, ...(fileName ? ["-FileName", fileName] : []),
   ], { encoding: "utf8", windowsHide: true, timeout: 12_000, stdio: "pipe" });
   // Do not echo ACL output (which can expose account names or profile paths).
   if (result.error || result.status !== 0) throw Error("Windows private identity ACL check refused.");
@@ -122,6 +122,9 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       // The private directory already has a protected DACL. Exclusive create
       // prevents concurrent windows from overwriting a device's private key.
       await saveNewPrivateKey(keyPath, material.privateKeyPem);
+      // An exclusive newly created file may still inherit an elevated Windows
+      // default owner. Seal this exact file before any network pairing request.
+      assertPrivateStore("Seal", directory, "v2-identity.pem");
       assertPrivateStore("Check", directory);
     }
     const response = await fetch(new URL("/agent/pair/start", options.endpoint), {
@@ -144,6 +147,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     // Recovery requires server-signed proof of the existing private key.
     // Missing local ID is never evidence to generate a replacement key.
     await recoverDeviceId(options.endpoint!, keyPath);
+    assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
     assertPrivateStore("Check", directory);
   }
   const controller = new AbortController();
