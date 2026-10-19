@@ -19,7 +19,12 @@ test("Windows native store starts with a protected current-user ACL", { skip:
       "Bypass", "-File", script, "-Action", action, "-Directory", target],
       { encoding: "utf8", windowsHide: true, timeout: 15_000 });
   }
-  assert.equal(run("Init", root).status, 0, "Current-user ACL initialized");
+  const init = run("Init", root);
+  if (init.status !== 0) {
+    // CI fixture only. No identity key, URL, user token or store contents.
+    const diagnostic = String(init.stderr || "").slice(0, 1600);
+    assert.fail("Current-user ACL initialized: " + diagnostic);
+  }
   assert.equal(run("Check", root).status, 0, "ACL recheck");
   assert.notEqual(run("Check", path.win32.join(os.tmpdir(), "wrong")).status, 0,
     "Outside-Locals AppData targets must be rejected");
