@@ -1,6 +1,10 @@
 # Remote Control Agent
 
-Standalone **Linux/WSL2** Remote Control Agent for x86_64 and ARM64. This is the **public source and GitHub Release repository**; the Cloudflare MCP Worker, owner-scoped Durable Object, Portal authorization and production configuration stay in the private `lirtual/mcp-workers` repository.
+Standalone Remote Control Agent: **released Linux/WSL2** support for x86_64 and ARM64, and **source-only native Windows preview** under development. This is the **public source and GitHub Release repository**; the Cloudflare MCP Worker, owner-scoped Durable Object, Portal authorization and production configuration stay in the private `lirtual/mcp-workers` repository.
+
+## Native Windows development preview (not released)
+
+A Windows x64 **foreground-only read-only** implementation has been proposed in [Draft PR #7](https://github.com/lirtual/remote-control-agent/pull/7). It shares the existing one-code approved pairing and signed WSS device protocol, with an independently ACL-protected Windows identity. It **requires Node 24 and a reviewed source checkout**, does not install a service or expose Shell/writes, and has **not passed live Windows 11 pairing acceptance**. [Development instructions](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md) · [Windows acceptance #5](https://github.com/lirtual/remote-control-agent/issues/5). Do not use the Linux `install.sh` on native Windows.
 
 ## Published test prerelease
 
