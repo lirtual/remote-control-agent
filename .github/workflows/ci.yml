@@ -137,3 +137,26 @@ jobs:
         run: |
           Set-Location apps/remote-control-agent
           node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-acl.test.mjs
+      - name: Stage native Windows x64 offline candidate (no publishing)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # SHA-256 from official Node.js v24.21.0 signed release checksums.
+          $official = 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32'
+          $nodeBinary = (Get-Command node.exe).Source
+          $digest = (Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne $official) { throw 'Pinned Node binary SHA-256 mismatch' }
+          $output = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --out $output
+          if ($LASTEXITCODE -ne 0) { throw 'Native bundle build failed' }
+          $stage = Join-Path $output 'remote-control-agent-v0.0.0-ci-windows-x64'
+          & (Join-Path $stage 'bin/node.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled native Node cannot run' }
+          $entry = Join-Path $stage 'apps/remote-control-agent/src/windows-v2.js'
+          & (Join-Path $stage 'bin/node.exe') $entry status
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows Agent local status failed' }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $output 'candidate.zip') -CompressionLevel Optimal
+          $zip = Join-Path $output 'candidate.zip'
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
+
