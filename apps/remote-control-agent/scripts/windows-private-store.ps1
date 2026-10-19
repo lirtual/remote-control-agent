@@ -24,7 +24,8 @@ function Assert-PrivateAcl([string]$file, [bool]$directory) {
   if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Agent store contains a reparse point' }
   if ($directory -and -not $item.PSIsContainer) { throw 'Expected a private directory' }
   if (-not $directory -and $item.PSIsContainer) { throw 'Expected an identity file' }
-  $acl = Get-Acl -LiteralPath $file -ErrorAction Stop
+  # Native .NET API works when the PowerShell.Security module cannot autoload.
+  $acl = if ($directory) { [IO.Directory]::GetAccessControl($file) } else { [IO.File]::GetAccessControl($file) }
   if ($directory -and -not $acl.AreAccessRulesProtected) { throw 'Private directory inherits broad ACL' }
   $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
   if ($owner -ne $userSid.Value) { throw 'Private path owner is not the current user' }
