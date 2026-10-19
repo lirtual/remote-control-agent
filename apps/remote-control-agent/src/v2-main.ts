@@ -30,10 +30,9 @@ if (!endpoint || process.platform !== "linux") {
       process.on(name, () => controller.abort());
     }
     let rejected = false;
+    // A successfully paired device exposes file, Shell and session tools.
+    // Signed WSS identity, device revocation and durable receipts still apply.
     await maintainAuthenticatedDeviceSession(endpoint, keyPath, controller.signal, {
-      readOnly: true,
-      writeFile: false,
-      shell: false,
       onState: state => {
         log(state);
         if (state === "rejected") rejected = true;
