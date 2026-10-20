@@ -22,11 +22,10 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 export type BrowserCliRunner = (args: readonly string[], timeoutMs: number) => Promise<string>;
 
 export interface BrowserCliOptions {
-  /** Absolute installed, trusted agent-browser package entrypoint, never from a tool call. */
-  entrypoint: string;
+  /** Absolute pinned native agent-browser executable, never supplied by a tool call. */
+  nativeExecutable: string;
   /** Existing Agent-private directory, never selected by the remote caller. */
   agentStore: string;
-  nodeExecutable?: string;
   /** Optional locally configured Chrome/Chromium executable, never a tool argument. */
   browserExecutable?: string;
   /** Test-only runner; production always uses shell:false execFile. */
@@ -75,11 +74,8 @@ export class BrowserCliAdapter {
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: BrowserCliOptions) {
-    if (!path.isAbsolute(options.entrypoint) || !path.isAbsolute(options.agentStore)) {
+    if (!path.isAbsolute(options.nativeExecutable) || !path.isAbsolute(options.agentStore)) {
       throw Error("Trusted absolute local browser paths are required.");
-    }
-    if (options.nodeExecutable !== undefined && !path.isAbsolute(options.nodeExecutable)) {
-      throw Error("Trusted absolute Node executable is required.");
     }
     if (options.browserExecutable !== undefined && !path.isAbsolute(options.browserExecutable)) {
       throw Error("Trusted absolute browser executable is required.");
@@ -89,8 +85,8 @@ export class BrowserCliAdapter {
     this.idleMs = options.idleMsForTests ?? NORMAL_IDLE_MS;
     this.runner = options.runnerForTests ?? (async (args, timeoutMs) => {
       const { stdout } = await executeFile(
-        options.nodeExecutable ?? process.execPath,
-        [options.entrypoint, ...args],
+        options.nativeExecutable,
+        [...args],
         {
           shell: false, windowsHide: true, timeout: timeoutMs,
           maxBuffer: MAX_CLI_OUTPUT, encoding: "utf8",

@@ -198,6 +198,60 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
+      - name: Verify pinned native browser in separate offline Windows candidate (no install)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:RUNNER_TEMP 'rca-browser-source'
+          New-Item -ItemType Directory -Path $source -Force | Out-Null
+          Push-Location $source
+          try {
+            $pkg = (& npm.cmd pack agent-browser@0.39.1 --ignore-scripts --silent | Select-Object -Last 1).Trim()
+            if ($LASTEXITCODE -ne 0 -or $pkg -cne 'agent-browser-0.39.1.tgz') { throw 'Unexpected npm package name' }
+            $tarball = Join-Path $source $pkg
+            $digest = (Get-FileHash -LiteralPath $tarball -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($digest -cne '9efb4de1a5406f1b32dfcca2890e272053caace3369b6294d47240384e0a4732') {
+              throw 'Pinned agent-browser npm tarball SHA-256 mismatch'
+            }
+            & tar.exe -xzf $tarball 'package/bin/agent-browser-win32-x64.exe'
+            if ($LASTEXITCODE -ne 0) { throw 'Native browser extraction failed' }
+            $native = Join-Path $source 'package/bin/agent-browser-win32-x64.exe'
+            $nativeSha = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($nativeSha -cne 'af1ff5f2afd5c187fb50ac3bbc1e7114baadc180d67cef63f644af9031be5049') {
+              throw 'Pinned Windows agent-browser native SHA-256 mismatch'
+            }
+            $nativeVersion = & $native --version
+            if ($LASTEXITCODE -ne 0 -or $nativeVersion -cne 'agent-browser 0.39.1') {
+              throw 'Direct native browser binary is not runnable'
+            }
+          } finally { Pop-Location }
+          # This separate optional candidate never replaces the reviewed full-tools package.
+          $official = 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32'
+          $nodeBinary = (Get-Command node.exe).Source
+          $nodeSha = (Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($nodeSha -cne $official) { throw 'Pinned Agent Node binary changed' }
+          $out = Join-Path $env:RUNNER_TEMP 'rca-browser-optional-bundle'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out --browser-bin $native
+          if ($LASTEXITCODE -ne 0) { throw 'Optional native browser candidate refused' }
+          $stage = Join-Path $out 'remote-control-agent-v0.0.0-ci-windows-x64'
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Optional candidate failed strict manifest inventory' }
+          $installedNative = Join-Path $stage 'bin/agent-browser.exe'
+          if ((& $installedNative --version) -cne 'agent-browser 0.39.1' -or $LASTEXITCODE -ne 0) {
+            throw 'Bundled native browser cannot start directly'
+          }
+          # A changed native executable cannot authorize itself by editing manifest hashes.
+          $original = [IO.File]::ReadAllBytes($installedNative)
+          try {
+            $tampered = [byte[]]$original.Clone()
+            $tampered[64] = $tampered[64] -bxor 1
+            [IO.File]::WriteAllBytes($installedNative,$tampered)
+            $denied = Start-Process -FilePath $nodeBinary -ArgumentList @('apps/remote-control-agent/scripts/verify-windows-preview.mjs',$stage) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $out 'expected-tamper-rejection.txt')
+            if ($denied.ExitCode -eq 0) { throw 'Modified native browser artifact was accepted' }
+          } finally { [IO.File]::WriteAllBytes($installedNative,$original) }
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Restored native browser bundle not verified' }
+          Write-Output 'Pinned native browser source, optional bundle and tamper rejection passed; no installation, publishing or deployment.'
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
         run: |

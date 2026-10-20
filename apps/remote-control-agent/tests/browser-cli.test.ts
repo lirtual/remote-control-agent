@@ -16,7 +16,7 @@ async function fixture(
     return impl(args);
   };
   const adapter = new BrowserCliAdapter({
-    entrypoint: path.join(store, "package", "bin", "agent-browser.js"),
+    nativeExecutable: path.join(store, "bin", "agent-browser-win32-x64.exe"),
     agentStore: store, runnerForTests: runner, idleMsForTests,
   });
   return { adapter, commands, store, cleanup: () => rm(store, { recursive: true, force: true }) };
@@ -145,12 +145,12 @@ test("rejects concurrent operations, never allowing overlapping CLI commands", a
 });
 
 test("does not accept relative executable/store paths", () => {
-  assert.throws(() => new BrowserCliAdapter({ entrypoint: "npx", agentStore: "/tmp" }));
-  assert.throws(() => new BrowserCliAdapter({ entrypoint: "/trusted/cli.js", agentStore: "./profile" }));
+  assert.throws(() => new BrowserCliAdapter({ nativeExecutable: "npx", agentStore: "/tmp" }));
+  assert.throws(() => new BrowserCliAdapter({ nativeExecutable: "/trusted/agent-browser", agentStore: "./profile" }));
   assert.throws(() => new BrowserCliAdapter({
-    entrypoint: "/trusted/cli.js", agentStore: "/tmp", nodeExecutable: "node",
+    nativeExecutable: "/trusted/agent-browser", agentStore: "/tmp", browserExecutable: "chrome",
   }));
   assert.throws(() => new BrowserCliAdapter({
-    entrypoint: "/trusted/cli.js", agentStore: "/tmp", browserExecutable: "chrome",
+    nativeExecutable: "/trusted/agent-browser", agentStore: "/tmp", browserExecutable: "chrome",
   }));
 });

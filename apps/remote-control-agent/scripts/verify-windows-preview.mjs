@@ -8,6 +8,7 @@ import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const PINNED_BROWSER_NATIVE_SHA256 = "af1ff5f2afd5c187fb50ac3bbc1e7114baadc180d67cef63f644af9031be5049";
 export function inspectWindowsPreview(root) {
   if (process.platform !== "win32" || !path.isAbsolute(root))
     throw Error("Native Windows directory required.");
@@ -22,7 +23,21 @@ export function inspectWindowsPreview(root) {
       !manifest.hashes) {
     throw Error("Untrusted native Windows bundle manifest.");
   }
+  // Browser binary is optional for existing full-tools packages, but a
+  // browser-enabled package MUST match the exact independently pinned SHA.
+  const browser = manifest.browser_native;
+  if (browser !== undefined && (
+      !browser || typeof browser !== "object" || Array.isArray(browser) ||
+      Object.keys(browser).sort().join(",") !== "name,sha256,version" ||
+      browser.name !== "agent-browser" || browser.version !== "0.39.1" ||
+      browser.sha256 !== PINNED_BROWSER_NATIVE_SHA256)) {
+    throw Error("Unreviewed native browser backend manifest.");
+  }
   const expected = new Map(Object.entries(manifest.hashes));
+  if ((browser !== undefined) !== expected.has("bin/agent-browser.exe") ||
+      (browser !== undefined && expected.get("bin/agent-browser.exe") !== PINNED_BROWSER_NATIVE_SHA256)) {
+    throw Error("Browser native executable missing or mismatched.");
+  }
   if (!expected.has("bin/node.exe") ||
       !expected.has("bin/rca-background.exe") ||
       !expected.has("rca.cmd") ||
@@ -30,7 +45,7 @@ export function inspectWindowsPreview(root) {
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
-      expected.size < 9 || expected.size > 41 ||
+      expected.size < 9 || expected.size > (browser ? 42 : 41) ||
       expected.get("bin/node.exe") !==
         "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32") {
     throw Error("Incomplete or unknown Windows preview files.");
@@ -44,7 +59,7 @@ export function inspectWindowsPreview(root) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
-      if (!/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
+      if (!/^(?:bin\/(?:node\.exe|rca-background\.exe|agent-browser\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
           seen.has(name) || !expected.has(name) ||
           typeof expected.get(name) !== "string" ||
           !/^[a-f0-9]{64}$/.test(expected.get(name))) {
