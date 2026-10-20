@@ -47,6 +47,14 @@ function Check-Existing {
       [string]$task.Principal.RunLevel -ne 'Limited' -or
       [string]$task.Principal.LogonType -notin @('Interactive','InteractiveToken') -or
       $task.Actions.Count -ne 1 -or $task.Triggers.Count -ne 1) {
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+      # Only structural, non-identifying enum/count diagnostics in isolated CI.
+      throw ('CI task metadata: sid_or_name=' + [string]($task.Principal.UserId -in @($sid,$identity.Name)) +
+        ', runlevel=' + [string]$task.Principal.RunLevel +
+        ', logontype=' + [string]$task.Principal.LogonType +
+        ', actions=' + [string]@($task.Actions).Count +
+        ', triggers=' + [string]@($task.Triggers).Count)
+    }
     throw 'Task identity, permissions or trigger changed'
   }
   $actionInfo = $task.Actions[0]
