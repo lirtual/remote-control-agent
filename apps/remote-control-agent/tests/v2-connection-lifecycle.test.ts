@@ -7,6 +7,7 @@ import test from "node:test";
 import { newEnrollment } from "../src/v2-enrollment.ts";
 import { maintainAuthenticatedDeviceSession, monitorDeviceSocket } from "../src/v2-connection-lifecycle.ts";
 import { createAgentExecutionEngine } from "../src/execution.ts";
+import type { BrowserBackend } from "../src/browser-backend.ts";
 
 class FakeSocket extends EventTarget {
   readyState: number = WebSocket.OPEN;
@@ -816,4 +817,69 @@ test("Windows preview read-only capability rejects Shell and file mutations", as
     controller.abort();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// P3 test-only injection into the ACTUAL signed WSS lifecycle. Production
+// entrypoints do not construct or supply BrowserBackend.
+test("P3 signed lifecycle exposes a local browser only when explicitly injected, never in read-only mode", async () => {
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rc-v2-p3-browser-inject-"));
+  const keyPath=path.join(dir,"test-only-identity.pem");
+  const deviceId=randomUUID();
+  const sid=randomUUID();
+  let browserStarts=0;
+  const fakeBrowser: BrowserBackend={
+    start:async()=>{browserStarts++;return {session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0};},
+    status:()=>({session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}),
+    navigate:async()=>{},
+    snapshot:async()=>({text:'- textbox "P3 Browser" [ref=e1]',truncated:false,snapshot_version:1}),
+    close:async()=>{},
+  };
+  const enrollment=newEnrollment("p3-fixture-not-paired-to-real-worker");
+  try{
+    await writeFile(keyPath,enrollment.privateKeyPem,{mode:0o600});
+    await writeFile(keyPath+".device-id",deviceId+"\n",{mode:0o600});
+    for(const opt of [{passBrowser:false,expected:"failed"},{passBrowser:true,expected:"completed"}] as const){
+      const abort=new AbortController();
+      const messages:Record<string,unknown>[]=[];
+      let socket:FakeSocket|undefined;
+      const pending=maintainAuthenticatedDeviceSession("https://agent.example/",keyPath,abort.signal,{
+        send:async()=>Response.json({device_id:deviceId,nonce:"A".repeat(24)}),
+        makeSocket:()=>{
+          socket=new FakeSocket();
+          socket.readyState=WebSocket.CONNECTING;
+          socket.onSend=wire=>{
+            if(wire.startsWith("{")){
+              const reply=JSON.parse(wire) as Record<string,unknown>;
+              if(reply.kind==="read_result"){
+                messages.push(reply);
+                abort.abort();
+              }
+            }
+          };
+          queueMicrotask(()=>socket!.emitOpen());
+          return socket as unknown as WebSocket;
+        },
+        receiptDirectory:path.join(dir,opt.passBrowser?"receipts-on":"receipts-off"),
+        ...(opt.passBrowser?{browser:fakeBrowser}:{}),
+        onState:state=>{
+          if(state==="connected")
+            queueMicrotask(()=>socket!.event("message",{data:JSON.stringify({
+              kind:"read",request_id:randomUUID(),tool:"browser_status",arguments:{},
+            })}));
+        },
+      });
+      const timeout=setTimeout(()=>abort.abort(),3000);
+      try {await pending;}
+      finally {clearTimeout(timeout);}
+      assert.equal(messages.length,1,"Signed WSS must return one browser result");
+      assert.equal(messages[0]?.status,opt.expected);
+      if(opt.passBrowser)assert.match(String(messages[0]?.text),new RegExp(sid));
+      else assert.equal(messages[0]?.text,undefined);
+    }
+    assert.equal(browserStarts,0,"Observation and lifecycle plumbing must not start a browser");
+    await assert.rejects(
+      maintainAuthenticatedDeviceSession("https://agent.example/",keyPath,new AbortController().signal,{
+        capability:"read-only",browser:fakeBrowser,
+      }),/Read-only Agent cannot attach browser capabilities/);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });

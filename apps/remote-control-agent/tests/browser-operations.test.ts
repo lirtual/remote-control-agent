@@ -104,3 +104,26 @@ test("device revocation attempts owned browser shutdown and reports uncertainty"
     assert.equal(closures,2);
   } finally { active=false;await engine.close();await rm(dir,{recursive:true,force:true}); }
 });
+
+
+test("P3 Agent shutdown interrupts its owned busy browser instead of abandoning it",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rca-p3-exit-browser-"));
+  const sid=randomUUID();
+  let active=true, forceCalls=0, ordinaryCalls=0;
+  const browser={
+    status:()=>active?{session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}:null,
+    close:async()=>{ordinaryCalls++;throw Error("Navigation busy");},
+    stopOwnedForRevocation:async()=>{
+      forceCalls++;
+      active=false;
+      return "confirmed" as const;
+    },
+  } as unknown as BrowserBackend;
+  const engine=createAgentExecutionEngine({browser,receiptDirectory:dir});
+  try{
+    await engine.close();
+    assert.equal(active,false,"The owned browser must be reclaimed on exit");
+    assert.equal(forceCalls,1,"Reuses existing cancel/owned-context close");
+    assert.equal(ordinaryCalls,0,"Does not attempt a busy normal close");
+  }finally{await rm(dir,{recursive:true,force:true});}
+});

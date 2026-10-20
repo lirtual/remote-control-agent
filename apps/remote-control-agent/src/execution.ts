@@ -538,10 +538,17 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     },
     close: async () => {
       await searches.close();
+      // Agent shutdown must not leave an owned Chromium behind merely because
+      // a page navigation holds the ordinary browser operation mutex.
+      // Reuse the same owned-context cancellation as device revocation; no
+      // arbitrary process killing or personal Chrome Profile access.
       const active = options.browser?.status();
-      if (active) {
+      if (options.browser?.stopOwnedForRevocation) {
+        try { await options.browser.stopOwnedForRevocation(); }
+        catch { /* Failed cleanup is never reported as a confirmed result. */ }
+      } else if (active) {
         try { await options.browser!.close(active.session_id); }
-        catch { /* No unconditional Profile wipe or unknown-process termination. */ }
+        catch { /* Never kill an unknown browser process or wipe a Profile. */ }
       }
       await sessions.close();
       if (receiptsReady) await receipts.close();

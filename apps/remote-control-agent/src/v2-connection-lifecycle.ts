@@ -9,6 +9,7 @@ import { executeReadTool } from "./read-execution.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
 import { SearchSessions } from "./search.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
+import type { BrowserBackend } from "./browser-backend.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
 import { parseBrowserArguments } from "./browser-operations.ts";
 
@@ -342,6 +343,8 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
+    /** Optional, locally created browser. Absent by default; never from remote frames. */
+    browser?: BrowserBackend;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -356,7 +359,10 @@ export async function maintainAuthenticatedDeviceSession(
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
   const full = options.capability !== "read-only";
-  const execution = full ? createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory }) : undefined;
+  if (!full && options.browser) throw Error("Read-only Agent cannot attach browser capabilities.");
+  const execution = full ? createAgentExecutionEngine({
+    receiptDirectory: options.receiptDirectory, browser: options.browser,
+  }) : undefined;
   let failures = 0;
   try {
   while (!signal.aborted) {
