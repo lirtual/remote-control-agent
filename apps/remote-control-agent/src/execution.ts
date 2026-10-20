@@ -44,12 +44,25 @@ export interface AgentExecutionEngine {
   close(): Promise<void>;
 }
 
+/** Native Windows uses its bundled PowerShell, not Linux /bin/sh. */
+export function defaultAgentShellPath(
+  platform = process.platform,
+  systemRoot = process.env.SystemRoot,
+): string {
+  if (platform !== "win32") return process.env.SHELL ?? "/bin/sh";
+  if (!systemRoot || !path.win32.isAbsolute(systemRoot) ||
+      !/^[A-Za-z]:[\\\\/]/.test(systemRoot) || systemRoot.startsWith("\\\\\\\\")) {
+    throw Error("A native Windows SystemRoot is required for managed commands.");
+  }
+  return path.win32.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+}
+
 /** Must be constructed once per Agent process: shared inFlight map and receipts. */
 export function createAgentExecutionEngine(options: AgentExecutionOptions = {}): AgentExecutionEngine {
   const emit = (log: AgentExecutionOptions["log"], event: string) => log?.(event);
   const log = options.log;
   const searches = new SearchSessions(options.searchSessionTtlMs);
-  const sessions = new ManagedSessions(options.shellPath ?? process.env.SHELL ?? "/bin/sh", options.sessionMaxLifetimeMs);
+  const sessions = new ManagedSessions(options.shellPath ?? defaultAgentShellPath(), options.sessionMaxLifetimeMs);
   const receipts = new ReceiptStore(options.receiptDirectory, options.receiptFaultForTests, options.receiptHistoricalBackupPath);
   let receiptsReady: Promise<void> | undefined;
   const ensureReceipts = () => (receiptsReady ??= receipts.open().catch(error => {
