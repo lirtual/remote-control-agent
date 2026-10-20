@@ -220,7 +220,7 @@ jobs:
           Compress-Archive -Path (Join-Path $staged '*') -DestinationPath $archive -CompressionLevel Optimal
           $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-extracted'
           Expand-Archive -LiteralPath $archive -DestinationPath $extracted -ErrorAction Stop
-          & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $extracted
+          & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $extracted (Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64')
           if ($LASTEXITCODE -ne 0) { throw 'Installed Chrome and tamper checks failed for pinned Playwright candidate' }
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
           if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }

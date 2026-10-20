@@ -1,7 +1,7 @@
 /**
  * One Agent-local browser backend using the existing Node runtime and
- * Playwright's official API. SOURCE-STAGED ONLY: not constructed by the
- * installed Agent and not advertised through MCP until platform acceptance.
+ * Playwright's official API. OPTIONAL REVIEWED WINDOWS PREVIEW ONLY: standard installed Agents omit this
+ * module; Worker browser tools remain disabled pending platform acceptance.
  *
  * A dedicated Profile is never taken from a remote caller. No JS/CDP,
  * arbitrary executable, OS shell, or existing personal browser attachment.

@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 
 // Independent audit pinning for the nine-file Windows preview payload.
 // Deliberately not loaded from the mutable preview manifest.
+export const PINNED_WINDOWS_BROWSER_MANAGER_SHA256="714d1a531aba2b254cdb2d78afa47237d908c4c4abc43ac4d1a6aff16e205307";
+const PACKAGED_BROWSER_MANAGER="apps/remote-control-agent/candidates/browser-playwright.js";
 export const PINNED_WINDOWS_PLAYWRIGHT_VERSION="1.64.1";
 export const PINNED_WINDOWS_PLAYWRIGHT_FILES=Object.freeze({
   "apps/remote-control-agent/node_modules/playwright-core/LICENSE":"45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
@@ -53,8 +55,11 @@ export function inspectWindowsPreview(root) {
   const names=Object.keys(PINNED_WINDOWS_PLAYWRIGHT_FILES);
   const candidate=Object.keys(manifest.hashes).filter(k=>Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,k));
   if (manifest.browser_runtime===undefined){
-    if(candidate.length)throw Error("Unrequested browser runtime.");
+    if(candidate.length || expected.has(PACKAGED_BROWSER_MANAGER))
+      throw Error("Unrequested browser runtime.");
   }else{
+    if (expected.get(PACKAGED_BROWSER_MANAGER)!==PINNED_WINDOWS_BROWSER_MANAGER_SHA256)
+      throw Error("Missing or unreviewed packaged BrowserManager.");
     const info=manifest.browser_runtime;
     if (!info || typeof info!=="object" || Array.isArray(info) ||
         Object.keys(info).sort().join(",")!=="files,name,version" ||
@@ -76,7 +81,8 @@ export function inspectWindowsPreview(root) {
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
       if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
-          Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name)) ||
+          Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) ||
+          name===PACKAGED_BROWSER_MANAGER) ||
           seen.has(name) || !expected.has(name) ||
           typeof expected.get(name) !== "string" ||
           !/^[a-f0-9]{64}$/.test(expected.get(name))) {
@@ -84,7 +90,8 @@ export function inspectWindowsPreview(root) {
       }
       const sha = createHash("sha256").update(readFileSync(full)).digest("hex");
       if (sha !== expected.get(name) ||
-          (Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) && sha!==PINNED_WINDOWS_PLAYWRIGHT_FILES[name]))
+          (Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) && sha!==PINNED_WINDOWS_PLAYWRIGHT_FILES[name]) ||
+          (name===PACKAGED_BROWSER_MANAGER && sha!==PINNED_WINDOWS_BROWSER_MANAGER_SHA256))
         throw Error("Windows runtime entry checksum mismatch.");
       seen.add(name);
     }

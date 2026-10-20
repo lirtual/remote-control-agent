@@ -14,6 +14,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { runtimeSources,stagePinnedPlaywrightLibrary } from "./build-v2-release.mjs";
+import { PINNED_WINDOWS_BROWSER_MANAGER_SHA256 } from "./verify-windows-preview.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -117,6 +118,24 @@ export function buildWindowsPreview(args) {
   hashes[packagePath] = digest(packageJson);
   // The existing Linux staging contract validates nine exact upstream files before copying.
   const browserRuntime = args.browserCoreDir ? stagePinnedPlaywrightLibrary(args.browserCoreDir,stage) : undefined;
+  // The only optional executable browser manager is compiled into a known path,
+  // never selected by a remote tool or discovered from arbitrary directories.
+  if (browserRuntime) {
+    const managerSource=readFileSync(path.join(root,"candidates/browser-playwright.ts"),"utf8");
+    const compiled=ts.transpileModule(managerSource,{
+      fileName:"browser-playwright.ts",reportDiagnostics:true,
+      compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022},
+    });
+    if ((compiled.diagnostics||[]).some(x=>x.category===ts.DiagnosticCategory.Error))
+      throw Error("BrowserManager TypeScript transpilation failed.");
+    const relative="apps/remote-control-agent/candidates/browser-playwright.js";
+    const bytes=Buffer.from(rewriteImports(compiled.outputText));
+    if (digest(bytes)!==PINNED_WINDOWS_BROWSER_MANAGER_SHA256)
+      throw Error("Unreviewed browser manager source; update pinned digest after independent review.");
+    mkdirSync(path.join(stage,"apps/remote-control-agent/candidates"),{recursive:true,mode:0o700});
+    writeFileSync(path.join(stage,relative),bytes,{mode:0o600});
+    hashes[relative]=digest(bytes);
+  }
   if (browserRuntime) for(const relative of browserRuntime.files){
     hashes[relative] = digest(readFileSync(path.join(stage,relative)));
   }

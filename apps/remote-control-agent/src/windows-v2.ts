@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enroll
 import { recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
+import type { BrowserBackend } from "./browser-backend.ts";
 
 const TASK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-user-task.ps1");
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-private-store.ps1");
@@ -112,6 +114,37 @@ function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status" 
   ], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw Error("Native Windows user task refused.");
   return result.stdout.trim();
+}
+
+/**
+ * Local package selection, not an MCP argument or configurable browser path.
+ * Only the independently verified optional Windows preview artifact can
+ * supply the manager; standard paired Agents cannot launch browsers.
+ */
+export async function createPackagedBrowserForWindows(
+  agentStore: string,
+  entryUrl = import.meta.url,
+): Promise<BrowserBackend | undefined> {
+  if (process.platform !== "win32") throw Error("Native Windows browser required.");
+  const installedRoot = path.resolve(path.dirname(fileURLToPath(entryUrl)), "..", "..", "..");
+  const manifestPath = path.join(installedRoot, "bundle.json");
+  if (!existsSync(manifestPath)) return undefined; // source-only or old standard Agent
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  if (manifest.browser_runtime === undefined) return undefined; // original package remains browser-free
+  // Verify every installed file, including the independently pinned Playwright
+  // bundle and compiled manager, before any browser can enter the WSS executor.
+  const verifyUrl = new URL("../scripts/verify-windows-preview.mjs", entryUrl);
+  const verifier = await import(verifyUrl.href) as {
+    inspectWindowsPreview(dir: string): unknown;
+  };
+  verifier.inspectWindowsPreview(installedRoot);
+  const candidateUrl = new URL("../candidates/browser-playwright.js", entryUrl);
+  const candidate = await import(candidateUrl.href) as {
+    PlaywrightBrowserManager?: new (options: {agentStore: string}) => BrowserBackend;
+  };
+  if (typeof candidate.PlaywrightBrowserManager !== "function")
+    throw Error("Trusted packaged BrowserManager missing.");
+  return new candidate.PlaywrightBrowserManager({agentStore});
 }
 
 export async function runWindowsAgent(argv: string[]): Promise<void> {
@@ -228,8 +261,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   try {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
+    const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       receiptDirectory: path.win32.join(directory, "receipts"),
+      ...(browser ? { browser } : {}),
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({

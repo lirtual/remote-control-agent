@@ -21,6 +21,16 @@ assert.equal(pinned?.name,"playwright-core");
 assert.equal(pinned.version,"1.64.1");
 assert.equal(pinned.files.length,9);
 const pkg=path.join(stage,"apps/remote-control-agent/node_modules/playwright-core");
+const managerPath=path.join(stage,"apps/remote-control-agent/candidates/browser-playwright.js");
+const compiledAgent=path.join(stage,"apps/remote-control-agent/src/windows-v2.js");
+const {createPackagedBrowserForWindows}=await import(pathToFileURL(compiledAgent).href);
+const defaultStage=process.argv[3];
+if(defaultStage){
+  const {createPackagedBrowserForWindows:plainLoader}=await import(
+    pathToFileURL(path.join(defaultStage,"apps/remote-control-agent/src/windows-v2.js")).href);
+  assert.equal(await plainLoader(path.join(defaultStage,"unrelated-private-store")),undefined,
+    "The default Agent must remain browser-free");
+}
 const originalManifest=await readFile(manifestFile);
 const original=await readFile(path.join(pkg,"lib/coreBundle.js"));
 let ctx;
@@ -43,6 +53,39 @@ try{
   await ctx?.close();
   await rm(profile,{recursive:true,force:true});
 }
+// Test the exact Windows Agent startup helper and the real compiled
+// BrowserManager, not merely Playwright's generic public API.
+const ownStore=await mkdtemp(path.join(os.tmpdir(),"rca-ci-p3-manager-"));
+let ownedBrowser;
+try{
+  ownedBrowser=await createPackagedBrowserForWindows(ownStore,
+    pathToFileURL(compiledAgent).href);
+  assert.ok(ownedBrowser,"An explicitly packaged, verified candidate can be injected locally");
+  assert.equal(ownedBrowser.status(),null,"Creating the manager does not launch Chrome");
+  const session=await ownedBrowser.start();
+  assert.equal(session.backend,"playwright");
+  const snapshot=await ownedBrowser.snapshot(session.session_id);
+  assert.ok(snapshot.snapshot_version>0 && typeof snapshot.text==="string");
+  await ownedBrowser.close(session.session_id);
+  assert.equal(ownedBrowser.status(),null);
+  console.log("P3_REAL_PACKAGED_AGENT_BROWSER_MANAGER_START_SNAPSHOT_CLOSE=PASS");
+}finally{
+  const session=ownedBrowser?.status();
+  if(session)await ownedBrowser.close(session.session_id);
+  await rm(ownStore,{recursive:true,force:true});
+}
+try{
+  const originalManager=await readFile(managerPath);
+  try{
+    await writeFile(managerPath,"// malicious replacement");
+    assert.throws(()=>inspectWindowsPreview(stage),/checksum/);
+    await assert.rejects(createPackagedBrowserForWindows(
+      path.join(stage,"untrusted-store"),pathToFileURL(compiledAgent).href),/checksum/);
+  }finally{
+    await writeFile(managerPath,originalManager);
+  }
+  console.log("P3_TAMPERED_COMPILED_BROWSER_MANAGER_DENIED_BEFORE_LOAD=PASS");
+}catch(e){throw e;}
 try{
   const bundle=path.join(pkg,"lib/coreBundle.js");
   await writeFile(bundle,Buffer.from("invalid vendored payload"));
