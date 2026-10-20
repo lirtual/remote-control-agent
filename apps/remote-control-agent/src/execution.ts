@@ -11,6 +11,8 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
+import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS } from "./browser-operations.ts";
+import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
 import { SearchSessions } from "./search.ts";
 import {
@@ -23,6 +25,8 @@ export interface AgentExecutionOptions {
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
   shellPath?: string;
+  /** Source-staged, explicitly injected browser backend; absent in production. */
+  browser?: BrowserBackend;
   /** Local-only test seam: production uses the 60-minute deadline. */
   sessionMaxLifetimeMs?: number;
   /** Local-only storage error probe, never routed through MCP. */
@@ -70,6 +74,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
+  const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
   type MutationArgs =
@@ -219,6 +224,20 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   ): Promise<AgentExecutionReply | undefined> {
     let reply: AgentExecutionReply | undefined;
     const respond = (status: number, result: unknown): void => { reply = { status, body: result }; };
+    if (typeof body.tool === "string" &&
+        ([...BROWSER_READ_TOOLS, ...BROWSER_EFFECT_TOOLS] as string[]).includes(body.tool)) {
+      if (!browser) { respond(503, { status: "unavailable" }); return reply; }
+      if ((BROWSER_READ_TOOLS as readonly string[]).includes(body.tool)) {
+        const result = await browser.read(body.tool as typeof BROWSER_READ_TOOLS[number], body.arguments);
+        respond(result === null ? 400 : 200, result === null
+          ? { status: "failed" } : { status: "completed", result: { content: [{ type: "text", text: result }] } });
+      } else {
+        const id = typeof body.operation_id === "string" ? body.operation_id : "";
+        const result = await browser.submit(body.tool as typeof BROWSER_EFFECT_TOOLS[number], body.arguments, id);
+        respond(result.status === "bad_request" ? 400 : result.status === "conflict" ? 409 : 200, result);
+      }
+      return reply;
+    }
     if (body.tool === "write_file" || body.tool === "create_directory" || body.tool === "edit_block" || body.tool === "move_file" || body.tool === "delete_file") {
       const id = typeof body.operation_id === "string" ? body.operation_id : null;
       if (!id || !parseOperationId({ operation_id: id })) {
@@ -504,12 +523,23 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     stopOwnedForRevocation: async () => {
       // Operations already admitted before the tombstone may still be
       // starting a supervised process: never overclaim complete cleanup.
-      const pendingEffects = inFlight.size > 0;
+      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false);
+      let browserOutcome: "confirmed" | "uncertain" = "confirmed";
+      const active = options.browser?.status();
+      if (active) {
+        try { await options.browser!.close(active.session_id); }
+        catch { browserOutcome = "uncertain"; }
+      }
       const result = await sessions.stopOwnedForRevocation();
-      return pendingEffects ? "uncertain" : result;
+      return pendingEffects || browserOutcome === "uncertain" ? "uncertain" : result;
     },
     close: async () => {
       await searches.close();
+      const active = options.browser?.status();
+      if (active) {
+        try { await options.browser!.close(active.session_id); }
+        catch { /* No unconditional Profile wipe or unknown-process termination. */ }
+      }
       await sessions.close();
       if (receiptsReady) await receipts.close();
     },

@@ -10,6 +10,7 @@ import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, p
 import { SearchSessions } from "./search.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
+import { parseBrowserArguments } from "./browser-operations.ts";
 
 /** One bounded Session read adapter, shared by the Agent and MCP/WSS tests. */
 export async function executeV2SessionRead(
@@ -18,7 +19,7 @@ export async function executeV2SessionRead(
   args: unknown,
   signal: AbortSignal,
 ): Promise<string | null> {
-  if (tool !== "list_sessions" && tool !== "read_process_output") return null;
+  if (!["list_sessions", "read_process_output", "browser_status", "browser_snapshot"].includes(tool)) return null;
   try {
     const answer = await execution.executeTool({ tool, arguments: args }, signal);
     if (answer?.status !== 200) return null;
@@ -28,7 +29,7 @@ export async function executeV2SessionRead(
   } catch { return null; }
 }
 
-type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status";
+type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close";
 
 /** One adapter shared by production and tests; no new mutation executor. */
 export async function executeV2FileOperation(
@@ -183,6 +184,8 @@ export function monitorDeviceSocket(
           start_search: parseSearchStart, get_more_search_results: parseSearchSessionId,
           stop_search: parseSearchSessionId,
           list_sessions: parseListSessions, read_process_output: parseReadProcessOutput,
+          browser_status: args => parseBrowserArguments("browser_status", args),
+          browser_snapshot: args => parseBrowserArguments("browser_snapshot", args),
         };
         if (readOnly && request?.kind === "read" && typeof request.tool === "string" &&
             Object.hasOwn(readParsers, request.tool) &&
@@ -225,6 +228,9 @@ export function monitorDeviceSocket(
           edit_block: parseLocalEditBlock, move_file: parseLocalMoveFile,
           delete_file: parseLocalDeleteFile, start_process: parseStartProcess,
           interact_with_process: parseInteractWithProcess, force_terminate: parseForceTerminate,
+          browser_start: args => parseBrowserArguments("browser_start", args),
+          browser_navigate: args => parseBrowserArguments("browser_navigate", args),
+          browser_close: args => parseBrowserArguments("browser_close", args),
         };
         // A paired but read-only Agent must deny valid unsupported operations
         // without disconnecting its otherwise healthy signed WSS session.
@@ -368,7 +374,8 @@ export async function maintainAuthenticatedDeviceSession(
       try {
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
-            if (tool === "list_sessions" || tool === "read_process_output") {
+            if (tool === "list_sessions" || tool === "read_process_output" ||
+                tool === "browser_status" || tool === "browser_snapshot") {
               return full && execution ? executeV2SessionRead(execution, tool, args, requestSignal) : null;
             }
             // Reuse the original bounded file/search engine.
