@@ -11,6 +11,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { createConnection } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { access, lstat, mkdir, open, readFile, readlink, readdir, rename, rm, rmdir, symlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -301,7 +302,13 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   await assertReceiptDatabaseCompatible(home, 1);
   const priorManifest=JSON.parse(await readFile(path.join(previousRoot, "bundle.json"), "utf8"));
   return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath)),
-    needsFreeze:priorManifest.upgrade_profile==="paired-full-v1"};
+    needsFreeze:priorManifest.upgrade_profile==="paired-full-v1",
+    // Only this exact legacy v2 release predates the local freeze handshake.
+    // Its one-time transition must be made offline by the device owner.
+    legacyOffline:priorManifest.upgrade_profile==="paired-full-v1" &&
+      priorManifest.version==="v0.1.11" &&
+      priorManifest.target==="linux-"+process.arch+"-glibc" &&
+      path.basename(previousRoot)==="v0.1.11-linux-"+process.arch+"-glibc"};
 }
 
 /**
@@ -336,6 +343,66 @@ export async function requestUpgradeConsent(keyPath, action, {dial=createConnect
     });
     socket.on("close",()=>{if(!settled)done(Error("Upgrade consent connection closed"));});
   });
+}
+
+/** One-time local cutover for the immutable v0.1.11 that has no freeze socket.
+ * This cannot establish the state of old Shell work. The owner MUST stop the
+ * service from a genuine local terminal in a maintenance window beforehand.
+ * No v1 service, device identity or operation receipt is modified here.
+ */
+export async function confirmLegacyV0111OfflineCutover({
+  home=os.homedir(),keyPath=keyForInstallMode(home,"permanent"),
+  stdin=process.stdin,stdout=process.stdout,
+  invoke=spawnSync,ask=null,
+}={}) {
+  if (!stdin.isTTY || !stdout.isTTY)
+    throw new Error("Legacy v2 offline cutover requires a real local terminal.");
+  if (keyPath!==keyForInstallMode(home,"permanent"))
+    throw new Error("Unexpected permanent identity for offline cutover.");
+  const checkStopped=()=>{
+    const result=invoke("systemctl",[
+      "--user","show",UNIT,"--property=ActiveState,SubState,MainPID","--no-pager",
+    ],{encoding:"utf8",timeout:5000});
+    if(result.error||result.status!==0||typeof result.stdout!=="string")
+      throw new Error("Cannot verify the stopped v2 service.");
+    const lines=result.stdout.trim().split("\n");
+    if(lines.length!==3 || !lines.includes("MainPID=0") ||
+       !lines.includes("ActiveState=inactive") || !lines.includes("SubState=dead") ||
+       new Set(lines).size!==3) {
+      throw new Error("Legacy v2 must be manually stopped before offline cutover.");
+    }
+  };
+  const checkReceipts=()=>{
+    const file=path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite");
+    let database;
+    try {
+      database=new DatabaseSync(file,{readOnly:true,timeout:0});
+      const row=database.prepare("PRAGMA quick_check").get();
+      if(row?.quick_check!=="ok")throw Error("SQLite integrity not confirmed.");
+    } catch {
+      throw new Error("SQLite receipts are locked, missing or invalid; cutover blocked.");
+    } finally { database?.close(); }
+  };
+  checkStopped();
+  checkReceipts();
+  const raw=(await readFile(keyPath+".device-id","utf8")).trim();
+  if(!DEVICE_ID.test(raw))throw new Error("Existing device ID is not valid.");
+  stdout.write("One-time v0.1.11 offline cutover for device "+raw+".\n");
+  stdout.write("Old Agent has no in-process Shell quiescence proof. Confirm all work is finished.\n");
+  stdout.write("Service must remain stopped until the verified new Agent starts. SQLite and identity are retained.\n");
+  let answer;
+  if(ask)answer=await ask("Type OFFLINE-V2-UPGRADE to confirm: ");
+  else {
+    const rl=createInterface({input:stdin,output:stdout,terminal:true});
+    try { answer=await rl.question("Type OFFLINE-V2-UPGRADE to confirm: "); }
+    finally { rl.close(); }
+  }
+  if(answer?.trim()!=="OFFLINE-V2-UPGRADE")
+    throw new Error("Owner did not confirm one-time offline cutover.");
+  // Re-check after the prompt. Do not auto-stop the live Agent.
+  checkStopped();
+  checkReceipts();
+  return {deviceId:raw};
 }
 
 /** Repeat-install is same-version only. A different installed service
@@ -1337,7 +1404,11 @@ export async function runInstaller(args, {
   let consentAttempted = false;
   if (portable && options.action === "upgrade") {
     const safety = await assertSafePortableUpgrade(previous, home, manifestPath);
-    if (safety.needsFreeze) {
+    if (safety.legacyOffline) {
+      // Never remotely stop v0.1.11 or manufacture a quiescence ACK.
+      // The user has already stopped it from their own terminal.
+      await confirmLegacyV0111OfflineCutover({home,keyPath,stdin,stdout});
+    } else if (safety.needsFreeze) {
       let consent;
       try {
         consent = await requestUpgradeConsent(keyPath, "freeze");

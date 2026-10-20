@@ -28,18 +28,35 @@ from the device's already-configured Worker installer, then uses the existing
 GitHub Release verifier, pinned SHA-256 checks, installer, and binary
 activation/rollback. Fetched shell content is never executed by this CLI.
 
-**Important:** v0.1.11 is already full-tools but has no in-process upgrade
-handshake. This Draft adds an owner-local Unix socket to future Agent releases:
-an upgrade first freezes new file/Shell admissions and verifies that no task is
-running, starting or uncertain. Active tasks reject the upgrade without being
-terminated. If the installer cannot prove quiescence, it fails closed; a
-definitive local activation failure still rolls back the owned systemd unit.
+### One-time v0.1.11 -> next v2 version
 
-An installed v0.1.11 cannot retroactively provide that handshake. Therefore
-a direct unattended/in-place v0.1.11 -> newer full-tools upgrade is **not**
-authorized by this PR: a separately reviewed one-time owner-controlled
-transition is still necessary. No v1 compatibility or coexisting v1 service
-is supported. The proposed code is not part of the immutable v0.1.11 binary.
+The published v0.1.11 is already full-tools but has no in-process upgrade
+handshake. **Only after a newer immutable Agent Release has been approved and
+pinned by the Worker**, the owner can perform this single offline cutover from
+the **ordinary WSL/Linux terminal**, in a maintenance window:
+
+1. Finish all Remote Control Shell, file-writing, and other operations. The
+   old Agent cannot prove quiescence; this is an explicit operator decision.
+2. Stop **only the v2 Agent**: `systemctl --user stop remote-control-v2-agent.service`.
+   Do not use Remote Control to initiate the stop: the connection will drop.
+3. In the *same local terminal*, run the approved Worker installer:
+   `curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade`.
+   It requires service `inactive/dead`, PID 0, an unlocked/intact SQLite
+   receipt store, exact old v0.1.11 program/identity ownership, and the
+   interactive `OFFLINE-V2-UPGRADE` confirmation.
+4. Check `rca version`, the local service, and signed MCP connectivity. The
+   private identity and historical SQLite receipts remain in place.
+
+If installation fails **before activation**, the old service may remain
+stopped. Inspect it locally; after an explicit decision, it can be started
+again using `systemctl --user start remote-control-v2-agent.service`.
+An activation failure uses the existing durable systemd rollback to restore
+the previous v2 unit. No operation is replayed by the installer.
+
+Future full-tools v2 releases use the owner-local Unix-socket freeze instead:
+new work is rejected after the freeze begins; active, starting or unknown work
+blocks upgrade. No v1 compatibility layer or additional service is required.
+The immutable v0.1.11 binary is unchanged by this source PR.
 
 ## Platform and trust requirements
 
@@ -52,12 +69,10 @@ is supported. The proposed code is not part of the immutable v0.1.11 binary.
 
 ## Next release checklist
 
-1. Review and test the new CLI against the live reviewed Worker pin, including
-   malformed/redirected responses and same-version no-op behavior.
-2. Add a minimal authoritative quiescence check before permitting
-   full-tools-to-full-tools service replacement.
-3. Validate preserved identity/SQLite receipts and rollback using the existing
-   native CI, then publish and pin the immutable Release through the established
-   workflow. Do not change v1 services or grant authorizations.
+1. Review the one-time offline v0.1.11 cutover and future in-process freeze.
+2. Verify safe rejection, exact identity and receipt preservation, rollback,
+   and native x64/ARM64 archive tests under existing Agent CI.
+3. Only after source review and release approval, publish the immutable new
+   version and update the existing Worker Release pin. No separate deployer.
 
 A source PR and passing CI do not update the installed v0.1.11 Agent.

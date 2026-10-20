@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, chmod, rename, symlink, link } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, rename, symlink, link } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { ReceiptStore } from "../src/operations.ts";
-import { assertSafePortableUpgrade, renderV2Service } from "../scripts/install-v2.mjs";
+import { assertSafePortableUpgrade, confirmLegacyV0111OfflineCutover, renderV2Service } from "../scripts/install-v2.mjs";
 
 const profile = {name:"remote-control-agent", artifact_schema:1,
   device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
@@ -113,4 +113,73 @@ test("#77 reviewed full-tools upgrade requires authoritative in-process freeze",
     await chmod(newRoot,0o755);
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/Unowned Agent/);
   } finally {await rm(home,{recursive:true,force:true});}
+});
+
+
+test("v0.1.11 one-time offline cutover requires explicit owner confirmation, stopped unit and unlocked receipts",async()=>{
+  const home=await mkdtemp(path.join(os.tmpdir(),"rc-v0111-offline-"));
+  const keyPath=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
+  const deviceId="af666663-b30c-4b3d-ad85-c8047dc3516b";
+  const output=[];
+  let state="inactive", confirm="OFFLINE-V2-UPGRADE", probes=0;
+  const invoke=(binary,args)=>{
+    assert.equal(binary,"systemctl");
+    assert.deepEqual(args,["--user","show","remote-control-v2-agent.service",
+      "--property=ActiveState,SubState,MainPID","--no-pager"]);
+    probes++;
+    return {status:0,stdout:state==="inactive"
+      ? "MainPID=0\nActiveState=inactive\nSubState=dead\n"
+      : "MainPID=7312\nActiveState=active\nSubState=running\n"};
+  };
+  const options={home,keyPath,stdin:{isTTY:true},stdout:{isTTY:true,write:x=>output.push(x)},
+    invoke,ask:async()=>confirm};
+  try{
+    await mkdir(path.dirname(keyPath),{recursive:true,mode:0o700});
+    await writeFile(keyPath+".device-id",deviceId+"\n",{mode:0o600});
+    const file=await createReceiptDatabase(home,1);
+    const before=await readFile(file);
+    assert.equal((await confirmLegacyV0111OfflineCutover(options)).deviceId,deviceId);
+    assert.equal(probes,2);
+    assert.deepEqual(await readFile(file),before);
+    assert.match(output.join(""),/Shell quiescence proof/);
+    state="active";
+    await assert.rejects(confirmLegacyV0111OfflineCutover(options),/manually stopped/);
+    state="inactive";confirm="no";
+    await assert.rejects(confirmLegacyV0111OfflineCutover(options),/did not confirm/);
+    confirm="OFFLINE-V2-UPGRADE";
+    await assert.rejects(confirmLegacyV0111OfflineCutover({
+      ...options,ask:async()=>{state="active";return confirm;}
+    }),/manually stopped/);
+    state="inactive";
+    await assert.rejects(confirmLegacyV0111OfflineCutover({...options,stdin:{isTTY:false}}),/real local terminal/);
+    // A competing SQLite exclusive lock must abort without removing any receipts.
+    const locked=new DatabaseSync(file);
+    try {
+      locked.exec("BEGIN EXCLUSIVE");
+      await assert.rejects(confirmLegacyV0111OfflineCutover(options),/locked, missing or invalid/);
+      locked.exec("ROLLBACK");
+    }finally{locked.close();}
+    assert.deepEqual(await readFile(file),before);
+  }finally{await rm(home,{recursive:true,force:true});}
+});
+test("one-time offline exception is scoped to exact previously installed v0.1.11 version and architecture",async()=>{
+  const home=await mkdtemp(path.join(os.tmpdir(),"rc-offline-version-"));
+  const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
+  const oldRoot=path.join(programs,"v0.1.11-linux-"+process.arch+"-glibc");
+  const newRoot=path.join(programs,"v0.1.12-linux-"+process.arch+"-glibc");
+  try {
+    await prepareVersion(oldRoot,{schema:{...fullProfile,version:"v0.1.11",
+      target:"linux-"+process.arch+"-glibc"},entry:fullEntry});
+    await prepareVersion(newRoot,{schema:fullProfile,entry:fullEntry});
+    await createReceiptDatabase(home,1);
+    const unit=renderV2Service({home,repoRoot:oldRoot,node:oldRoot+"/bin/node",
+      endpoint:"https://rc.example.org/",
+      keyPath:home+"/.local/share/mcp-workers/remote-control/v2-identity.pem",entryExt:"js"});
+    const ok=await assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json");
+    assert.equal(ok.legacyOffline,true);
+    assert.equal(ok.needsFreeze,true);
+    await writeFile(oldRoot+"/bundle.json",JSON.stringify({...fullProfile,
+      version:"v0.1.10",target:"linux-"+process.arch+"-glibc"}),{mode:0o600});
+    assert.equal((await assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json")).legacyOffline,false);
+  }finally{await rm(home,{recursive:true,force:true});}
 });
