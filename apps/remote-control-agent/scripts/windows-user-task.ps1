@@ -110,31 +110,11 @@ if ($Action -eq 'Switch') {
   # verified before touching the sole same-owner logon task.
   Check-Existing
   if ($Endpoint -or $Node -or $Entry -or
-      $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?
-  Start   { Start-ScheduledTask -TaskName $name -ErrorAction Stop; 'start-requested' }
-  Stop    { Stop-ScheduledTask -TaskName $name -ErrorAction Stop; 'stop-requested' }
-  Disable {
-    if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $name -ErrorAction Stop }
-    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
-    # Preserve protected private key, device ID and cloud grant.
-    'disabled'
-  }
-}
- -or
+      $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$' -or
       $Direction -notin @('Upgrade','Rollback')) { throw 'Untrusted switch arguments' }
   $oldAction = $task.Actions[0]
   $oldArguments = [string]$oldAction.Arguments
-  if ($oldArguments -cnotmatch '^"([^"]+)" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"
-  Start   { Start-ScheduledTask -TaskName $name -ErrorAction Stop; 'start-requested' }
-  Stop    { Stop-ScheduledTask -TaskName $name -ErrorAction Stop; 'stop-requested' }
-  Disable {
-    if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $name -ErrorAction Stop }
-    Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop
-    # Preserve protected private key, device ID and cloud grant.
-    'disabled'
-  }
-}
-) {
+  if ($oldArguments -cnotmatch '^"([^"]+)" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"$') {
     throw 'Cannot preserve previous Worker origin'
   }
   $oldEntry = $Matches[1]
