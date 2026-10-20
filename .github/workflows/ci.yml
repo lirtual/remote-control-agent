@@ -350,5 +350,14 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
+      - name: Export isolated Windows Playwright candidate for owner-device acceptance
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: p3-windows-isolated-candidate
+          path: ${{ runner.temp }}/candidate-next-version.zip
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
 
 
