@@ -29,6 +29,8 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
   assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
+  assert.equal(parseWindowsAgentArgs(["upgrade", "--version", "v0.1.9"]).version, "v0.1.9");
+  assert.equal(parseWindowsAgentArgs(["rollback", "--version", "v0.1.8"]).action, "rollback");
   for (const args of [
     ["pair", "--endpoint", "http://example.test/"],
     ["run", "--endpoint", "https://example.test/secret"],
@@ -39,6 +41,10 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
     ["status", "--endpoint", "https://example.test/"],
     ["disable", "--endpoint", "https://example.test/"],
     ["enable", "--endpoint", "https://example.test/", "--name", "injected"],
+    ["upgrade", "--endpoint", "https://example.test/"],
+    ["upgrade", "--version", "../foo"],
+    ["rollback", "--version", "v0.1.8", "--endpoint", "https://example.test/"],
+    ["status", "--version", "v0.1.9"],
   ]) assert.throws(() => parseWindowsAgentArgs(args));
   assert.equal(windowsAgentStore("C:\\Users\\ray\\AppData\\Local"),
     "C:\\Users\\ray\\AppData\\Local\\mcp-workers\\remote-control");

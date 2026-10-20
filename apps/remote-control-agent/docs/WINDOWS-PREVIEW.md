@@ -117,3 +117,7 @@ the version's user task. Identity PEM, device ID, local diagnostics and
 operation receipt data are deliberately preserved, with **no cloud revoke**.
 This is a separate PowerShell command, not yet `rca uninstall`; full CLI
 lifecycle and rollback are still outstanding.
+
+## Upgrade / rollback of installed Windows versions (source-only)
+
+Install the desired **reviewed and manifest-verified** Windows x64 runtime to a distinct private version directory first. Then the bundled CLI can request `rca.cmd upgrade --version vNEW` or `rca.cmd rollback --version vOLD`. The same owner's existing interactive logon task is validated by SID; the Worker HTTPS origin and all identity/receipts remain untouched. The task action is switched only after the new version's checksum inventory and local identity status pass. If switching/restarting fails, the original task action is restored, or an explicit manual-remediation error is returned if restoration cannot be proven. A stopped task stays stopped; a running task is restarted and must remain running locally for initial acceptance. **A running local task does not establish signed WSS or cloud acceptance.**

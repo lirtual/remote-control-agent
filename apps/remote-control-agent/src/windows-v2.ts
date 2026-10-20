@@ -19,26 +19,35 @@ const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs"; endpoint?: string; name?: string;
+  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string;
 } {
   const action = argv[0];
-  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
+  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
-    if (!value || (key !== "--endpoint" && key !== "--name") ||
+    if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version") ||
         (key === "--endpoint" && options.endpoint !== undefined) ||
-        (key === "--name" && options.name !== undefined)) {
+        (key === "--name" && options.name !== undefined) ||
+        (key === "--version" && options.version !== undefined)) {
       throw Error("Unknown, duplicate or missing option.");
     }
     if (key === "--endpoint") options.endpoint = value;
-    else options.name = value;
+    else if (key === "--name") options.name = value;
+    else options.version = value;
   }
   if (["status", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
     if (argv.length !== 1) throw Error("This command has no options.");
+  } else if (action === "upgrade" || action === "rollback") {
+    if (argv.length !== 3 || !options.version ||
+        !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(options.version) ||
+        options.endpoint !== undefined || options.name !== undefined) {
+      throw Error("Use upgrade/rollback --version vX.Y.Z.");
+    }
   } else {
+    if (options.version !== undefined) throw Error("Unexpected version flag.");
     if (!options.endpoint || (action !== "pair" && options.name !== undefined)) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
@@ -89,7 +98,7 @@ async function hasFile(filename: string): Promise<boolean> {
   }
 }
 
-function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status", endpoint?: string): string {
+function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status" | "Switch", endpoint?: string, targetVersion?: string, direction?: "Upgrade" | "Rollback"): string {
   const windows = process.env.SystemRoot;
   if (!windows) throw Error("Missing Windows system directory.");
   const powershell = path.win32.join(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -98,6 +107,7 @@ function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status",
     "-Action", action,
     ...(action === "Enable" ? ["-Node", process.execPath,
       "-Entry", fileURLToPath(import.meta.url), "-Endpoint", endpoint!] : []),
+    ...(action === "Switch" ? ["-Version", targetVersion!, "-Direction", direction!] : []),
   ], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw Error("Native Windows user task refused.");
   return result.stdout.trim();
@@ -121,6 +131,14 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       options.action === "start" || options.action === "stop") {
     const mapping = { "task-status": "Status", disable: "Disable", start: "Start", stop: "Stop" } as const;
     process.stdout.write(runUserTask(mapping[options.action]) + "\n");
+    return;
+  }
+  if (options.action === "upgrade" || options.action === "rollback") {
+    if (!exists || !idExists) throw Error("Approved local identity required to switch versions.");
+    const originalId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    if (!ID.test(originalId)) throw Error("Invalid local device ID.");
+    const direction = options.action === "upgrade" ? "Upgrade" : "Rollback";
+    process.stdout.write(runUserTask("Switch", undefined, options.version, direction) + "\n");
     return;
   }
   if (options.action === "logs") {
