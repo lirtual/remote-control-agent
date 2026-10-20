@@ -153,3 +153,28 @@ irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.10-windo
 ```
 
 The native device ID remains the same. Worker-side Windows drive path support is tracked separately in mcp-workers PR #113; a valid Windows read requires its production deployment.
+
+
+## Windows RC3: task-owned, windowless Agent
+
+RC2 directly scheduled the console-subsystem Node process, causing a visible desktop terminal. RC3 v0.1.11-windows-rc.1 adds a private, integrity-checked native Windows GUI-subsystem launcher that starts Node with CREATE_NO_WINDOW and owns its child in a kill-on-close Job Object. A task stop/version switch closes the launcher and its child. No administrator service, global Node installation, new pairing or new Worker secrets are needed.
+
+Install the new immutable package in its own directory using ordinary Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.11-windows-rc.1/install-windows.ps1 | iex
+$rca = "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.11-windows-rc.1-windows-x64\rca.cmd"
+& $rca status
+& $rca upgrade --version v0.1.11-windows-rc.1
+& $rca task-status
+```
+
+Use the **new RC3** rca.cmd to upgrade the already-owned RC2 scheduled task, not RC2's old command. Do not run pair again; the identity PEM, device ID and cloud approval must remain unchanged. Existing RC2 task is switched transactionally to the new launcher, and is restarted if it had been running. The old task action is restored if validation fails.
+
+If explicitly needed, rollback from RC3 to the already installed RC2 runtime is:
+
+```powershell
+& $rca rollback --version v0.1.10-windows-rc.2
+```
+
+Rollback to RC2 also restores RC2's visible-console behavior. Stop any foreground process before upgrading. Do not claim post-logon auto-start or no-window UI acceptance until checked on a real Windows desktop; CI proves the native GUI subsystem, signed ZIP, task metadata, migration and rollback paths. No Linux or Cloudflare Worker deployment is needed for this fix.
