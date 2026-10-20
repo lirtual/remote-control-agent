@@ -43,18 +43,24 @@ function Check-Program([string]$nodePath, [string]$entryPath) {
 }
 function Check-Existing {
   if (-not $task) { throw 'Agent task not installed' }
-  if ($task.Principal.UserId -notin @($sid,$identity.Name) -or
+  # Task Scheduler may return the principal as a local account name,
+  # DOMAIN\user, or SID. Resolve to the same immutable Windows SID rather
+  # than weakening the owner boundary with string/name comparisons.
+  try {
+    $principalId = [string]$task.Principal.UserId
+    if ($principalId -match '^S-1-[0-9]+(?:-[0-9]+)+$') {
+      $taskUserSid = ([Security.Principal.SecurityIdentifier]::new($principalId)).Value
+    } else {
+      $account = [Security.Principal.NTAccount]::new($principalId)
+      $taskUserSid = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+    }
+  } catch {
+    throw 'Task principal identity cannot be verified'
+  }
+  if ($taskUserSid -cne $sid -or
       [string]$task.Principal.RunLevel -ne 'Limited' -or
       [string]$task.Principal.LogonType -notin @('Interactive','InteractiveToken') -or
       $task.Actions.Count -ne 1 -or $task.Triggers.Count -ne 1) {
-    if ($env:GITHUB_ACTIONS -eq 'true') {
-      # Only structural, non-identifying enum/count diagnostics in isolated CI.
-      throw ('CI task metadata: sid_or_name=' + [string]($task.Principal.UserId -in @($sid,$identity.Name)) +
-        ', runlevel=' + [string]$task.Principal.RunLevel +
-        ', logontype=' + [string]$task.Principal.LogonType +
-        ', actions=' + [string]@($task.Actions).Count +
-        ', triggers=' + [string]@($task.Triggers).Count)
-    }
     throw 'Task identity, permissions or trigger changed'
   }
   $actionInfo = $task.Actions[0]
