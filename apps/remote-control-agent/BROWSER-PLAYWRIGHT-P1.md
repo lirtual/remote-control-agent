@@ -179,3 +179,22 @@ The existing native Windows run entrypoint calls createPackagedBrowserForWindows
 The existing Windows CI now tests the real Agent startup helper from both the standard and candidate extracted archives and starts Chrome through **the actual packaged BrowserManager**, checks AI Snapshot and clean context close, and confirms altered compiled Manager source is refused **before import**. Existing generic Playwright Ref and iframe tests and synthetic offline ZIP upgrade/rollback remain in the same workflow.
 
 **Acceptance still required:** current native Windows CI result for this commit, real production-signed Worker-to-Agent browser operation, actual owner-approved paired-device installation and rollback, safe one-use high-impact authorization, and explicit enabling of Worker browser MCP tools. This Draft alone does not merge, publish, deploy, upgrade or activate a currently paired device.
+
+## P3 Native Windows paired-host isolated browser/WSS dispatch validation (2026-10-21)
+
+**PASS — actual authorized native Windows test host, without replacing its running paired Agent.** Source is the Draft `fd3b88e` snapshot, staged outside `LOCALAPPDATA/mcp-workers/remote-control` in a disposable Windows TEMP directory. `playwright-core@1.64.1` came from the exact nine upstream files verified by the existing SHA-256-pinned Linux staging helper. The test used native Windows Node **24.12.0**, an already-installed Chrome and a fresh isolated browser Profile/SQLite receipt directory.
+
+The existing Agent `monitorDeviceSocket`, `executeV2SessionRead`, `executeV2FileOperation`, `createAgentExecutionEngine` and actual `PlaywrightBrowserManager` completed the following **native Windows** tests:
+
+1. Reject remote-supplied browser executable overrides; start a real Chrome Profile through the existing WSS frame dispatcher.
+2. Deduplicate `browser_start` by durable Operation ID; use the same Agent SQLite receipt state.
+3. Navigate the controlled public Playwright TodoMVC URL and retrieve its real bounded AI Snapshot.
+4. Reject a loopback navigation target (`127.0.0.1`) before its browser side effect and prevent repeat execution. The existing conservative effect receipt is **`unknown`**, not `bad_request`; that is intentional non-replay behavior rather than a successful navigation.
+5. Simulate a WSS disconnect/reconnect with a **new local socket but the same execution engine**. Preserve the browser session and Operation ID receipt.
+6. Complete ordinary browser close, then restart using a new Operation ID and stop the **Agent-owned** Chrome via the existing revocation cleanup path.
+7. Verify that after revocation no Chrome session is opened by a new start attempt; its effect receipt is again conservatively `unknown`.
+8. Compare the current installed Agent's identity file SHA-256 before/after: **unchanged**. Post-test host inspection: **zero test-tagged Chrome survivors**, and the existing Agent process/scheduled task still present.
+
+**Crucial test boundary:** This used a **local synthetic authorized WSS socket**, not a real cryptographically authenticated `DeviceCoordinator` Durable Object WebSocket connection on Windows. Earlier isolated WSL P2 covered a real local Worker/DO + signed Ed25519 WSS + Chromium chain; that proof is separate and must not be merged into a claim of one fully deployed Windows end-to-end test. The current native Windows test ran TS source from a temporary directory, **not the installed candidate executable**. The ongoing production Agent was neither installed/updated nor given browser capabilities. No Worker browser tools were advertised, no production credential was copied, and no GitHub Release or Cloudflare Worker was deployed.
+
+**Next acceptance gates:** actual verified candidate install into a disposable Windows Agent identity, real signed WSS/DO dispatch on that native candidate, process crash/restart and immutable artifact rollback, and user confirmation for consequential web actions. Preserve the Windows-first/no-WSL-Chromium-dependency scope. No extra services or browser proxy required.
