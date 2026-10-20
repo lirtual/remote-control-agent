@@ -35,7 +35,7 @@ async function createReceiptDatabase(home, version = 1, mode = 0o600) {
   await chmod(file, mode);
   return file;
 }
-test("#77 only proven read-only runtimes may be promoted to the paired full-tools profile",async()=>{
+test("#77 reviewed full-tools upgrade requires authoritative in-process freeze",async()=>{
   const home=await mkdtemp(path.join(os.tmpdir(),"rc-t08-manual-"));
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
   const oldRoot=path.join(programs,"v0.1.0-linux-x64-glibc");
@@ -49,6 +49,7 @@ test("#77 only proven read-only runtimes may be promoted to the paired full-tool
     const result=await assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json");
     assert.equal(result.oldProgram,oldRoot);
     assert.equal(result.newProgram,newRoot);
+    assert.equal(result.needsFreeze,false);
     await assert.rejects(assertSafePortableUpgrade(unit,home,oldRoot+"/bundle.json"),/Already running/);
     await assert.rejects(assertSafePortableUpgrade(null,home,newRoot+"/bundle.json"),/owned/);
 
@@ -87,20 +88,21 @@ test("#77 only proven read-only runtimes may be promoted to the paired full-tool
     await createReceiptDatabase(home, 1);
     await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by mcp-workers","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,upgrade_profile:"shell-enabled"}),{mode:0o600});
-    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/quiescence/);
+    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/profile|quiescence/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,receipt_schema:2}),{mode:0o600});
-    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/quiescence/);
+    await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/profile|quiescence/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify(fullProfile),{mode:0o600});
     await writeFile(newRoot+"/apps/remote-control-agent/src/v2-main.js","export const policy = { readOnly: true, writeFile: false, shell: true, };",{mode:0o600});
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/Shell ownership/);
     await writeFile(newRoot+"/apps/remote-control-agent/src/v2-main.js",fullEntry,{mode:0o600});
-    // Promoted/full-tools versions must NEVER be used as the existing source
-    // until the in-process session-drain and quiescence protocol is reviewed.
+    // A full-tools predecessor passes manifest validation but must still
+    // obtain a live in-process freeze before the installer changes the unit.
     const nextRoot=path.join(programs,"v0.3.0-linux-x64-glibc");
     await prepareVersion(nextRoot,{schema:fullProfile,entry:fullEntry});
     const fullUnit=renderV2Service({home,repoRoot:newRoot,node:newRoot+"/bin/node",
       endpoint:"https://rc.example.org/", keyPath:home+"/.local/share/mcp-workers/remote-control/v2-identity.pem",entryExt:"js"});
-    await assert.rejects(assertSafePortableUpgrade(fullUnit,home,nextRoot+"/bundle.json"),/quiescence|Shell ownership/);
+    const gated=await assertSafePortableUpgrade(fullUnit,home,nextRoot+"/bundle.json");
+    assert.equal(gated.needsFreeze,true);
     await chmod(newRoot,0o755);
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/Unowned Agent/);
   } finally {await rm(home,{recursive:true,force:true});}

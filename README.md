@@ -28,11 +28,18 @@ from the device's already-configured Worker installer, then uses the existing
 GitHub Release verifier, pinned SHA-256 checks, installer, and binary
 activation/rollback. Fetched shell content is never executed by this CLI.
 
-**Important:** v0.1.11 is already full-tools. Its full-tools to full-tools
-in-place upgrade remains blocked until the Agent can authoritatively confirm
-that no managed Shell session or uncertain operation will be interrupted.
-The new zero-argument CLI by itself does **not** bypass that safety gate.
-It is not part of the v0.1.11 immutable binary.
+**Important:** v0.1.11 is already full-tools but has no in-process upgrade
+handshake. This Draft adds an owner-local Unix socket to future Agent releases:
+an upgrade first freezes new file/Shell admissions and verifies that no task is
+running, starting or uncertain. Active tasks reject the upgrade without being
+terminated. If the installer cannot prove quiescence, it fails closed; a
+definitive local activation failure still rolls back the owned systemd unit.
+
+An installed v0.1.11 cannot retroactively provide that handshake. Therefore
+a direct unattended/in-place v0.1.11 -> newer full-tools upgrade is **not**
+authorized by this PR: a separately reviewed one-time owner-controlled
+transition is still necessary. No v1 compatibility or coexisting v1 service
+is supported. The proposed code is not part of the immutable v0.1.11 binary.
 
 ## Platform and trust requirements
 

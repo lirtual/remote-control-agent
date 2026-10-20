@@ -10,6 +10,7 @@
  * node apps/remote-control-agent/scripts/install-v2.mjs --foreground --resume --endpoint https://EXAMPLE/
  */
 import { spawnSync } from "node:child_process";
+import { createConnection } from "node:net";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { access, lstat, mkdir, open, readFile, readlink, readdir, rename, rm, rmdir, symlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -267,29 +268,69 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
     let manifest;
     try { manifest = JSON.parse(await readFile(manifestFile, "utf8")); }
     catch { throw new Error("Invalid Agent program manifest."); }
-    // One-way promotion: the running/previous Agent must be provably read-only.
-    // A full-tools source can be a TARGET, never a previous runtime until an
-    // authoritative session-drain protocol is reviewed.
+    // A full-tools predecessor must consent via its own in-process admission
+    // barrier. A v0.1.11 predecessor without that handshake fails closed.
     const previous = root === previousRoot;
-    const profile = previous ? "read-only-no-shell-v1" : "paired-full-v1";
+    const profile = manifest.upgrade_profile;
     if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
-        manifest.receipt_schema !== 1 || manifest.upgrade_profile !== profile) {
-      throw new Error("Managed Sessions quiescence cannot be proven; upgrade blocked.");
+        manifest.receipt_schema !== 1 ||
+        (previous
+          ? !["read-only-no-shell-v1", "paired-full-v1"].includes(profile)
+          : profile !== "paired-full-v1")) {
+      throw new Error("Unsupported existing Agent upgrade profile.");
     }
     const entrySource = await readFile(path.join(root,
       "apps", "remote-control-agent", "src", "v2-main.js"), "utf8");
-    if (previous
-      ? !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource)
-      : !/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
-        /(?:readOnly|writeFile|shell)\s*:/.test(entrySource)) {
-      throw new Error("Active/unknown Shell ownership may exist; upgrade blocked.");
+    const readOnly = profile === "read-only-no-shell-v1" &&
+      /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource);
+    const full = profile === "paired-full-v1" &&
+      /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) &&
+      !/(?:readOnly|writeFile|shell)\s*:/.test(entrySource);
+    if (!readOnly && !full) {
+      throw new Error("Active/unknown Shell ownership or unverified managed profile; upgrade blocked.");
     }
   }
   if (previousRoot === path.resolve(path.dirname(newManifestPath))) {
     throw new Error("Already running this program version; use ordinary install.");
   }
   await assertReceiptDatabaseCompatible(home, 1);
-  return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath))};
+  const priorManifest=JSON.parse(await readFile(path.join(previousRoot, "bundle.json"), "utf8"));
+  return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath)),
+    needsFreeze:priorManifest.upgrade_profile==="paired-full-v1"};
+}
+
+/**
+ * Local-only upgrade consent, sent to the currently RUNNING Agent.
+ * Absence of the socket or a busy/unknown response refuses the upgrade.
+ */
+export async function requestUpgradeConsent(keyPath, action, {dial=createConnection}={}){
+  if(!["freeze","release"].includes(action))throw Error("Invalid upgrade action");
+  const file=path.join(path.dirname(keyPath),"upgrade.sock");
+  const meta=await lstat(file);
+  if(!meta.isSocket()||meta.uid!==process.getuid()||(meta.mode&0o077)!==0)
+    throw Error("Untrusted local upgrade socket");
+  return await new Promise((resolve,reject)=>{
+    const socket=dial(file);
+    let reply="",settled=false;
+    const done=(error,value)=>{
+      if(settled)return;
+      settled=true;socket.destroy();
+      if(error)reject(error);else resolve(value);
+    };
+    socket.setTimeout(3000,()=>done(Error("Upgrade consent timed out")));
+    socket.on("error",error=>done(error));
+    socket.on("connect",()=>socket.write(action+"\n"));
+    socket.on("data",data=>{
+      reply+=data.toString("utf8");
+      if(reply.length>32){done(Error("Invalid upgrade consent response"));return;}
+      if(reply.endsWith("\n")){
+        if(!["ready\n","busy\n","released\n"].includes(reply))
+          done(Error("Invalid upgrade consent response"));
+        else done(null,reply.trim());
+      }
+    });
+    socket.on("close",()=>{if(!settled)done(Error("Upgrade consent connection closed"));});
+  });
 }
 
 /** Repeat-install is same-version only. A different installed service
@@ -516,7 +557,8 @@ async function assertRecoverablePreviousUnit(unit, home) {
   try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); }
   catch { throw new Error("Previous Agent manifest is invalid."); }
   if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
-      manifest.receipt_schema !== 1 || manifest.upgrade_profile !== "read-only-no-shell-v1" ||
+      manifest.receipt_schema !== 1 ||
+      !["read-only-no-shell-v1", "paired-full-v1"].includes(manifest.upgrade_profile) ||
       manifest.target !== "linux-" + process.arch + "-glibc" ||
       path.basename(root) !== manifest.version + "-" + manifest.target) {
     throw new Error("Previous Agent version cannot be safely recovered.");
@@ -525,8 +567,12 @@ async function assertRecoverablePreviousUnit(unit, home) {
   const entryInfo = await lstat(entry);
   if (!entryInfo.isFile() || entryInfo.isSymbolicLink() ||
       entryInfo.uid !== process.getuid() || (entryInfo.mode & 0o077) !== 0 ||
-      !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))) {
-    throw new Error("Previous Agent does not prove the reviewed read-only profile.");
+      !(
+        manifest.upgrade_profile==="read-only-no-shell-v1"
+          ? /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))
+          : /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(await readFile(entry,"utf8"))
+      )) {
+    throw new Error("Previous Agent does not prove a reviewed runtime profile.");
   }
   return {root, endpoint:endpointValue, keyPath:keyValue};
 }
@@ -1283,10 +1329,31 @@ export async function runInstaller(args, {
     node: process.execPath, home, repoRoot: path.resolve(packageRoot, "..", ".."),
     endpoint: options.endpoint, keyPath, entryExt: portable ? "js" : "ts",
   });
+  let consentAttempted = false;
   if (portable && options.action === "upgrade") {
-    await assertSafePortableUpgrade(previous, home, manifestPath);
+    const safety = await assertSafePortableUpgrade(previous, home, manifestPath);
+    if (safety.needsFreeze) {
+      let consent;
+      try {
+        consent = await requestUpgradeConsent(keyPath, "freeze");
+        if (consent !== "ready") throw Error("Agent has active or uncertain work; upgrade blocked.");
+        consentAttempted = true;
+      } catch {
+        // A lost ACK might have frozen this Agent; release it if uncertain.
+        // A definitive busy response must NOT release somebody else's freeze.
+        if (consent !== "busy")
+          await requestUpgradeConsent(keyPath, "release").catch(()=>{});
+        throw Error("Cannot prove Agent quiescence; upgrade blocked.");
+      }
+    }
   }
-  await installUnit(unitPath, rendered, previous);
+  try {
+    await installUnit(unitPath, rendered, previous);
+  } finally {
+    // When activation fails before service stop, let the old Agent resume.
+    // After successful restart the old socket disappears and release is a no-op.
+    if (consentAttempted) await requestUpgradeConsent(keyPath, "release").catch(()=>{});
+  }
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));

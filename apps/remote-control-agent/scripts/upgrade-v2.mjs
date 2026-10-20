@@ -98,8 +98,12 @@ export function validateManualUpgrade(state,{home=os.homedir(),tag,commit}){
   const old=path.join(state.root,APP,"src/v2-main.js");
   ownedFile(old,0o600);
   const text=readFileSync(old,"utf8");
-  if(!/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(text))
-    throw Error("Existing Agent may have mutable or Shell sessions");
+  // Full-tools predecessors are accepted for staging only. The installer
+  // requires a fresh authoritative in-process freeze before any unit switch.
+  if(!/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(text) &&
+     !(/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(text) &&
+       !/(?:readOnly|writeFile|shell)\s*:/.test(text)))
+    throw Error("Unverified current Agent may have mutable or Shell sessions");
   // The old unit is already owned and path-checked by manager inventory.
   const endpoint=serviceEndpoint(state.unit);
   const targetDir=path.join(programs,tag+"-"+target);

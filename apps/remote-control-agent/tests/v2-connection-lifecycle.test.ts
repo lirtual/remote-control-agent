@@ -689,6 +689,7 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
     await writeFile(keyPath, enrollment.privateKeyPem, { mode: 0o600 });
     await writeFile(keyPath + ".device-id", deviceId + "\n", { mode: 0o600 });
     await maintainAuthenticatedDeviceSession("https://agent.example/", keyPath, controller.signal, {
+      receiptDirectory: path.join(dir, "receipts"),
       send: async () => Response.json({ device_id: deviceId, nonce: "A".repeat(24) }),
       makeSocket: () => {
         socket = new FakeSocket();

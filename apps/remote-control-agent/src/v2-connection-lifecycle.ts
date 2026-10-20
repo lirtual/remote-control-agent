@@ -10,6 +10,7 @@ import { executeReadTool } from "./read-execution.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
 import { SearchSessions } from "./search.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
+import { startUpgradeControl } from "./upgrade-control.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
 
 /** One bounded Session read adapter, shared by the Agent and MCP/WSS tests. */
@@ -324,6 +325,8 @@ export async function maintainAuthenticatedDeviceSession(
     heartbeat?: { intervalMs: number; timeoutMs: number; authIntervalMs?: number };
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
+    /** Isolated local persistence for integration tests; defaults to normal receipts. */
+    receiptDirectory?: string;
   } = {},
 ): Promise<void> {
   const delay = options.wait ?? ((ms: number, abort: AbortSignal) =>
@@ -335,7 +338,11 @@ export async function maintainAuthenticatedDeviceSession(
     }));
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
-  const execution = createAgentExecutionEngine();
+  if (signal.aborted) return;
+  const execution = createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory });
+  let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>>;
+  try { upgradeControl = await startUpgradeControl(execution, keyPath); }
+  catch (error) { await execution.close(); throw error; }
   let failures = 0;
   try {
   while (!signal.aborted) {
@@ -392,6 +399,7 @@ export async function maintainAuthenticatedDeviceSession(
     await delay(capped, signal);
   }
   } finally {
+    await upgradeControl.close();
     await execution.close();
   }
 }
