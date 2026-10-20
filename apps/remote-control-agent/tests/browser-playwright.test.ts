@@ -14,6 +14,7 @@ import { createPlaywrightOfflineDriver } from "../src/browser-playwright.ts";
  * remote debugging service or production browser Profile is used.
  */
 test("real pinned Playwright launches an offline Chromium and captures bounded ARIA", {
+  skip: process.env.RCA_REAL_PLAYWRIGHT_SMOKE !== "1",
   timeout: 60_000,
 }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "rc-real-playwright-"));
