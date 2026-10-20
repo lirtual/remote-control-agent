@@ -169,8 +169,13 @@ jobs:
           & (Join-Path $stage 'bin/node.exe') --version
           if ($LASTEXITCODE -ne 0) { throw 'Bundled native Node cannot run' }
           $entry = Join-Path $stage 'apps/remote-control-agent/src/windows-v2.js'
-          & (Join-Path $stage 'bin/node.exe') $entry status
-          if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows Agent local status failed' }
+          $capabilities = & (Join-Path $stage 'bin/node.exe') $entry status | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $capabilities.platform -cne 'win32' -or
+              $capabilities.shell -ne $true -or $capabilities.write_file -ne $true) {
+            throw 'Bundled Windows Agent full capability status failed'
+          }
+          $bundle = Get-Content -LiteralPath (Join-Path $stage 'bundle.json') -Raw | ConvertFrom-Json
+          if ($bundle.upgrade_profile -cne 'paired-full-v1') { throw 'Full-tools profile not present in signed bundle' }
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $output 'candidate.zip') -CompressionLevel Optimal
           $zip = Join-Path $output 'candidate.zip'
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
