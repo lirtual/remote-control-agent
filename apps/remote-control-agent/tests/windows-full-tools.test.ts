@@ -48,14 +48,23 @@ test("Windows paired engine supports file effects, receipts and bounded native s
     assert.equal(launched?.status, 200);
     const receipt = await engine.getReceipt(shellId);
     assert.ok(receipt?.session_id, "An Agent-owned session ID must be persisted");
-    const output = await engine.executeTool({
-      tool: "read_process_output",
-      arguments: { session_id: receipt.session_id, offset: 0, length: 4096 },
-    }, controller.signal);
-    assert.equal(output?.status, 200);
-    const data = (output.body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
-    const page = JSON.parse(data) as { output: string };
-    assert.match(page.output, /RCA_WINDOWS_OK/);
+    // A managed Windows process starts asynchronously; poll its bounded
+    // output instead of racing the first PowerShell startup with a read call.
+    const deadline = Date.now() + 4_000;
+    let outputText = "";
+    do {
+      const output = await engine.executeTool({
+        tool: "read_process_output",
+        arguments: { session_id: receipt.session_id, offset: 0, length: 4096 },
+      }, controller.signal);
+      assert.equal(output?.status, 200);
+      const data = (output.body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
+      const page = JSON.parse(data) as { output: string };
+      outputText = page.output;
+      if (outputText.includes("RCA_WINDOWS_OK")) break;
+      await new Promise(resolve => setTimeout(resolve, 75));
+    } while (Date.now() < deadline);
+    assert.match(outputText, /RCA_WINDOWS_OK/);
 
     const sleeper = await invoke("start_process", {
       command: "Start-Sleep -Seconds 60", timeout_ms: 0,
