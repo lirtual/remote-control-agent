@@ -688,7 +688,7 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
   }
   // Ask only while creating a fresh pending grant; already-approved installs do not prompt.
   const suggested = os.hostname();
-  let name: string;
+  let name;
   if (options.name !== undefined) {
     name = selectDeviceLabel(options.name, "");
   } else {
