@@ -65,8 +65,17 @@ export function localManagerInventory({home=os.homedir(),source=fileURLToPath(im
   checkedPath(manifestFile,{mode:0o600});
   if(lstatSync(manifestFile).size>16384)throw Error("Oversized runtime manifest");
   const info=JSON.parse(readFileSync(manifestFile,"utf8"));
+  const runtime=path.join(root,"apps/remote-control-agent/src/v2-main.js");
+  checkedPath(runtime,{mode:0o600});
+  const sourceText=readFileSync(runtime,"utf8");
+  const approvedProfile =
+    (info.upgrade_profile==="read-only-no-shell-v1" &&
+      /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(sourceText)) ||
+    (info.upgrade_profile==="paired-full-v1" &&
+      /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(sourceText) &&
+      !/(?:readOnly|writeFile|shell)\s*:/.test(sourceText));
   if(info.artifact_schema!==1||info.device_protocol!==2||
-      info.receipt_schema!==1||info.upgrade_profile!=="read-only-no-shell-v1"||
+      info.receipt_schema!==1||!approvedProfile||
       path.basename(root)!==info.version+"-"+info.target)
     throw Error("Untrusted Agent runtime manifest");
   const versions=[];

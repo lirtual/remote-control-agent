@@ -647,3 +647,71 @@ test("revocation stops Agent-owned supervised Shell sessions and rejects later s
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("paired v2 agent exposes reads, writes and Shell without capability flags", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "rc-v2-all-tools-"));
+  const keyPath = path.join(dir, "device.pem");
+  const filePath = path.join(dir, "roundtrip.txt");
+  const deviceId = randomUUID();
+  const controller = new AbortController();
+  const replies: Array<Record<string, unknown>> = [];
+  let socket: FakeSocket | undefined;
+  const checks: Array<{ kind: "read" | "operation"; tool: string; arguments: object; operation_id?: string }> = [
+    { kind: "read", tool: "list_sessions", arguments: {} },
+    { kind: "operation", tool: "write_file",
+      arguments: { path: filePath, content: "paired-tools-ok", mode: "rewrite" },
+      operation_id: "write-" + randomUUID() },
+    { kind: "read", tool: "read_file", arguments: { path: filePath } },
+    { kind: "operation", tool: "start_process",
+      arguments: { command: "printf 'paired-shell-ok'", timeout_ms: 2000 },
+      operation_id: "shell-" + randomUUID() },
+  ];
+  let index = 0;
+  function sendNext(): void {
+    if (index === checks.length) {
+      controller.abort();
+      return;
+    }
+    const check = checks[index++]!;
+    socket!.event("message", { data: JSON.stringify({
+      kind: check.kind, request_id: randomUUID(), tool: check.tool,
+      arguments: check.arguments,
+      ...(check.operation_id ? { operation_id: check.operation_id } : {}),
+    }) });
+  }
+  try {
+    const enrollment = newEnrollment("full-default-test");
+    await writeFile(keyPath, enrollment.privateKeyPem, { mode: 0o600 });
+    await writeFile(keyPath + ".device-id", deviceId + "\n", { mode: 0o600 });
+    await maintainAuthenticatedDeviceSession("https://agent.example/", keyPath, controller.signal, {
+      send: async () => Response.json({ device_id: deviceId, nonce: "A".repeat(24) }),
+      makeSocket: () => {
+        socket = new FakeSocket();
+        socket.readyState = WebSocket.CONNECTING;
+        socket.onSend = wire => {
+          if (!wire.startsWith("{")) { if (wire === "rc-v2:ping") queueMicrotask(() => socket!.pong()); return; }
+          const reply = JSON.parse(wire) as Record<string, unknown>;
+          if (reply.kind !== "read_result" && reply.kind !== "operation_result") return;
+          replies.push(reply);
+          queueMicrotask(sendNext);
+        };
+        queueMicrotask(() => socket!.emitOpen());
+        return socket as unknown as WebSocket;
+      },
+      onState: state => { if (state === "connected") setTimeout(sendNext, 0); },
+    });
+    assert.equal(replies.length, 4);
+    assert.equal(replies[0]!.kind, "read_result");
+    assert.equal(replies[0]!.status, "completed");
+    assert.equal(replies[1]!.kind, "operation_result");
+    assert.equal((replies[1]!.result as { status: string }).status, "completed");
+    assert.equal(replies[2]!.kind, "read_result");
+    assert.equal(replies[2]!.text, "paired-tools-ok");
+    assert.equal(replies[3]!.kind, "operation_result");
+    assert.ok(["completed", "running"].includes((replies[3]!.result as { status: string }).status));
+    assert.equal(await readFile(filePath, "utf8"), "paired-tools-ok");
+  } finally {
+    controller.abort();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

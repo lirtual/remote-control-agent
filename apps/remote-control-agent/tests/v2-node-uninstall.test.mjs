@@ -11,7 +11,7 @@ import { executeLocalUninstall, planLocalUninstall, noOwnedAgentProcesses }
 const DEVICE="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
 const APP="apps/remote-control-agent";
 const VERSION="v0.1.2-linux-x64-glibc";
-function testFixture({withUnit=true,withLauncher=true}={}){
+function testFixture({withUnit=true,withLauncher=true,profile="read-only-no-shell-v1"}={}){
   const home=mkdtempSync(path.join(tmpdir(),"rca-lifecycle-safe-"));
   chmodSync(home,0o700);
   function dir(relative){
@@ -24,10 +24,11 @@ function testFixture({withUnit=true,withLauncher=true}={}){
   dir(base+"/programs/"+VERSION+"/"+APP+"/scripts");
   writeFileSync(path.join(program,"bundle.json"),JSON.stringify({
     version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
-    device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"
+    device_protocol:2,receipt_schema:1,upgrade_profile:profile
   }),{mode:0o600});
   writeFileSync(path.join(program,APP,"src/v2-main.js"),
-    "const caps = {readOnly: true, writeFile: false, shell: false,};\n",{mode:0o600});
+    profile==="paired-full-v1" ? 'export const V2_RUNTIME_PROFILE = "paired-full-v1";\n' :
+      "const caps = {readOnly: true, writeFile: false, shell: false,};\n",{mode:0o600});
   writeFileSync(path.join(program,APP,"scripts/manage-v2.mjs"),"export {};\n",{mode:0o600});
   const identity=path.join(dir(base),"v2-identity.pem.device-id");
   writeFileSync(identity,DEVICE,{mode:0o600});
@@ -71,6 +72,26 @@ test("owner-confirmed uninstall stops only v2 service then keeps keys and SQLite
     assert.equal(readFileSync(f.receipts,"utf8"),"RECEIPTS_UNTOUCHED");
   }finally{cleanup(f);}
 });
+test("full-tools uninstall requires successful owned-service stop and preserves identity/receipts",()=>{
+  const f=testFixture({profile:"paired-full-v1"});
+  try{
+    const plan=planLocalUninstall(f.state,{home:f.home});
+    assert.throws(()=>executeLocalUninstall(plan,{
+      confirm:true,scan:()=>false,invoke:()=>({status:0})
+    }),/remains after service stop/);
+    assert.ok(existsSync(f.program));
+    const calls=[];
+    const result=executeLocalUninstall(plan,{
+      confirm:true,scan:()=>true,invoke:(name,args)=>{calls.push([name,...args]);return {status:0};}
+    });
+    assert.equal(result.cloud_revocation,"NOT_PERFORMED");
+    assert.equal(existsSync(f.program),false);
+    assert.equal(readFileSync(f.identity,"utf8"),DEVICE);
+    assert.equal(readFileSync(f.receipts,"utf8"),"RECEIPTS_UNTOUCHED");
+    assert.deepEqual(calls.map(x=>x[2]),["disable","daemon-reload"]);
+  }finally{cleanup(f);}
+});
+
 test("unconfirmed uninstall refuses and preserves owned service/program",()=>{
   const f=testFixture();try{
     const plan=planLocalUninstall(f.state,{home:f.home});

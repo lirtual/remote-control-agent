@@ -148,11 +148,16 @@ export function build(args) {
   for (const relative of ["bin/node","apps/remote-control-agent/.build/session-supervisor"]) {
     chmodSync(path.join(work,relative),0o700);
   }
-  // Only a statically read-only, Shell-disabled Agent can be upgraded without
-  // a new live-session quiescence IPC. All future mutable profiles fail closed.
+  // A paired full-tools package is eligible only for a one-way, reviewed
+  // promotion from a read-only installation. Full-to-full upgrade is blocked.
   const entrySource=readFileSync(path.join(source,"v2-main.ts"),"utf8");
-  if(!/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource)) {
-    throw new Error("Standalone unattended-session upgrade safety profile is not proven.");
+  const lifecycleSource=readFileSync(path.join(source,"v2-connection-lifecycle.ts"),"utf8");
+  if(!/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
+     /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
+     !/const execution = createAgentExecutionEngine\(\)/.test(lifecycleSource) ||
+     !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
+     !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
+    throw new Error("Reviewed paired full-tools release profile is not proven.");
   }
   const modules=runtimeSources();
   for(const file of modules){
@@ -179,7 +184,7 @@ export function build(args) {
     name:"remote-control-agent",version:args.version,target:args.target,
     node:nodeVersion,glibc_build:libc,glibc_min:glibcMin,modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
-    upgrade_profile:"read-only-no-shell-v1"
+    upgrade_profile:"paired-full-v1"
   })+"\n",{mode:0o600});
   const name="remote-control-agent-"+args.version+"-"+args.target+".tar.gz";
   tarball(work,path.join(args.out,name));

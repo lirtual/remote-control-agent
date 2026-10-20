@@ -494,10 +494,16 @@ def validated_owned_version(p):
     manifest = json.loads(f.read_text("utf8"))
     if (manifest.get("artifact_schema") != 1 or manifest.get("device_protocol") != 2
             or manifest.get("receipt_schema") != 1
-            or manifest.get("upgrade_profile") != "read-only-no-shell-v1"
             or p.name != manifest.get("version") + "-" + manifest.get("target")
-            or not re.search(r"readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,",
-                             source.read_text("utf8"))):
+            or not (
+                (manifest.get("upgrade_profile") == "read-only-no-shell-v1" and
+                 re.search(r"readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,",
+                           source.read_text("utf8"))) or
+                (manifest.get("upgrade_profile") == "paired-full-v1" and
+                 re.search(r'V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"',
+                           source.read_text("utf8")) and
+                 not re.search(r"(?:readOnly|writeFile|shell)\s*:",
+                               source.read_text("utf8"))))):
         raise ValueError("Unverified or Shell-enabled Agent; cannot uninstall")
     for parent, dirs, files in os.walk(p, followlinks=False):
         for name in dirs + files:

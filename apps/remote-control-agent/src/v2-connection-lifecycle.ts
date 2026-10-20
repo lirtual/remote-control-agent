@@ -1,8 +1,8 @@
 /**
- * v2 Agent lifecycle with separately gated read-only and T07 file-write capabilities.
+ * v2 Agent lifecycle for signed, approved devices.
  *
- * Hibernation heartbeat responses do not wake the DO. Both remote access
- * capabilities are disabled by default; this handler never executes Shell.
+ * All supported file, Shell and session tools are available after pairing.
+ * Hibernation heartbeat responses do not wake the DO.
  */
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
 import { executeReadTool } from "./read-execution.ts";
@@ -321,11 +321,6 @@ export async function maintainAuthenticatedDeviceSession(
     send?: typeof fetch;
     makeSocket?: (url: string, protocols: string[]) => WebSocket;
     heartbeat?: { intervalMs: number; timeoutMs: number; authIntervalMs?: number };
-    // Explicit opt-in for isolated T05 tests. Default remains authentication only.
-    readOnly?: boolean;
-    // Independent T07 capabilities. Both disabled in the shipped entrypoint.
-    writeFile?: boolean;
-    shell?: boolean;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -339,7 +334,7 @@ export async function maintainAuthenticatedDeviceSession(
     }));
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
-  const execution = (options.writeFile || options.shell) ? createAgentExecutionEngine() : undefined;
+  const execution = createAgentExecutionEngine();
   let failures = 0;
   try {
   while (!signal.aborted) {
@@ -352,28 +347,24 @@ export async function maintainAuthenticatedDeviceSession(
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
       // Reconnect never inherits a stale/other-device cursor or replays a call.
-      const searches = options.readOnly ? new SearchSessions() : undefined;
+      const searches = new SearchSessions();
       let outcome: SocketEnd;
       try {
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
-          (options.readOnly || options.shell) ? async (tool, args, requestSignal) => {
+          async (tool, args, requestSignal) => {
             if (tool === "list_sessions" || tool === "read_process_output") {
-              if (!options.shell || !execution) return null;
               return executeV2SessionRead(execution, tool, args, requestSignal);
             }
-            if (!options.readOnly || !searches) return null;
             // Reuse the original bounded file/search engine.
             const reply = await executeReadTool(tool, args, searches, requestSignal);
             return reply.kind === "completed" ? reply.text : null;
-          } : undefined,
-          execution ? (tool, args, operationId, requestSignal) =>
-            (["start_process", "interact_with_process", "force_terminate"].includes(tool) ? options.shell : options.writeFile)
-              ? executeV2FileOperation(execution, tool, args, operationId, requestSignal)
-              : Promise.resolve({ operation_id: operationId, status: "unavailable" }) : undefined,
-          options.shell === true,
-          options.shell && execution ? () => execution.stopOwnedForRevocation() : undefined);
+          },
+          (tool, args, operationId, requestSignal) =>
+            executeV2FileOperation(execution, tool, args, operationId, requestSignal),
+          true,
+          () => execution.stopOwnedForRevocation());
       } finally {
-        await searches?.close();
+        await searches.close();
       }
       if (outcome === "aborted" || outcome === "closed") return;
       if (outcome === "policy") { options.onState?.("rejected"); return; }
@@ -398,6 +389,6 @@ export async function maintainAuthenticatedDeviceSession(
     await delay(capped, signal);
   }
   } finally {
-    await execution?.close();
+    await execution.close();
   }
 }

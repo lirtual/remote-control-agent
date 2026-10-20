@@ -3,6 +3,8 @@ import { lstat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
+// Immutable release profile identifier, not a user-configurable capability switch.
+export const V2_RUNTIME_PROFILE = "paired-full-v1";
 
 const keyPath = process.env.REMOTE_CONTROL_V2_KEY_PATH ??
   path.join(os.homedir(), ".local", "share", "mcp-workers", "remote-control", "v2-identity.pem");
@@ -30,10 +32,9 @@ if (!endpoint || process.platform !== "linux") {
       process.on(name, () => controller.abort());
     }
     let rejected = false;
+    // A successfully paired device exposes file, Shell and session tools.
+    // Signed WSS identity, device revocation and durable receipts still apply.
     await maintainAuthenticatedDeviceSession(endpoint, keyPath, controller.signal, {
-      readOnly: true,
-      writeFile: false,
-      shell: false,
       onState: state => {
         log(state);
         if (state === "rejected") rejected = true;

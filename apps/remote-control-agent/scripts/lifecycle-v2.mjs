@@ -26,11 +26,17 @@ export function verifyOwnedProgram(version){
   const info=JSON.parse(readFileSync(manifestFile,"utf8"));
   const code=path.join(version,APP,"src/v2-main.js");
   safeStat(code);
+  const source=readFileSync(code,"utf8");
+  const approvedProfile =
+    (info.upgrade_profile==="read-only-no-shell-v1" &&
+      /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(source)) ||
+    (info.upgrade_profile==="paired-full-v1" &&
+      /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(source) &&
+      !/(?:readOnly|writeFile|shell)\s*:/.test(source));
   if(info.artifact_schema!==1||info.device_protocol!==2||
-    info.receipt_schema!==1||info.upgrade_profile!=="read-only-no-shell-v1"||
-    info.version+"-"+info.target!==path.basename(version)||
-    !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(readFileSync(code,"utf8")))
-    throw Error("Active or uncertain Shell ownership; uninstall blocked");
+    info.receipt_schema!==1||!approvedProfile||
+    info.version+"-"+info.target!==path.basename(version))
+    throw Error("Untrusted Agent profile or Shell ownership; uninstall blocked");
   const allowedDirs=new Set(["bin","apps",APP,APP+"/src",APP+"/scripts",APP+"/.build"]);
   const allowedFiles=new Set(["bundle.json","bin/node",APP+"/package.json",
     APP+"/.build/session-supervisor",APP+"/src/v2-main.js",

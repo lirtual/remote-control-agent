@@ -95,10 +95,16 @@ export async function prepareManualUpgrade(state,pins,{
   if(program!==approved.targetDir)throw Error("Unexpected staged version directory");
   const runner=ownedFile(path.join(program,"bin/node"),0o700);
   const script=ownedFile(path.join(program,APP,"scripts/install-v2.mjs"),0o600);
-  // Avoid executing a new Agent that has not proven the readonly profile.
+  // Only an immutable paired-full target may replace a proven read-only
+  // Agent. The currently installed runtime is verified separately above.
   const main=ownedFile(path.join(program,APP,"src/v2-main.js"),0o600);
-  if(!/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(readFileSync(main,"utf8")))
-    throw Error("Unproven Shell ownership in upgrade target");
+  const manifest=ownedFile(path.join(program,"bundle.json"),0o600);
+  const info=JSON.parse(readFileSync(manifest,"utf8"));
+  const entry=readFileSync(main,"utf8");
+  if(info.upgrade_profile!=="paired-full-v1" ||
+     !/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entry) ||
+     /(?:readOnly|writeFile|shell)\s*:/.test(entry))
+    throw Error("Unproven paired full-tools upgrade target");
   return Object.freeze({...approved,program,runner,script});
 }
 export function activateManualUpgrade(prepared,{
