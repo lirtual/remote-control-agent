@@ -25,7 +25,7 @@ export function parseWindowsAgentArgs(argv: string[]): {
   if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name") ||
