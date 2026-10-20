@@ -6,11 +6,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: remote-agent-native-win-rc2
+  group: remote-agent-native-win-rc3
   cancel-in-progress: false
 env:
-  RELEASE_TAG: v0.1.10-windows-rc.2
-  ASSET: remote-control-agent-v0.1.10-windows-rc.2-windows-x64.zip
+  RELEASE_TAG: v0.1.11-windows-rc.1
+  ASSET: remote-control-agent-v0.1.11-windows-rc.1-windows-x64.zip
   NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
 jobs:
   windows-verified-bundle:
@@ -29,7 +29,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $actual = (Get-Content '.github/windows-acceptance-release-request.txt' -Raw).Trim()
-          if ($actual -cne 'Authorize one Windows-only acceptance pre-release: v0.1.10-windows-rc.2') { throw 'Unapproved release request' }
+          if ($actual -cne 'Authorize one Windows-only acceptance pre-release: v0.1.11-windows-rc.1') { throw 'Unapproved release request' }
           if ($env:GITHUB_REF -cne 'refs/heads/feat/windows-native-preview') { throw 'Wrong branch' }
       - name: Install locked dependencies without scripts
         run: corepack pnpm install --frozen-lockfile --ignore-scripts
@@ -41,6 +41,11 @@ jobs:
           Set-Location apps/remote-control-agent
           node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Windows test failed' }
+      - name: Compile no-console Windows Agent launcher
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/scripts/build-windows-background.ps1 -Output (Join-Path $env:RUNNER_TEMP 'rca-background.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Verified GUI launcher compile failed' }
       - name: Build and verify exact ZIP with shipping installer
         shell: pwsh
         run: |
@@ -48,7 +53,7 @@ jobs:
           $node = (Get-Command node.exe).Source
           if ((Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:NODE_SHA256) { throw 'Node checksum mismatch' }
           $dir = Join-Path $env:RUNNER_TEMP 'windows-rc-stage'
-          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $env:RELEASE_TAG --node-bin $node --node-sha256 $env:NODE_SHA256 --out $dir
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $env:RELEASE_TAG --node-bin $node --node-sha256 $env:NODE_SHA256 --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $dir
           if ($LASTEXITCODE -ne 0) { throw 'Bundle build refused' }
           $stage = Join-Path $dir ('remote-control-agent-' + $env:RELEASE_TAG + '-windows-x64')
           $verifier = Join-Path $stage 'apps\remote-control-agent\scripts\verify-windows-preview.mjs'
