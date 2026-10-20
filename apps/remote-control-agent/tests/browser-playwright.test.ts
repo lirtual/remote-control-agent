@@ -31,6 +31,8 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.equal(settings.headless,true);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
+      calls.push("channel:"+String(settings.channel));
+      calls.push("executable:"+String(settings.executablePath));
       if (options.launchWait) await options.launchWait;
       return context;
     },
@@ -61,6 +63,31 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
     await assert.rejects(browser.snapshot(status.session_id),/Unknown or closed/);
   } finally { await rm(tmp,{recursive:true,force:true}); }
+});
+
+test("installed Chrome uses Playwright's built-in cross-platform channel, not a custom path finder",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-p3-native-channel-"));
+  const fake=fakeBrowser();
+  const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
+  try{
+    const {session_id}=await browser.start();
+    assert.ok(fake.calls.includes("channel:chrome"));
+    assert.ok(fake.calls.includes("executable:undefined"));
+    await browser.close(session_id);
+  }finally{await rm(tmp,{recursive:true,force:true});}
+});
+
+test("trusted installer-owned Chromium absolute path takes precedence over Chrome channel",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-p3-matching-binary-"));
+  const fake=fakeBrowser();
+  const executable=path.join(tmp,"trusted-browser","chrome-headless-shell");
+  const browser=new PlaywrightBrowserManager({agentStore:tmp,browserExecutable:executable,chromiumForTests:fake.driver});
+  try{
+    const {session_id}=await browser.start();
+    assert.ok(fake.calls.includes("channel:undefined"));
+    assert.ok(fake.calls.includes("executable:"+executable));
+    await browser.close(session_id);
+  }finally{await rm(tmp,{recursive:true,force:true});}
 });
 
 test("uncertain navigation cannot be replayed, but can be inspected then closed",async()=>{

@@ -78,3 +78,20 @@ The Playwright candidate was transpiled to ordinary `.js` and placed into a **di
 **Stop/go:** Choose only after (a) complete distribution bytes, file counts and memory impact are measured; (b) the verifier is reviewed for new allowlisted paths with exact content hashes; (c) no unreviewed runtime import is admitted; and (d) isolated Windows x64 / Linux x64 upgrade, rollback and real launch/cleanup tests pass. Only then consider Linux ARM64 and macOS evidence separately. Worker CI still intentionally uses a separate pinned public Agent fixture and must not be silently retargeted.
 
 This checkpoint does **not** establish deployable browser-enabled Agent assets, installer/upgrade acceptance, real installed-device rollback, macOS parity, public browser tool activation, or a safe high-impact web automation policy.
+
+## P3 installed-Chrome option: cross-platform selection experiment (2026-10-20)
+
+**Status:** native Windows **PASS**, WSL/Linux **NO INSTALLED CHROME**; no release/archive format changes or production enablement.
+
+To avoid custom executable scans, the one source-only `PlaywrightBrowserManager` now asks Playwright itself to launch `channel: "chrome"` **only when no trusted installer-owned `browserExecutable` was supplied**. The explicit absolute installer-controlled matching Chromium path still takes precedence. The Agent's established temporary private Profile, no arbitrary MCP binary input, no downloads, single runtime and no automatic fallback service remain unchanged.
+
+| Device / executable | Observed result |
+| --- | --- |
+| Paired native Windows, Node 24.12.0, system Chrome 155.0.8059.85 | Actual BrowserManager (compiled from this candidate) started the system Chrome via official Playwright `channel:"chrome"`, navigated public TodoMVC, returned AI Snapshot/version and closed normally. **PASS**. |
+| Same native Windows with Playwright-core v1.64.1, exact channel-only API | **PASS**, no custom browser path resolver, no additional EXE from us. |
+| Paired Ubuntu WSL2, Agent-bundled Node 24.21.0, same Playwright-core 1.64.1 | **NO INSTALLED CHROME**: Playwright itself rejects `channel:"chrome"` (looks for `/opt/google/chrome/chrome`); no auto-install or alternate executable was requested. This **blocks library-only seamless WSL installation**. |
+| Playwright library payload on Linux | 13,477,952 bytes, 115 regular files; by itself it still exceeds the signed Agent's current 80-entry archive maximum when combined with existing files. This is *not* a validated installable package. |
+
+**Outcome:** Direct Playwright + existing Chrome is the simplest runtime on a device that already has a supported compatible Chrome. It is **not** an acceptable promise of zero-configuration browser support for Linux/WSL, macOS or systems with only Edge/other browsers. Chrome channel uses the host's installed version and may break compatibility after auto-updates; re-test before enabling. The existing signed Agent package/installer still needs a **separately reviewed dependency and manifest strategy**. Do not automatically add a second installer or download path. Consider whether a version-matched Chromium variant is truly necessary on platforms lacking a supported browser, and only then adjust the existing vetted release/install path under a distinct explicit approval gate.
+
+**Checked:** TypeScript typecheck PASS, 12 browser-focused tests PASS; Windows actual manager/channel runtime PASS and clean close. The browser remains **source-only and inactive**, Worker `BROWSER_TOOLS_ACCEPTED = false`, production Node/browser installation unchanged, and no merge, release or deployment.

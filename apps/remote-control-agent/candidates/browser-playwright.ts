@@ -19,7 +19,9 @@ const IDLE_MS = 30 * 60_000;
 export interface PlaywrightBrowserOptions {
   /** Already managed Agent-private location, NEVER received from MCP input. */
   agentStore: string;
-  /** Trusted local executable chosen at installation, never from an MCP tool. */
+  /** Trusted, absolute installer-owned matching Chromium path; never MCP input.
+   * Without it, prefer Playwright's built-in installed Chrome channel rather
+   * than guessing arbitrary OS paths or downloading browser binaries. */
   browserExecutable?: string;
   /** Tests may inject a BrowserType; no second runtime adapter is introduced. */
   chromiumForTests?: BrowserType<{}>;
@@ -104,7 +106,8 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       if (this.context || this.sessionId) throw Error("Automation Profile is already in use.");
       await mkdir(this.profile, { recursive: true, mode: 0o700 });
       const context = await this.driver.launchPersistentContext(this.profile, {
-        headless: true, ...(this.executable ? { executablePath: this.executable } : {}),
+        headless: true,
+        ...(this.executable ? { executablePath: this.executable } : { channel: "chrome" }),
         acceptDownloads: false, serviceWorkers: "block",
       });
       try {
