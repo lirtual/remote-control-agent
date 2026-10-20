@@ -46,9 +46,9 @@ existing bounded read/list/search tools; writes and Shell remain disabled.
 
 The Windows CI constructs an offline preview containing `bin/node.exe`, the reviewed
 JS runtime, protected identity ACL helper, and a convenient `rca.cmd` launcher.
-In a reviewed/unpacked candidate directory, `.ca.cmd status` works
-without system-wide Node, Git or npm. `.ca.cmd pair --endpoint HTTPS_ORIGIN/`
-and `.ca.cmd run --endpoint HTTPS_ORIGIN/` are **foreground-only**
+In a reviewed/unpacked candidate directory, `.\rca.cmd status` works
+without system-wide Node, Git or npm. `.\rca.cmd pair --endpoint HTTPS_ORIGIN/`
+and `.\rca.cmd run --endpoint HTTPS_ORIGIN/` are **foreground-only**
 development commands. The CI reopens the ZIP, verifies its file inventory
 and runs the bundled manager. No public Windows Release exists yet.
 
