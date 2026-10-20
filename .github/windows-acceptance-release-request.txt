@@ -1,0 +1,1 @@
+Authorize one Windows-only acceptance pre-release: v0.1.10-windows-rc.1
