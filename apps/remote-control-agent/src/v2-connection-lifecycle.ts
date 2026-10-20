@@ -188,11 +188,21 @@ export function monitorDeviceSocket(
             Object.hasOwn(readParsers, request.tool) &&
             typeof request.request_id === "string" &&
             /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(request.request_id) &&
-            Object.keys(request).length === 4 && readParsers[request.tool]?.(request.arguments) &&
-            readsInFlight < 4) {
-          readsInFlight++;
+            Object.keys(request).length === 4) {
+          // A valid owner-routed READ with an unsupported *device-local* path
+          // must not destroy the signed WSS identity. In particular, a POSIX
+          // path sent to native Windows is a failed read, not device revocation
+          // or an unrecognized protocol frame. Fail closed on file access,
+          // reply with the existing bounded failure frame and stay connected.
           const id = request.request_id;
           const tool = request.tool;
+          if (!readParsers[tool]?.(request.arguments) || readsInFlight >= 4) {
+            try {
+              socket.send(JSON.stringify({ kind: "read_result", request_id: id, status: "failed" }));
+            } catch { finish("offline"); }
+            return;
+          }
+          readsInFlight++;
           void Promise.resolve().then(() => readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
               if (settled || signal.aborted || socket.readyState !== WebSocket.OPEN) return;
