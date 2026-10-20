@@ -154,7 +154,8 @@ export function build(args) {
   const lifecycleSource=readFileSync(path.join(source,"v2-connection-lifecycle.ts"),"utf8");
   if(!/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
      /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
-     !/const execution = createAgentExecutionEngine\(\)/.test(lifecycleSource) ||
+     !/const full = options\.capability !== "read-only"/.test(lifecycleSource) ||
+     !/const execution = full \? createAgentExecutionEngine\(\) : undefined/.test(lifecycleSource) ||
      !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
      !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
     throw new Error("Reviewed paired full-tools release profile is not proven.");
