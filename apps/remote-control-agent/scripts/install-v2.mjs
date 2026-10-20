@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
+import { selectDeviceLabel } from "../src/v2-enrollment.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
@@ -685,8 +686,18 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
   if (!stdin.isTTY || !stdout.isTTY) {
     throw new Error("Pairing requires a local interactive device terminal.");
   }
+  // Ask only while creating a fresh pending grant; already-approved installs do not prompt.
+  const suggested = os.hostname();
+  let name;
+  if (options.name !== undefined) {
+    name = selectDeviceLabel(options.name, "");
+  } else {
+    const prompt = createInterface({ input: stdin, output: stdout, terminal: true });
+    try { name = selectDeviceLabel(await prompt.question(`Device name [${suggested}]: `), suggested); }
+    finally { prompt.close(); }
+  }
   const enrollment = await beginDeviceEnrollment(
-    options.name ?? os.hostname(), options.endpoint, keyPath, fetch, reuseExistingKey,
+    name, options.endpoint, keyPath, fetch, reuseExistingKey,
     options.grantType ?? "permanent");
   stdout.write("Pairing code (10 min): " + enrollment.code + "\n");
   if (options.showFingerprint) {
@@ -1149,7 +1160,7 @@ export async function runInstaller(args, {
     try {
       stdout.write("Remote Control Agent " +
         (portable ? JSON.parse(readFileSync(manifestPath, "utf8")).version : "v2") + "\n");
-      stdout.write("Device: " + (options.name ?? os.hostname()) + "\n");
+      stdout.write("Suggested device name: " + (options.name ?? os.hostname()) + "\n");
       stdout.write("1. Permanent (systemd)\n2. Temporary (24h)\n");
       const choice=(await prompt.question("Choose [1-2]: ")).trim();
       // Mode choice binds the signed Agent pending request and owner MCP review.
