@@ -36,3 +36,45 @@ Real paired WSL Agent device, pinned Node 24.21.0, `playwright-core@1.64.1`, dis
 - **PASS — fixed real-Chromium race:** during a deliberately blocked navigation, revocation interrupted page.goto and left zero active sessions. With the existing receipt engine used for the effect, the revocation status and durable navigation receipt are both `unknown`/`uncertain` rather than falsely claiming that an external website effect did not happen; the same Operation ID is not replayed. Two new automatic tests cover revoke-during-navigation and revoke-during-startup; all **10 browser-specific tests pass** locally.
 
 **Still gated:** the test socket starts *after* authentication and the Worker tools remain disabled. Real signed WSS exchange + actual Worker/DO MCP routing, installed Agent package with audited Playwright and compatible browser binary, physical Windows Agent E2E, crash/restart/profile handling across all modes, hostile-network isolation and exact verified high-impact approval remain **UNPASSED**. Neither successful test fixtures nor Source Draft constitutes merge or deployment permission.
+
+## P3 feasibility checkpoint — existing release format, not yet a candidate Release (2026-10-20)
+
+**Status: compiled runtime smoke PASS, signed Release packaging/installation NOT PASSED.** This is a bounded selection gate, not permission to weaken production safeguards.
+
+### Measured Linux x64 components and validated import layout
+
+On the already-authorized disposable WSL Ubuntu test device with bundled Agent Node 24.21.0 and pinned `playwright-core@1.64.1`:
+
+| Input | Observed footprint | Packaging implications |
+| --- | --- | --- |
+| Bundled Node 24 ELF | 126,595,440 bytes (~121 MiB); gzip level 1 ~49.7 MB | Existing, unchanged |
+| Playwright core installed package | ~14 MiB; 115 regular files | Must be reviewed as actual runtime dependency, not a devDependency |
+| Version-matched Chromium Headless Shell 156.0.8078.4 (revision 1248) | ~273 MiB; 289 regular files; main binary gzip level 1 ~95.1 MB | Includes license, ICU data, locales, resources and shared libraries; **do not silently strip** |
+| Playwright FFmpeg cache | ~5.1 MiB | Separately identify whether any enabled feature actually needs it |
+| Combined Node + core + headless shell (no tar overhead) | ~408 MiB | **Exceeds the existing 240 MiB Linux decompression bound** |
+
+Actual package files have no symlinks; each provenance/license obligation still requires review. The Playwright package LICENSE and Chromium `LICENSE.headless_shell` are present in upstream artifacts. **Main executable gzip measurements do not establish complete archive size.**
+
+**Full staging attempt / hard negative evidence:** A disposable directory containing compiled BrowserManager JS, all `playwright-core` files, the matching Chromium shell and actual bundled Agent Node totalled **425,166,669 bytes** in the test's `bin/` + `apps/` trees (408 regular files, before adding the production Agent's scripts). An attempted deterministic `tar --format=ustar` reported **two Playwright static asset paths as unrepresentable** and exited nonzero, even though their total paths were only ~101 and 110 bytes; the ustar prefix/name split matters, not just aggregate length. The resulting `gzip -1` file was 179,362,545 bytes but is **incomplete and NOT a valid package or acceptable compressed-size measurement**. Never treat this output as an accepted archive or merely switch to an unaudited tar format. The original Linux verifier's 80-entry whitelist and 240 MiB decompression limit remain independently blocking even if path layout is fixed.
+
+**Candidate JS load proof:** The staged layout itself (not a tar) ran successfully under the existing Agent-bundled Node 24.21.0, loading `playwright-core@1.64.1` from an Agent-local `node_modules` directory and Chromium from Agent-owned `vendor`. Real TodoMVC navigation, AI Snapshot/version and context close all passed. Browser runtime selection and complete packaged-file authentication remain unverified.
+
+The Playwright candidate was transpiled to ordinary `.js` and placed into a **disposable preview directory with the Agent's normal Node-compatible layout** (package under `apps/remote-control-agent/node_modules/playwright-core`, headless shell under an Agent-owned `vendor` directory). The compiled JS loaded the exact `playwright-core` version, started a real matching Chromium, navigated the controlled Playwright TodoMVC, returned a versioned AI ARIA Snapshot, and closed the context successfully. **PASS**. This did not install, update or replace the paired Agent.
+
+### Verified release security constraints (NOT relaxed)
+
+- The current Linux `verify-v2-release.mjs` limits **downloaded archive to 180 MiB**, **uncompressed tar to 240 MiB**, **archive entries to 80** and file/directory names to an explicit fixed whitelist. The runtime package plus browser alone contains **404 files**, before accounting for Node, Agent or directory entries.
+- A synthetic tar with one unapproved `apps/remote-control-agent/vendor/` entry was correctly rejected by the **unchanged real `inspectTarGzip` validator**. PASS, fail-closed.
+- Windows `verify-windows-preview.mjs` permits at most **41** hashed runtime files and its own strict path allowlist; the existing PR #15 Windows-only optional staging experiment does not override or prove production acceptance for the new BrowserManager.
+- The current `build-v2-release.mjs` forbids new external `src` imports, and the reviewed `paired-full-v1` runtime constructor injects **no browser**. Those rules remain in place. Never simply increase the tar/file-count limits or bypass the external-import check.
+
+### Minimal next design and acceptance gate
+
+**Do not create a new browser Worker, installer, service, download proxy, package repository, second CLI or cache database.** Before editing the existing signed archive format, compare only two viable options against the owner's install simplicity requirements:
+
+1. **Use an existing compatible local Chrome/Chromium** and distribute the audited Playwright library with the existing Agent. This is smaller and already works on the Windows PoC device, but a fresh Linux device may not have a compatible browser; no cross-platform seamless install claim is allowed.
+2. **Ship a version-matched Chromium alongside Playwright in the existing signed Agent archive**. This better serves a one-command Linux setup, but requires an intentional new vetted manifest/file inventory, archive limits with a realistic memory-budget assessment, licensing/provenance, and install/rollback acceptance. Evaluate whether safely retaining the existing in-memory gzip/tar parser is appropriate; do not create a streaming archive parser without evidence it is required.
+
+**Stop/go:** Choose only after (a) complete distribution bytes, file counts and memory impact are measured; (b) the verifier is reviewed for new allowlisted paths with exact content hashes; (c) no unreviewed runtime import is admitted; and (d) isolated Windows x64 / Linux x64 upgrade, rollback and real launch/cleanup tests pass. Only then consider Linux ARM64 and macOS evidence separately. Worker CI still intentionally uses a separate pinned public Agent fixture and must not be silently retargeted.
+
+This checkpoint does **not** establish deployable browser-enabled Agent assets, installer/upgrade acceptance, real installed-device rollback, macOS parity, public browser tool activation, or a safe high-impact web automation policy.
