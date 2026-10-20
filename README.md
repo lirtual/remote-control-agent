@@ -1,60 +1,63 @@
 # Remote Control Agent
 
-Standalone Remote Control Agent: **released Linux/WSL2** support for x86_64 and ARM64, and **source-only native Windows preview** under development. This is the **public source and GitHub Release repository**; the Cloudflare MCP Worker, owner-scoped Durable Object, Portal authorization and production configuration stay in the private `lirtual/mcp-workers` repository.
+Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Native Windows development preview (not released)
+## Native Windows support — source-only Draft
 
-A Windows x64 **foreground-only read-only** implementation has been proposed in [Draft PR #7](https://github.com/lirtual/remote-control-agent/pull/7). It shares the existing one-code approved pairing and signed WSS device protocol, with an independently ACL-protected Windows identity. It **requires Node 24 and a reviewed source checkout**, does not install a service or expose Shell/writes, and has **not passed live Windows 11 pairing acceptance**. [Development instructions](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md) · [Windows acceptance #5](https://github.com/lirtual/remote-control-agent/issues/5). Do not use the Linux `install.sh` on native Windows.
+[Windows PR #7](https://github.com/lirtual/remote-control-agent/pull/7) adds an
+unpublished Windows x64 bundled-Node candidate, SHA-256 checked
+`install-windows.ps1`, user-owned Ed25519 single-code pairing, signed WSS and
+a current-user Task Scheduler logon mode (not a pre-login Windows service).
+The Windows preview deliberately permits **read-only** MCP tools and denies
+Shell/file mutations. This is independent of the Linux paired-full profile.
+There is **no published Windows Release, supported one-line public URL, or real
+Windows 11 owner-approved end-to-end acceptance yet**.
 
-## Published test prerelease
+See [Windows preview notes](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md)
+and [Issue #5](https://github.com/lirtual/remote-control-agent/issues/5).
+Do not run the Linux `install.sh` under native Windows.
 
-**[v0.1.0 — test prerelease](https://github.com/lirtual/remote-control-agent/releases/tag/v0.1.0)** is publicly available and **immutable**. It includes the native Linux x64 and ARM64 Agent archives plus `SHA256SUMS`. This is **not** a production Agent rollout, and it does not authorize or connect any device by itself.
+## Current public release versus upcoming full-tools release
 
-- **Pinned source/tag:** `e82b90287374797ce20072ce18892055e4a17980`
-- **Native CI:** [#38996153946](https://github.com/lirtual/remote-control-agent/actions/runs/38996153946), both architectures passed
-- **Runtime:** self-contained verified official Node.js **24.21.0**, compiled native process-group Supervisor and reviewed JS entrypoints
-- **Compatibility:** Linux glibc **2.34+**, kernel **6.9+** with the required pidfd process-group features; WSL2 when running. Native Windows/macOS, WSL1 and musl are unsupported
-- **Preflight:** Python 3, curl, an approved nonproduction Worker HTTPS origin, and a **nonroot interactive terminal**. No system Node, npm, git or C compiler needed on the target
+- **v0.1.8** is the most recent published immutable test prerelease. It has Linux x64/ARM64 archives, SHA256SUMS, and the reviewed **read-only** upgrade profile.
+- The latest `main` source supports file read/write, search, Shell and managed sessions **after pairing**. It has not yet been published as a full-tools Release.
+- **v0.1.9** is the proposed *candidate* tag for that full-tools source. The CI workflow can validate both native archives for this tag. A successful CI run is **not** a published GitHub Release and does not update the running Agent.
 
-### Pinned first-install command for an approved nonproduction Worker
+The Agent connects outward to its approved Worker over signed WSS. No per-feature `readOnly`, `writeFile`, or `shell` setup switches are needed for the full-tools profile. Operations run with the Agent's normal OS user privileges, not as root. Pairing/authorization, explicit device revocation, operation IDs and durable SQLite receipts remain required.
 
-Run **only on an isolated, unpaired test host** after the Worker origin and owner approval are confirmed. Replace `https://APPROVED_PREVIEW_WORKER_ORIGIN/` with the real approved HTTPS origin; the placeholder is **not** a runnable endpoint.
+## Install and one-time read-only → full-tools upgrade
 
-```sh
-bash -c 'set -eu; code=$(curl -fsSL --proto =https --tlsv1.2 "https://raw.githubusercontent.com/lirtual/remote-control-agent/e82b90287374797ce20072ce18892055e4a17980/apps/remote-control-agent/scripts/bootstrap-v2.py"); exec python3 -c "$code" --tag v0.1.0 --commit e82b90287374797ce20072ce18892055e4a17980 --endpoint https://APPROVED_PREVIEW_WORKER_ORIGIN/'
-```
+The Worker already offers a single installer endpoint whose contents are pinned to one **immutable** GitHub Release, checked against reviewed x64 and ARM64 SHA-256 digests, and whose Agent endpoint is derived from the Worker origin.
 
-This intentionally pins both the public GitHub source and immutable Release, checks the **official GitHub asset digest** before installing, then prompts locally for Permanent (systemd) or Temporary (24-hour foreground) mode. A first pair must separately pass authenticated MCP `pairing_lookup` and `pairing_prepare` with owner approval plus a **12-character target-terminal challenge**. Initial capabilities are **read-only** by default; installer execution never enables Shell/file writes. Do not paste local keys, secret tokens or the 12-character challenge into public issues or logs.
-
-The above command has passed a real public-GitHub download and staging smoke test on x64 using an isolated disposable HOME, an invalid mode choice and **zero device enrollments**. ARM64 native offline packaging and CLI refusal paths passed CI, but actual owner-confirmed enrollment, end-to-end lifecycle and the one-device **48 elapsed-hour** observation remain open: [release gate #1](https://github.com/lirtual/remote-control-agent/issues/1).
-
-The source and archive retain `apps/remote-control-agent` layout for v2 compatibility while the private repository finishes staged migration. No private Git history, private Worker source, Cloudflare secrets, local device keys or SQLite receipt databases are included. Local uninstall does not revoke a cloud grant; cloud revocation is a separate owner MCP action.
-
-### `rca` (Remote Control Agent) local manager — next unreleased version (Draft)
-
-The optional **local Agent-management** command is under development; this is **not an AI chat tool** and has no direct permission to call remote Shell or bypass MCP owner approval. Existing **v0.1.0** remains the immutable published test version without this manager.
-
-The next candidate **v0.1.1** will offer a short pinned GitHub installer (only **after** a separately authorized immutable GitHub Release is actually published):
+Once the full-tools Release has been published, its official asset digests independently verified, **and** the reviewed pin updated on the deployment serving `/install.sh`, use the *same* installer with an explicit upgrade flag:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.1/install.sh | sh
+curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade
 ```
 
-The version-tagged bootstrap checks the *published immutable* GitHub Release and peels the actual tag commit before fetching the exact reviewed Python bootstrap; the Python bootstrap independently checks the matching tag, official asset SHA-256, architecture/ABI, ownership and TTY before executing packaged Node. An actual user terminal is required for endpoint selection, mode choice and the independent 10+12-character pairing flow. There is no "latest" installation fallback.
+This invokes the **new release's installer**, not the old local `rca upgrade` command. It is the migration path for already-paired permanent installations where the old CLI does not recognize the full-tools package.
 
-After successful **permanent** install, only the installer's verified user-owned launcher is created at `~/.local/bin/rca`. The installer adds one Bash PATH line if a normal owned `~/.bashrc` is available, and offers to open the manager. If your current terminal has an old PATH, open a new terminal or run `export PATH="$HOME/.local/bin:$PATH"`.
+An upgrade must fail closed unless the current installed runtime is the approved, installer-owned **read-only/no-Shell** profile. It preserves the existing Ed25519 key, device ID, approved Worker origin and SQLite receipts; there is **no re-pair** or cloud grant change. The procedure uses the existing systemd program switch, recoverable unit backup and local startup/rollback checks. Only the pinned new executable is installed.
 
-```sh
-rca             # local interactive menu
-rca status      # local version/systemd; remote signed WSS unconfirmed
-rca logs        # local journalctl; do not publicly share unredacted logs
-rca pair        # explicit owner-mediated existing-identity repair
-rca upgrade v0.1.1 <reviewed-40-character-commit>
-rca uninstall   # local-only, explicit; cloud grant NOT revoked
-```
+**Do not run the upgrade command until the Worker's installer pin has actually been updated to the published full-tools Release.** Until that moment, `/install.sh` still serves v0.1.8. Do not replace the installer with an unpinned `main` script or bypass SHA-256 checks.
 
-The manager uses **existing** Agent lifecycle actions, never includes an account secret, refuses foreign `~/.local/bin` entries, and preserves keys/device IDs/SQLite receipts by default on uninstall. CLI status is not a remote-health attestation. Upgrade requires an explicit immutable tag and reviewed 40-character commit, and is restricted to the current read-only/no-Shell profile.
+A second **full-tools → full-tools** in-place upgrade is deliberately blocked until a verifiable managed-session quiescence protocol exists. This avoids interrupting Shell processes or treating unknown receipts as completed. New installations and local read-only operations are unaffected.
 
-**Do not run the v0.1.1 installer yet:** it has no authorized published Release. This draft change does not modify the running `rc-v010-acceptance` v0.1.0 device, its ongoing 48-hour observation or v1 production.
+## Platform and trust requirements
 
-**No production cutover** is implied by this public prerelease.
+- Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features; WSL2 can use the Linux Agent while the distribution is running. Native Windows/macOS, WSL1 and musl are not covered by this release.
+- A non-root interactive terminal; the installer requires a real local TTY.
+- A trusted HTTPS Worker origin with authorized owner-mediated pairing. No direct public Shell listener is created.
+- Do not copy or paste device private keys, access tokens, or unredacted logs.
+- `rca status` reports local state and does not independently prove remote signed-WSS connectivity. Verify that via authenticated MCP.
+- Local uninstall preserves identity and SQLite receipts and **does not revoke** the remote grant. Revoke the device separately through authenticated MCP.
+
+## Release gate for v0.1.9
+
+1. Run **Agent CI** with `workflow_dispatch`, `release_tag=v0.1.9` on the reviewed exact `main` commit. Both x64 and ARM64 candidates must pass typecheck, native tests, self-contained bundle validation and the offline minimal-container check.
+2. Independently check archive SHA-256 values, tag-to-commit resolution and signed/immutable GitHub Release metadata. Publish the official assets and `SHA256SUMS` only after review.
+3. Update the Worker's `InstallReleasePin` with the **actual** immutable tag, peeled source commit and verified per-architecture digests; set `upgradeMode: "explicit-v1"`. Never use placeholders or an unreviewed `latest` fallback.
+4. Smoke-test the approved `/install.sh --upgrade` on one already-paired *disposable read-only* installation. Confirm unchanged key, device ID, endpoint and SQLite receipts, and successful file-write, Shell, session and operation-status tools. Previously verified read-only functionality does not need blanket re-testing.
+5. Roll out to additional devices only after that single real migration is confirmed.
+
+Passing source CI or merging a PR does not perform any Release publication or production upgrade.

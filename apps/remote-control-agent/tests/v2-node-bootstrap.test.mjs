@@ -13,14 +13,14 @@ const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
   target:"linux-x64-glibc",node:"v24.21.0",glibc_min:"2.34",device_protocol:2,
   receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
 function ELF(machine=62){const b=Buffer.alloc(64);b.writeUInt32LE(0x464c457f,0);b[4]=2;b[5]=1;b.writeUInt16LE(machine,18);return b;}
-function fixture({corrupt=false,symlink=false,pax=false,duplicate=false}={}){
+function fixture({corrupt=false,symlink=false,pax=false,duplicate=false,profile="read-only-no-shell-v1"}={}){
   const dir=mkdtempSync(path.join(tmpdir(),"rca-node-unit-"));
   mkdirSync(path.join(dir,"bin"),{recursive:true,mode:0o700});
   for(const p of [APP,APP+"/src",APP+"/scripts",APP+"/.build"])
     mkdirSync(path.join(dir,p),{recursive:true,mode:0o700});
   for(const [name,contents,mode] of [
     ["bin/node",ELF(),0o700],
-    ["bundle.json",JSON.stringify(manifest),0o600],
+    ["bundle.json",JSON.stringify({...manifest,upgrade_profile:profile}),0o600],
     [APP+"/package.json","{}",0o600],
     [APP+"/.build/session-supervisor",ELF(),0o700],
     [APP+"/scripts/bootstrap-node.mjs","export const candidate = true;\n",0o600],
@@ -62,6 +62,22 @@ test("pinned original USTAR archive is inspected without Python, tar extraction 
     assert.ok(result.records.has(APP+"/scripts/manage-v2.mjs"));
   }finally{rmSync(x.dir,{recursive:true,force:true});}
 });
+test("immutable bootstrap accepts reviewed paired-full profile without changing target or identity",()=>{
+  const f=fixture({profile:"paired-full-v1"});
+  try{
+    const inspected=inspectPinnedArchiveBytes(f.bytes,params(f));
+    assert.equal(inspected.manifest.upgrade_profile,"paired-full-v1");
+    assert.equal(inspected.manifest.version,"v0.1.2");
+    assert.ok(inspected.records.has(APP+"/src/v2-main.js"));
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+test("immutable bootstrap refuses an unreviewed release profile before unpacking",()=>{
+  const f=fixture({profile:"shell-enabled-unreviewed"});
+  try{
+    assert.throws(()=>inspectPinnedArchiveBytes(f.bytes,params(f)),/Unsupported Agent manifest/);
+  }finally{rmSync(f.dir,{recursive:true,force:true});}
+});
+
 test("wrong checksum and wrong version fail before unpacking",()=>{
   const x=fixture();
   try {
