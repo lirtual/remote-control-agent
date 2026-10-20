@@ -334,6 +334,8 @@ export async function maintainAuthenticatedDeviceSession(
     // Windows native preview explicitly keeps reads only; existing Linux
     // defaults remain full, preserving the already deployed owner contract.
     capability?: "read-only" | "full";
+    /** Durable receipt directory; native Windows passes its private user store. */
+    receiptDirectory?: string;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -348,7 +350,7 @@ export async function maintainAuthenticatedDeviceSession(
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
   const full = options.capability !== "read-only";
-  const execution = full ? createAgentExecutionEngine() : undefined;
+  const execution = full ? createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory }) : undefined;
   let failures = 0;
   try {
   while (!signal.aborted) {
