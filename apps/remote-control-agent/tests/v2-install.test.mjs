@@ -187,8 +187,8 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
   assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
   assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
-  assert.match(lifecycle, /const execution = full \? createAgentExecutionEngine\(\) : undefined/);
-  // Linux defaults to full; Windows explicitly opts out of mutable execution.
+  assert.match(lifecycle, /const execution = full .*createAgentExecutionEngine.*receiptDirectory: options/);
+  // The default paired profile is full; explicit read-only callers may still be denied.
   assert.match(lifecycle, /full && execution/);
   assert.match(lifecycle, /const searches = new SearchSessions\(\)/);
   assert.match(lifecycle, /executeV2FileOperation\(execution,/);
