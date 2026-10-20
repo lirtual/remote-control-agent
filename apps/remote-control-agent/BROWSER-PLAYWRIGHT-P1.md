@@ -2,6 +2,16 @@
 
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
+### Latest P3 release acceptance correction (2026-10-21)
+
+**Windows-first P3 remains the selected scope.** The native Windows packaged nine-file Playwright candidate passed its independent CI/installer/upgrade/rollback tests in run #39459661346. Its production Agent entrypoint still does not instantiate BrowserManager and browser MCP tools remain disabled.
+
+**Linux full installer acceptance is NOT complete.** Although the Node.js Release verifier accepted the optional Linux nine-file library archive, the independent Python bootstrap validator (bootstrap-v2.py, also used by validate-local-archive.py) still has its own strict directory/file allowlist. The actual optional Linux archive failed safely with ValueError: Unexpected archive directory. Therefore earlier claims that the optional Linux browser library archive was fully installer-verifiable or deployable are superseded; only the Node.js verification/extraction path passed. Neither the Python whitelist nor hashes were relaxed, and no Linux browser package was released.
+
+The **standard browser-free Linux** Agent package again passed the real Python archive verifier after updating the Release builder static source contract for optional locally injected BrowserBackend. The revised guard still requires full paired capability, durable receipts, and explicit rejection of browser injection on read-only connections. Local v2-install/Release tests: 43/43 PASS. Windows-browser P3 can proceed independently; Linux/WSL Chromium provisioning and Python-validated vendor archive support are deferred. Do not introduce a third pinned dependency inventory merely to unblock Windows-first functionality.
+
+
+
 The latest architectural decision is documented at https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md
 
 ## Single backend and code reuse

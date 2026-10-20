@@ -189,7 +189,8 @@ export function build(args) {
   if(!/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
      /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
      !/const full = options\.capability !== "read-only"/.test(lifecycleSource) ||
-     !/const execution = full \? createAgentExecutionEngine\(\{ receiptDirectory: options\.receiptDirectory \}\) : undefined/.test(lifecycleSource) ||
+     !/if \(!full && options\.browser\) throw Error/.test(lifecycleSource) ||
+     !/const execution = full\s*\?\s*createAgentExecutionEngine\(\{\s*receiptDirectory:\s*options\.receiptDirectory,\s*browser:\s*options\.browser,?\s*\}\)\s*:\s*undefined/.test(lifecycleSource) ||
      !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
      !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
     throw new Error("Reviewed paired full-tools release profile is not proven.");
