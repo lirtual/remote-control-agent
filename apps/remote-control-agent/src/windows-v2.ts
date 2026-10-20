@@ -229,6 +229,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
+      receiptDirectory: path.win32.join(directory, "receipts"),
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({
