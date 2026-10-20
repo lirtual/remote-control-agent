@@ -16,14 +16,15 @@ const ENDPOINT="https://remote-control-v2-preview.aiyaya.workers.dev/";
 const tag="v0.1.3",commit="a".repeat(40);
 const TARGET=process.arch==="arm64"?"linux-arm64-glibc":"linux-x64-glibc";
 const MAIN="const caps = {readOnly: true, writeFile: false, shell: false,};\n";
+const FULL_MAIN='export const V2_RUNTIME_PROFILE = "paired-full-v1";\n';
 const manifest=()=>({name:"remote-control-agent",artifact_schema:1,
   version:tag,target:TARGET,node:"v24.21.0",glibc_min:"2.34",
-  device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"});
+  device_protocol:2,receipt_schema:1,upgrade_profile:"paired-full-v1"});
 function elf(){
   const b=Buffer.alloc(72);b.writeUInt32LE(0x464c457f,0);
   b[4]=2;b[5]=1;b.writeUInt16LE(process.arch==="arm64"?183:62,18);return b;
 }
-function fixture({newSource=MAIN}={}){
+function fixture({newSource=FULL_MAIN}={}){
   const home=mkdtempSync(path.join(os.tmpdir(),"rca-upgrade-local-"));chmodSync(home,0o700);
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
   mkdirSync(programs,{recursive:true,mode:0o700});chmodSync(programs,0o700);
@@ -161,7 +162,7 @@ test("new mutable agent is refused before any activation",async()=>{
   try{
     await assert.rejects(prepareManualUpgrade(f.state,{tag,commit},{
       home:f.home,resolve:async()=>f.release,download:async()=>f.archive
-    }),/Unproven Shell ownership/);
+    }),/Unproven paired full-tools/);
     assert.equal(readFileSync(f.ids,"utf8"),ID);
   }finally{cleanup(f);}
 });

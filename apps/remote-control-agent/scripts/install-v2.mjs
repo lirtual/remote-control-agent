@@ -266,14 +266,21 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
     let manifest;
     try { manifest = JSON.parse(await readFile(manifestFile, "utf8")); }
     catch { throw new Error("Invalid Agent program manifest."); }
+    // One-way promotion: the running/previous Agent must be provably read-only.
+    // A full-tools source can be a TARGET, never a previous runtime until an
+    // authoritative session-drain protocol is reviewed.
+    const previous = root === previousRoot;
+    const profile = previous ? "read-only-no-shell-v1" : "paired-full-v1";
     if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
-        manifest.receipt_schema !== 1 ||
-        manifest.upgrade_profile !== "read-only-no-shell-v1") {
+        manifest.receipt_schema !== 1 || manifest.upgrade_profile !== profile) {
       throw new Error("Managed Sessions quiescence cannot be proven; upgrade blocked.");
     }
     const entrySource = await readFile(path.join(root,
       "apps", "remote-control-agent", "src", "v2-main.js"), "utf8");
-    if (!/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource)) {
+    if (previous
+      ? !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource)
+      : !/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
+        /(?:readOnly|writeFile|shell)\s*:/.test(entrySource)) {
       throw new Error("Active/unknown Shell ownership may exist; upgrade blocked.");
     }
   }
@@ -1272,7 +1279,7 @@ export async function runInstaller(args, {
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-    stdout.write("Ready: v2 service active (read-only).\n");
+    stdout.write("Ready: v2 service active (all paired-device tools enabled).\n");
     printPortableCliHint(stdout, launcher, home);
     if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
   }

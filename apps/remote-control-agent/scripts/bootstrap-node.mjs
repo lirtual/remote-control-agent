@@ -102,7 +102,7 @@ export function inspectPinnedArchiveBytes(bytes,{expectedSha256,tag,target}){
     !/^v24\.[0-9]+\.[0-9]+$/.test(manifest.node||"")||
     !/^[0-9]+\.[0-9]+$/.test(manifest.glibc_min||"")||
     manifest.device_protocol!==2||manifest.receipt_schema!==1||
-    manifest.upgrade_profile!=="read-only-no-shell-v1")
+    !["read-only-no-shell-v1","paired-full-v1"].includes(manifest.upgrade_profile))
     throw Error("Unsupported Agent manifest / ABI / protocol");
   const elfMachine=target==="linux-x64-glibc"?62:183;
   for(const entry of ["bin/node",APP+"/.build/session-supervisor"]){

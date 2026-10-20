@@ -169,13 +169,16 @@ test("ordinary repeat install rejects changed Worker origin before identity rota
     "https://user:password@rc.example.org/"), /trusted HTTPS origin/);
 });
 
-test("v2 startup opts into read-only but explicitly keeps file write/Shell off", async () => {
+test("v2 startup enables full paired-device tools without feature flags", async () => {
   const testDir = path.dirname(fileURLToPath(import.meta.url));
   const entry = await readFile(path.join(testDir, "..", "src", "v2-main.ts"), "utf8");
+  const lifecycle = await readFile(path.join(testDir, "..", "src", "v2-connection-lifecycle.ts"), "utf8");
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
-  assert.match(entry, /readOnly: true/);
-  assert.match(entry, /writeFile: false/);
-  assert.match(entry, /shell: false/);
+  assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
+  assert.match(lifecycle, /const execution = createAgentExecutionEngine\(\)/);
+  assert.match(lifecycle, /const searches = new SearchSessions\(\)/);
+  assert.match(lifecycle, /executeV2FileOperation\(execution,/);
+  assert.match(lifecycle, /executeV2SessionRead\(execution,/);
   assert.ok(!entry.includes("REMOTE_CONTROL_DEVICE_TOKEN"));
   assert.ok(!entry.includes("MCP_ACCESS_TOKEN"));
 });

@@ -192,7 +192,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   try {
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
-      readOnly: true, writeFile: false, shell: false,
+      capability: "read-only",
       onState: state => process.stderr.write(JSON.stringify({
         service: "remote-control-windows-preview", event: state,
       }) + "\n"),

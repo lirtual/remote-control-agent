@@ -25,6 +25,8 @@ function fixture(){
   const info={version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
     device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
   writeFileSync(path.join(root,"bundle.json"),JSON.stringify(info),{mode:0o600});
+  const src=directory(rel+"/programs/v0.1.2-linux-x64-glibc/apps/remote-control-agent/src");
+  writeFileSync(path.join(src,"v2-main.js"),"const caps={readOnly: true, writeFile: false, shell: false,};\n",{mode:0o600});
   const ids=directory(rel);
   writeFileSync(path.join(ids,"v2-identity.pem.device-id"),UUID,{mode:0o600});
   const units=directory(".config/systemd/user");
@@ -58,6 +60,22 @@ test("Node-only rca status and version preserve identity and receipts",()=>{
     assert.equal(readFileSync(path.join(f.ids,"v2-identity.pem.device-id"),"utf8"),UUID);
   }finally{cleanup(f);}
 });
+test("Node manager recognizes the immutable paired-full profile without optional switches",()=>{
+  const f=fixture();
+  try{
+    writeFileSync(path.join(f.root,"bundle.json"),
+      JSON.stringify({...f.info,upgrade_profile:"paired-full-v1"}),{mode:0o600});
+    writeFileSync(path.join(f.root,"apps/remote-control-agent/src/v2-main.js"),
+      'export const V2_RUNTIME_PROFILE = "paired-full-v1";\n',{mode:0o600});
+    const inventory=localManagerInventory({home:f.home,source:f.manager});
+    assert.equal(inventory.info.upgrade_profile,"paired-full-v1");
+    assert.equal(inventory.ids.permanent,UUID);
+    writeFileSync(path.join(f.root,"apps/remote-control-agent/src/v2-main.js"),
+      'export const V2_RUNTIME_PROFILE = "unknown";\n',{mode:0o600});
+    assert.throws(()=>localManagerInventory({home:f.home,source:f.manager}),/Untrusted Agent runtime/);
+  }finally{cleanup(f);}
+});
+
 test("Node manager refuses foreign identities and does not read private keys",()=>{
   const f=fixture();
   try{
