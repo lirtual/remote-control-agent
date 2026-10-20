@@ -58,7 +58,7 @@ test("editable device label defaults to hostname without altering identity rules
   assert.equal(selectDeviceLabel("   ", "RAY-WORKSPACE"), "RAY-WORKSPACE");
   assert.equal(selectDeviceLabel("  WSL-Ubuntu  ", "RAY-WORKSPACE"), "WSL-Ubuntu");
   assert.equal(selectDeviceLabel("Windows-PC", "RAY-WORKSPACE"), "Windows-PC");
-  for (const candidate of ["a".repeat(65), "bad\\nname", "bad\\u0000name"]) {
+  for (const candidate of ["a".repeat(65), "bad\nname", "bad\u0000name"]) {
     assert.throws(() => selectDeviceLabel(candidate, "host"), /Invalid device label/);
   }
   assert.throws(() => selectDeviceLabel("", ""), /Invalid device label/);
