@@ -175,7 +175,10 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   const lifecycle = await readFile(path.join(testDir, "..", "src", "v2-connection-lifecycle.ts"), "utf8");
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
   assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
-  assert.match(lifecycle, /const execution = createAgentExecutionEngine\(\)/);
+  assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
+  assert.match(lifecycle, /const execution = full \? createAgentExecutionEngine\(\) : undefined/);
+  // Linux defaults to full; Windows explicitly opts out of mutable execution.
+  assert.match(lifecycle, /full && execution/);
   assert.match(lifecycle, /const searches = new SearchSessions\(\)/);
   assert.match(lifecycle, /executeV2FileOperation\(execution,/);
   assert.match(lifecycle, /executeV2SessionRead\(execution,/);
