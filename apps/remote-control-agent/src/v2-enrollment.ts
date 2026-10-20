@@ -23,6 +23,15 @@ export function pairingVerifier(code: string): string {
   return createHash("sha256").update(ENROLLMENT_DOMAIN + code).digest("hex");
 }
 
+/** Empty terminal input accepts the suggested hostname, never an empty or whitespace-only name. */
+export function selectDeviceLabel(entered: string, suggested: string): string {
+  const name = (entered.trim() || suggested).trim();
+  if (name.length < 1 || name.length > 64 || /[\x00-\x1f]/.test(name)) {
+    throw new Error("Invalid device label.");
+  }
+  return name;
+}
+
 export function newEnrollment(name: string, existingPrivateKeyPem?: string, grantType: "permanent" | "temporary" = "permanent"): {
   code: string;
   privateKeyPem: string;
