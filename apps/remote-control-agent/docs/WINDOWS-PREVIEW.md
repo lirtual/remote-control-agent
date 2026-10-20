@@ -1,8 +1,8 @@
 # Native Windows preview (development only)
 
-This is the **first Windows-native, foreground-only** implementation, not a
+This is the **Windows-native read-only preview** implementation, not a
 released Windows installer. It does not use WSL2, install a service, update
-existing Linux devices or grant remote Shell/file writes.
+existing Linux devices or grant remote Shell/file writes. A limited per-user logon task is available in the source candidate; it does not provide a boot-time Windows service.
 
 ## Developer smoke (Windows 11 x64, Node.js 24 and an approved HTTPS Worker)
 
@@ -52,12 +52,44 @@ and `.ca.cmd run --endpoint HTTPS_ORIGIN/` are **foreground-only**
 development commands. The CI reopens the ZIP, verifies its file inventory
 and runs the bundled manager. No public Windows Release exists yet.
 
+## Source-only Windows installation and user-logon task
+
+The repository now contains `install-windows.ps1`. The normal mode requires
+a **published immutable** GitHub Release and its official asset SHA-256
+before downloading/extracting the reviewed Windows ZIP. It refuses unexpected
+ZIP members, unreviewed files, modified checksums, reparse entries and
+replacing an existing version. The installed runtime bundles Node.js; no
+system Node or Git is needed for installed `rca.cmd`.
+
+**No approved Windows Release has been published**, so this installer is not
+yet a working public one-line installation URL. CI uses an isolated fixture
+and test-only archive input, not a real Release or cloud pairing.
+
+Once the user has approved the device's one pairing code, the reviewed
+portable candidate supports:
+
+```powershell
+.\rca.cmd enable --endpoint https://rca.lirtual.dpdns.org/
+.\rca.cmd task-status
+.\rca.cmd start
+.\rca.cmd stop
+.\rca.cmd disable
+```
+
+`enable` recovers the approved device ID by signed proof when necessary; it
+never approves a pending pairing automatically. The limited Task Scheduler
+task starts **when that same Windows user logs in**, not at machine boot
+before login. `disable` preserves the device's key, ID and cloud grant.
+Local task state is not proof of live WSS connectivity. Real Windows user
+task registration/restart/upgrade and remote reads still require field
+acceptance.
+
 ## Still to implement before production
 
-- Immutable Windows x64 bundled-Node Release and SHA-256 verified one-command
-  PowerShell bootstrap without prerequisites.
-- Protected per-user background lifecycle, service manager, and native `rca`
-  status/re-pair/logs/upgrade/rollback/uninstall (without revoking cloud grant).
+- Owner-authorized published immutable Windows x64 Release and a verified public
+  one-line PowerShell entrypoint (source-only installer and offline CI tests exist).
+- Real non-admin user logon-task acceptance, plus native `rca` logs,
+  re-pair, upgrade/rollback/uninstall lifecycle and receipt preservation.
 - Real Windows 11 explicit-device signed WSS / read-only MCP acceptance.
   Windows CI can run synthetic ACL/path and protocol tests, but does not prove
   live pairing, production reliability, or service persistence.
