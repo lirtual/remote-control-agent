@@ -125,6 +125,9 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
       $allowedFile = $name -cmatch '^(?:bin/node\.exe|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$'
       if (($name.EndsWith('/') -and -not $allowedDir) -or
           (-not $name.EndsWith('/') -and -not $allowedFile)) {
+        if ($env:GITHUB_ACTIONS -eq 'true') {
+          throw ('Unreviewed CI ZIP member: ' + $name)
+        }
         throw 'Unreviewed ZIP member'
       }
       $unixKind = (($entry.ExternalAttributes -shr 16) -band 0xF000)
