@@ -394,6 +394,14 @@ export class ManagedSessions {
     return session.state === "running" ? "unknown" : "completed";
   }
 
+  /** Authoritative in-process check; do not trust list_sessions over WSS for an upgrade race. */
+  isQuiescentForUpgrade(): boolean {
+    return !this.revocationClosing && this.starting.size === 0 &&
+      [...this.sessions.values()].every(session =>
+        (session.state === "completed" || session.state === "failed") &&
+        !this.ownsRunningProcess(session));
+  }
+
   list(): SessionSnapshot[] {
     this.prune();
     return [...this.sessions.values()].map(snapshot);

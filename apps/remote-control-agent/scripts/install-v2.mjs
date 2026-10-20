@@ -10,6 +10,8 @@
  * node apps/remote-control-agent/scripts/install-v2.mjs --foreground --resume --endpoint https://EXAMPLE/
  */
 import { spawnSync } from "node:child_process";
+import { createConnection } from "node:net";
+import { DatabaseSync } from "node:sqlite";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { access, lstat, mkdir, open, readFile, readlink, readdir, rename, rm, rmdir, symlink } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
@@ -239,6 +241,11 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Manual upgrade requires an owned v2 service.");
   }
+  // The local freeze socket must belong to THIS exact permanent identity,
+  // not merely another same-user Agent or a service with a similar label.
+  const installed = assertCanonicalV2UnitTemplate(unit, home);
+  if (installed.keyPath !== keyForInstallMode(home, "permanent"))
+    throw new Error("Upgrade service identity binding differs; refusing quiescence probe.");
   const settings = unit.split("\n");
   const working = settings.filter(line => line.startsWith("WorkingDirectory="));
   const starts = settings.filter(line => line.startsWith("ExecStart="));
@@ -267,29 +274,135 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
     let manifest;
     try { manifest = JSON.parse(await readFile(manifestFile, "utf8")); }
     catch { throw new Error("Invalid Agent program manifest."); }
-    // One-way promotion: the running/previous Agent must be provably read-only.
-    // A full-tools source can be a TARGET, never a previous runtime until an
-    // authoritative session-drain protocol is reviewed.
+    // A full-tools predecessor must consent via its own in-process admission
+    // barrier. A v0.1.11 predecessor without that handshake fails closed.
     const previous = root === previousRoot;
-    const profile = previous ? "read-only-no-shell-v1" : "paired-full-v1";
+    const profile = manifest.upgrade_profile;
     if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
-        manifest.receipt_schema !== 1 || manifest.upgrade_profile !== profile) {
-      throw new Error("Managed Sessions quiescence cannot be proven; upgrade blocked.");
+        manifest.receipt_schema !== 1 ||
+        (previous
+          ? !["read-only-no-shell-v1", "paired-full-v1"].includes(profile)
+          : profile !== "paired-full-v1")) {
+      throw new Error("Unsupported existing Agent upgrade profile.");
     }
     const entrySource = await readFile(path.join(root,
       "apps", "remote-control-agent", "src", "v2-main.js"), "utf8");
-    if (previous
-      ? !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource)
-      : !/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
-        /(?:readOnly|writeFile|shell)\s*:/.test(entrySource)) {
-      throw new Error("Active/unknown Shell ownership may exist; upgrade blocked.");
+    const readOnly = profile === "read-only-no-shell-v1" &&
+      /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(entrySource);
+    const full = profile === "paired-full-v1" &&
+      /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) &&
+      !/(?:readOnly|writeFile|shell)\s*:/.test(entrySource);
+    if (!readOnly && !full) {
+      throw new Error("Active/unknown Shell ownership or unverified managed profile; upgrade blocked.");
     }
   }
   if (previousRoot === path.resolve(path.dirname(newManifestPath))) {
     throw new Error("Already running this program version; use ordinary install.");
   }
   await assertReceiptDatabaseCompatible(home, 1);
-  return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath))};
+  const priorManifest=JSON.parse(await readFile(path.join(previousRoot, "bundle.json"), "utf8"));
+  return {oldProgram:previousRoot, newProgram:path.resolve(path.dirname(newManifestPath)),
+    needsFreeze:priorManifest.upgrade_profile==="paired-full-v1",
+    // Only this exact legacy v2 release predates the local freeze handshake.
+    // Its one-time transition must be made offline by the device owner.
+    legacyOffline:priorManifest.upgrade_profile==="paired-full-v1" &&
+      priorManifest.version==="v0.1.11" &&
+      priorManifest.target==="linux-"+process.arch+"-glibc" &&
+      path.basename(previousRoot)==="v0.1.11-linux-"+process.arch+"-glibc"};
+}
+
+/**
+ * Local-only upgrade consent, sent to the currently RUNNING Agent.
+ * Absence of the socket or a busy/unknown response refuses the upgrade.
+ */
+export async function requestUpgradeConsent(keyPath, action, {dial=createConnection}={}){
+  if(!["freeze","release"].includes(action))throw Error("Invalid upgrade action");
+  const file=path.join(path.dirname(keyPath),"upgrade.sock");
+  const meta=await lstat(file);
+  if(!meta.isSocket()||meta.uid!==process.getuid()||(meta.mode&0o077)!==0)
+    throw Error("Untrusted local upgrade socket");
+  return await new Promise((resolve,reject)=>{
+    const socket=dial(file);
+    let reply="",settled=false;
+    const done=(error,value)=>{
+      if(settled)return;
+      settled=true;socket.destroy();
+      if(error)reject(error);else resolve(value);
+    };
+    socket.setTimeout(3000,()=>done(Error("Upgrade consent timed out")));
+    socket.on("error",error=>done(error));
+    socket.on("connect",()=>socket.write(action+"\n"));
+    socket.on("data",data=>{
+      reply+=data.toString("utf8");
+      if(reply.length>32){done(Error("Invalid upgrade consent response"));return;}
+      if(reply.endsWith("\n")){
+        if(!["ready\n","busy\n","released\n"].includes(reply))
+          done(Error("Invalid upgrade consent response"));
+        else done(null,reply.trim());
+      }
+    });
+    socket.on("close",()=>{if(!settled)done(Error("Upgrade consent connection closed"));});
+  });
+}
+
+/** One-time local cutover for the immutable v0.1.11 that has no freeze socket.
+ * This cannot establish the state of old Shell work. The owner MUST stop the
+ * service from a genuine local terminal in a maintenance window beforehand.
+ * No v1 service, device identity or operation receipt is modified here.
+ */
+export async function confirmLegacyV0111OfflineCutover({
+  home=os.homedir(),keyPath=keyForInstallMode(home,"permanent"),
+  stdin=process.stdin,stdout=process.stdout,
+  invoke=spawnSync,ask=null,
+}={}) {
+  if (!stdin.isTTY || !stdout.isTTY)
+    throw new Error("Legacy v2 offline cutover requires a real local terminal.");
+  if (keyPath!==keyForInstallMode(home,"permanent"))
+    throw new Error("Unexpected permanent identity for offline cutover.");
+  const checkStopped=()=>{
+    const result=invoke("systemctl",[
+      "--user","show",UNIT,"--property=ActiveState,SubState,MainPID","--no-pager",
+    ],{encoding:"utf8",timeout:5000});
+    if(result.error||result.status!==0||typeof result.stdout!=="string")
+      throw new Error("Cannot verify the stopped v2 service.");
+    const lines=result.stdout.trim().split("\n");
+    if(lines.length!==3 || !lines.includes("MainPID=0") ||
+       !lines.includes("ActiveState=inactive") || !lines.includes("SubState=dead") ||
+       new Set(lines).size!==3) {
+      throw new Error("Legacy v2 must be manually stopped before offline cutover.");
+    }
+  };
+  const checkReceipts=()=>{
+    const file=path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite");
+    let database;
+    try {
+      database=new DatabaseSync(file,{readOnly:true,timeout:0});
+      const row=database.prepare("PRAGMA quick_check").get();
+      if(row?.quick_check!=="ok")throw Error("SQLite integrity not confirmed.");
+    } catch {
+      throw new Error("SQLite receipts are locked, missing or invalid; cutover blocked.");
+    } finally { database?.close(); }
+  };
+  checkStopped();
+  checkReceipts();
+  const raw=(await readFile(keyPath+".device-id","utf8")).trim();
+  if(!DEVICE_ID.test(raw))throw new Error("Existing device ID is not valid.");
+  stdout.write("One-time v0.1.11 offline cutover for device "+raw+".\n");
+  stdout.write("Old Agent has no in-process Shell quiescence proof. Confirm all work is finished.\n");
+  stdout.write("Service must remain stopped until the verified new Agent starts. SQLite and identity are retained.\n");
+  let answer;
+  if(ask)answer=await ask("Type OFFLINE-V2-UPGRADE to confirm: ");
+  else {
+    const rl=createInterface({input:stdin,output:stdout,terminal:true});
+    try { answer=await rl.question("Type OFFLINE-V2-UPGRADE to confirm: "); }
+    finally { rl.close(); }
+  }
+  if(answer?.trim()!=="OFFLINE-V2-UPGRADE")
+    throw new Error("Owner did not confirm one-time offline cutover.");
+  // Re-check after the prompt. Do not auto-stop the live Agent.
+  checkStopped();
+  checkReceipts();
+  return {deviceId:raw};
 }
 
 /** Repeat-install is same-version only. A different installed service
@@ -516,7 +629,8 @@ async function assertRecoverablePreviousUnit(unit, home) {
   try { manifest = JSON.parse(await readFile(manifestPath, "utf8")); }
   catch { throw new Error("Previous Agent manifest is invalid."); }
   if (manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
-      manifest.receipt_schema !== 1 || manifest.upgrade_profile !== "read-only-no-shell-v1" ||
+      manifest.receipt_schema !== 1 ||
+      !["read-only-no-shell-v1", "paired-full-v1"].includes(manifest.upgrade_profile) ||
       manifest.target !== "linux-" + process.arch + "-glibc" ||
       path.basename(root) !== manifest.version + "-" + manifest.target) {
     throw new Error("Previous Agent version cannot be safely recovered.");
@@ -525,8 +639,12 @@ async function assertRecoverablePreviousUnit(unit, home) {
   const entryInfo = await lstat(entry);
   if (!entryInfo.isFile() || entryInfo.isSymbolicLink() ||
       entryInfo.uid !== process.getuid() || (entryInfo.mode & 0o077) !== 0 ||
-      !/readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))) {
-    throw new Error("Previous Agent does not prove the reviewed read-only profile.");
+      !(
+        manifest.upgrade_profile==="read-only-no-shell-v1"
+          ? /readOnly:\s*true,\s*writeFile:\s*false,\s*shell:\s*false,/.test(await readFile(entry, "utf8"))
+          : /V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(await readFile(entry,"utf8"))
+      )) {
+    throw new Error("Previous Agent does not prove a reviewed runtime profile.");
   }
   return {root, endpoint:endpointValue, keyPath:keyValue};
 }
@@ -1283,10 +1401,35 @@ export async function runInstaller(args, {
     node: process.execPath, home, repoRoot: path.resolve(packageRoot, "..", ".."),
     endpoint: options.endpoint, keyPath, entryExt: portable ? "js" : "ts",
   });
+  let consentAttempted = false;
   if (portable && options.action === "upgrade") {
-    await assertSafePortableUpgrade(previous, home, manifestPath);
+    const safety = await assertSafePortableUpgrade(previous, home, manifestPath);
+    if (safety.legacyOffline) {
+      // Never remotely stop v0.1.11 or manufacture a quiescence ACK.
+      // The user has already stopped it from their own terminal.
+      await confirmLegacyV0111OfflineCutover({home,keyPath,stdin,stdout});
+    } else if (safety.needsFreeze) {
+      let consent;
+      try {
+        consent = await requestUpgradeConsent(keyPath, "freeze");
+        if (consent !== "ready") throw Error("Agent has active or uncertain work; upgrade blocked.");
+        consentAttempted = true;
+      } catch {
+        // A lost ACK might have frozen this Agent; release it if uncertain.
+        // A definitive busy response must NOT release somebody else's freeze.
+        if (consent !== "busy")
+          await requestUpgradeConsent(keyPath, "release").catch(()=>{});
+        throw Error("Cannot prove Agent quiescence; upgrade blocked.");
+      }
+    }
   }
-  await installUnit(unitPath, rendered, previous);
+  try {
+    await installUnit(unitPath, rendered, previous);
+  } finally {
+    // When activation fails before service stop, let the old Agent resume.
+    // After successful restart the old socket disappears and release is a no-op.
+    if (consentAttempted) await requestUpgradeConsent(keyPath, "release").catch(()=>{});
+  }
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
