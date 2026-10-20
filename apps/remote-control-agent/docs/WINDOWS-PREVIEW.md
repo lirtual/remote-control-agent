@@ -133,3 +133,23 @@ irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.10-windo
 ```
 
 The installer verifies the immutable GitHub Release's official asset SHA-256 before unzipping. The installed `rca.cmd` is located under `$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.10-windows-rc.1-windows-x64\rca.cmd`. Use its `pair --endpoint` command to obtain one 10-character pairing code for owner authorization, followed by `run` and optionally `enable`. Never infer cloud acceptance from local task state.
+
+
+## Windows-only acceptance RC2: preserve paired identity
+
+The RC2 `v0.1.10-windows-rc.2` release incorporates the signed WSS fix for owner-routed read frames with invalid device-local paths. Such a request now returns a bounded failed read instead of terminating a valid signed device session. Unknown frames still fail closed; Windows Shell and mutation are still disallowed.
+
+Install RC2 as an additional private program directory with the immutable SHA-256 checked one-line bootstrap:
+
+```powershell
+irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.10-windows-rc.2/install-windows.ps1 | iex
+```
+
+**Do not run pair again.** Stop the older foreground RC1 process first, then run the RC2 binary with the existing protected identity:
+
+```powershell
+& "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.10-windows-rc.2-windows-x64\rca.cmd" status
+& "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.10-windows-rc.2-windows-x64\rca.cmd" run --endpoint https://rca.lirtual.dpdns.org/
+```
+
+The native device ID remains the same. Worker-side Windows drive path support is tracked separately in mcp-workers PR #113; a valid Windows read requires its production deployment.

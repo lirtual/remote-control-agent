@@ -6,11 +6,11 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: remote-agent-native-win-rc1
+  group: remote-agent-native-win-rc2
   cancel-in-progress: false
 env:
-  RELEASE_TAG: v0.1.10-windows-rc.1
-  ASSET: remote-control-agent-v0.1.10-windows-rc.1-windows-x64.zip
+  RELEASE_TAG: v0.1.10-windows-rc.2
+  ASSET: remote-control-agent-v0.1.10-windows-rc.2-windows-x64.zip
   NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
 jobs:
   windows-verified-bundle:
@@ -29,7 +29,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $actual = (Get-Content '.github/windows-acceptance-release-request.txt' -Raw).Trim()
-          if ($actual -cne 'Authorize one Windows-only acceptance pre-release: v0.1.10-windows-rc.1') { throw 'Unapproved release request' }
+          if ($actual -cne 'Authorize one Windows-only acceptance pre-release: v0.1.10-windows-rc.2') { throw 'Unapproved release request' }
           if ($env:GITHUB_REF -cne 'refs/heads/feat/windows-native-preview') { throw 'Wrong branch' }
       - name: Install locked dependencies without scripts
         run: corepack pnpm install --frozen-lockfile --ignore-scripts
