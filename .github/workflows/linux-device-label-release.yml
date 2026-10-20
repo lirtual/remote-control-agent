@@ -1,24 +1,24 @@
-name: Approved Linux device-label prerelease
+name: Approved Linux device metadata prerelease
 
 # One reviewed main-branch approval marker triggers a fresh, native dual-arch
-# build. Existing v0.1.9 publisher/pins are untouched.
+# build. Existing release pipeline and pinned trust checks are reused.
 on:
   push:
     branches: [main]
     paths:
-      - .github/linux-release-approval/v0.1.10.txt
+      - .github/linux-release-approval/v0.1.11.txt
 
 permissions:
   contents: read
 
 concurrency:
-  group: remote-agent-linux-v0.1.10
+  group: remote-agent-linux-v0.1.11
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: v0.1.10
-  SOURCE_SHA: 8b78294a2fbff18a53d6e3ce0a13e6992ea63478
-  APPROVAL_FILE: .github/linux-release-approval/v0.1.10.txt
+  RELEASE_TAG: v0.1.11
+  SOURCE_SHA: c558ac6a9f2ecc0129234790bf4f3b3a3a4aa191
+  APPROVAL_FILE: .github/linux-release-approval/v0.1.11.txt
 
 jobs:
   native-candidate:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.10 from $SOURCE_SHA"
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.11 from $SOURCE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
           git checkout --detach "$SOURCE_SHA"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -114,7 +114,7 @@ jobs:
           echo "Native candidate $TARGET verified for pinned $SOURCE_SHA"
       - uses: actions/upload-artifact@v4
         with:
-          name: candidate-v0.1.10-${{ matrix.target }}
+          name: candidate-v0.1.11-${{ matrix.target }}
           path: candidate/${{ matrix.target }}/
           retention-days: 3
           compression-level: 0
@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.10 from $SOURCE_SHA"
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.11 from $SOURCE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
              test -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")"; then
@@ -150,7 +150,7 @@ jobs:
           fi
       - uses: actions/download-artifact@v4
         with:
-          pattern: candidate-v0.1.10-*
+          pattern: candidate-v0.1.11-*
           path: dist
           merge-multiple: false
       - name: Check exact dual-arch archives and their hashes
@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           mkdir publish
           for target in linux-x64-glibc linux-arm64-glibc; do
-            dir="dist/candidate-v0.1.10-$target"
+            dir="dist/candidate-v0.1.11-$target"
             name="remote-control-agent-$RELEASE_TAG-$target.tar.gz"
             test "$(find "$dir" -maxdepth 1 -type f | wc -l)" -eq 2
             ( cd "$dir" && sha256sum --check SHA256SUMS.txt )
@@ -178,11 +178,12 @@ jobs:
         run: |
           set -euo pipefail
           cat > notes.txt <<'NOTES'
-          Linux x64/ARM64 immutable Agent v0.1.10 from reviewed main source.
-          First pairing prompts for an editable hostname-based device name;
-          Enter keeps the suggested hostname and --name stays noninteractive.
-          Already-approved identities are never re-paired by this release.
-          Full-tools runtime and signed device protocol are unchanged.
+          Linux x64/ARM64 immutable Agent v0.1.11 from reviewed main source.
+          Existing approved Linux/WSL2 Agent identities are preserved.
+          After a signed WSS login, the Agent reports bounded OS and runtime
+          metadata, architecture, hostname, release version and capabilities.
+          Full-tools runtime, device authorization and remote operation receipts
+          remain unchanged.
           This Release does not deploy the Worker, modify /install.sh pins,
           or upgrade any installed Linux/WSL2 device.
           NOTES
@@ -190,7 +191,7 @@ jobs:
             publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz \
             publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz \
             publish/SHA256SUMS \
-            --target "$SOURCE_SHA" --title "Remote Control Agent v0.1.10 — Editable Device Label" \
+            --target "$SOURCE_SHA" --title "Remote Control Agent v0.1.11 — Editable Device Label" \
             --notes-file notes.txt --prerelease --draft
           mkdir -p recheck
           gh release download "$RELEASE_TAG" --dir recheck --clobber
