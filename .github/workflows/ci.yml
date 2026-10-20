@@ -231,7 +231,15 @@ jobs:
             Copy-Item -LiteralPath $oldDir -Destination $newDir -Recurse -ErrorAction Stop
             # A copied directory may inherit DACL state from PowerShell Copy-Item;
             # reproduce the explicitly protected installer-owned version ACL.
-            [IO.Directory]::SetAccessControl($newDir,[IO.Directory]::GetAccessControl($oldDir))
+            # pwsh 7 lacks the .NET Framework FileSystem ACL static method.
+            # Run the ACL-copy fixture in the same Windows PowerShell 5.1
+            # that the production native Agent uses for its private ACLs.
+            $copyAcl = Join-Path $env:RUNNER_TEMP 'rca-clone-version-acl.ps1'
+            [IO.File]::WriteAllText($copyAcl,
+              'param([string]$Original,[string]$Clone)' + [Environment]::NewLine +
+              '[IO.Directory]::SetAccessControl($Clone,[IO.Directory]::GetAccessControl($Original))')
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $copyAcl -Original $oldDir -Clone $newDir
+            if ($LASTEXITCODE -ne 0) { throw 'Private version copy ACL fixture failed' }
             $manifestPath = Join-Path $newDir 'bundle.json'
             $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
             $manifest.version = $newVersion
