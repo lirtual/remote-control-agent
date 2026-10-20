@@ -70,6 +70,10 @@ async function parentProbe() {
   let hits = 0;
   const server = createServer(socket => {
     hits++;
+    // Positive-control client closes immediately after TCP connect.
+    // ECONNRESET while the server drains that socket is a valid fixture
+    // teardown event, not proof of namespace reachability or test failure.
+    socket.on("error", () => {});
     socket.end("synthetic-loopback-only");
   });
   try {
