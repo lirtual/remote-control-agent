@@ -1,0 +1,21 @@
+{
+  "tag": "v0.1.9",
+  "source_sha": "a5c875f9d5e4332ca1ba19dcc5ee6a22ca88e2bb",
+  "candidate_run_id": 39347151469,
+  "release_title": "Remote Control Agent v0.1.9 — Full Tools",
+  "release_notes": "docs/releases/v0.1.9.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.9-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.9-ubuntu-24.04",
+      "sha256": "30934eef4001c2072b5c170772ac933909622909c0fd9977fec18d77aa6b9cc4"
+    },
+    {
+      "name": "remote-control-agent-v0.1.9-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.9-ubuntu-24.04-arm",
+      "sha256": "7873cb0dc9e19784a0c5e434e8c310476c7a61436fd30ec8f41670e8cc1cabce"
+    }
+  ]
+}
