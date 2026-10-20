@@ -230,6 +230,7 @@ jobs:
             if ($created) { & $program disable }
             Remove-Item -LiteralPath $device -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Uninstall inactive native version without deleting identity or logs
         shell: pwsh
@@ -247,6 +248,5 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
-          }
 
 
