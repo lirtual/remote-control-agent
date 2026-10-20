@@ -28,6 +28,8 @@ export interface BrowserOfflinePage {
 export interface BrowserOfflineContext {
   route(glob: string, handler: (route: BrowserBlockedRoute) => Promise<void>): Promise<void>;
   routeWebSocket?(glob: string, handler: (socket: BrowserBlockedWebSocket) => Promise<void>): Promise<void>;
+  /** Persistent Chromium may have restored a tab before we register routes. */
+  pages(): Array<{ url(): string; close(): Promise<void> }>;
   newPage(): Promise<BrowserOfflinePage>;
   close(): Promise<void>;
 }
@@ -100,6 +102,15 @@ export class BrowserOfflineCore {
       }
       await context.routeWebSocket("**/*", socket =>
         socket.close({ code: 1008, reason: "Offline browser session" }));
+      // Persistent Chromium can restore an existing tab before routes are
+      // installed. Refuse all non-blank startup state, never silently inspect
+      // or navigate a restored real website. Blank tabs are closed before the
+      // fixed synthetic page is created.
+      const restored = context.pages();
+      if (restored.some(page => page.url() !== "about:blank")) {
+        throw new Error("Persistent browser profile contains a restored page.");
+      }
+      for (const blank of restored) await blank.close();
       const page = await context.newPage();
       await page.setContent(OFFLINE_HTML, { waitUntil: "domcontentloaded", timeout: 5000 });
       this.context = context;
