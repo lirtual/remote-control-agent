@@ -25,10 +25,10 @@ const EXPECTED_NODE_SHA256 =
 export function parseWindowsPreviewBuildArgs(argv) {
   const keys = new Map([
     ["--version", "version"], ["--node-bin", "nodeBin"], ["--node-sha256", "nodeSha256"],
-    ["--out", "out"],
+    ["--out", "out"], ["--background-bin", "backgroundBin"],
   ]);
   const out = {};
-  if (argv.length !== keys.size * 2) throw Error("Windows candidate requires four pinned arguments.");
+  if (argv.length !== keys.size * 2) throw Error("Windows candidate requires five pinned arguments.");
   for (let i = 0; i < argv.length; i += 2) {
     const key = keys.get(argv[i]);
     if (!key || out[key] !== undefined || !argv[i + 1]) throw Error("Unsafe packaging arguments.");
@@ -37,7 +37,7 @@ export function parseWindowsPreviewBuildArgs(argv) {
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(out.version) ||
       !/^[a-f0-9]{64}$/.test(out.nodeSha256) ||
       out.nodeSha256 !== EXPECTED_NODE_SHA256 ||
-      !path.isAbsolute(out.nodeBin) || !path.isAbsolute(out.out)) {
+      !path.isAbsolute(out.nodeBin) || !path.isAbsolute(out.backgroundBin) || !path.isAbsolute(out.out)) {
     throw Error("A reviewed version, paths and official pinned node.exe digest are required.");
   }
   return out;
@@ -62,6 +62,13 @@ export function buildWindowsPreview(args) {
   });
   if (version.error || version.status !== 0 || version.stdout.trim() !== EXPECTED_NODE_VERSION)
     throw Error("Pinned native Windows Node.js 24 executable unavailable.");
+  const launcher = readFileSync(args.backgroundBin);
+  const header = launcher.length >= 256 ? launcher.readUInt32LE(0x3c) : 0;
+  if (launcher.toString("ascii", 0, 2) !== "MZ" || header < 64 ||
+      header + 96 > launcher.length || launcher.toString("ascii", header, header + 4) !== "PE\\0\\0" ||
+      launcher.readUInt16LE(header + 24 + 68) !== 2) {
+    throw Error("Native background launcher must have a real Windows GUI subsystem.");
+  }
   if (existsSync(args.out) && readdirSync(args.out).length !== 0)
     throw Error("Untrusted non-empty candidate output directory.");
   mkdirSync(args.out, { recursive: true, mode: 0o700 });
@@ -70,8 +77,12 @@ export function buildWindowsPreview(args) {
     mkdirSync(path.join(stage, relative), { recursive: true, mode: 0o700 });
   }
   copyFileSync(args.nodeBin, path.join(stage, "bin/node.exe"));
+  copyFileSync(args.backgroundBin, path.join(stage, "bin/rca-background.exe"));
   const modules = runtimeSources(["windows-v2.ts"]);
-  const hashes = { "bin/node.exe": EXPECTED_NODE_SHA256 };
+  const hashes = {
+    "bin/node.exe": EXPECTED_NODE_SHA256,
+    "bin/rca-background.exe": digest(launcher),
+  };
   for (const file of modules) {
     const src = readFileSync(path.join(root, "src", file), "utf8");
     const compiled = ts.transpileModule(src, {
