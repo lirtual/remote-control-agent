@@ -178,7 +178,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     const suggested = os.hostname();
     let name: string;
     if (options.name !== undefined) {
-      name = selectDeviceLabel(options.name, suggested);
+      name = selectDeviceLabel(options.name, "");
     } else {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         throw Error("Interactive terminal required to select the device name; use --name explicitly.");
