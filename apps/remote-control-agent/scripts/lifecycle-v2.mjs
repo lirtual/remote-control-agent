@@ -36,7 +36,7 @@ export function verifyOwnedProgram(version){
   if(info.artifact_schema!==1||info.device_protocol!==2||
     info.receipt_schema!==1||!approvedProfile||
     info.version+"-"+info.target!==path.basename(version))
-    throw Error("Unrecognized owned Agent program; uninstall blocked");
+    throw Error("Untrusted Agent profile or Shell ownership; uninstall blocked");
   const allowedDirs=new Set(["bin","apps",APP,APP+"/src",APP+"/scripts",APP+"/.build"]);
   const allowedFiles=new Set(["bundle.json","bin/node",APP+"/package.json",
     APP+"/.build/session-supervisor",APP+"/src/v2-main.js",
