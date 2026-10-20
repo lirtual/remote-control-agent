@@ -690,7 +690,7 @@ async function pairFreshPending(options, keyPath, stdin, stdout, reuseExistingKe
   const suggested = os.hostname();
   let name: string;
   if (options.name !== undefined) {
-    name = selectDeviceLabel(options.name, suggested);
+    name = selectDeviceLabel(options.name, "");
   } else {
     const prompt = createInterface({ input: stdin, output: stdout, terminal: true });
     try { name = selectDeviceLabel(await prompt.question(`Device name [${suggested}]: `), suggested); }
