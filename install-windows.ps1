@@ -133,9 +133,9 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
       $unixKind = (($entry.ExternalAttributes -shr 16) -band 0xF000)
       if ($unixKind -eq 0xA000 -or $unixKind -eq 0x6000) { throw 'ZIP links forbidden' }
       if (-not $name.EndsWith('/')) {
-        if ($entry.Length -lt 0 -or $entry.Length -gt 80000000) { throw 'Oversized ZIP entry' }
+        if ($entry.Length -lt 0 -or $entry.Length -gt 130000000) { throw 'Oversized ZIP entry' }
         $total += $entry.Length
-        if ($total -gt 85000000) { throw 'ZIP expansion limit' }
+        if ($total -gt 150000000) { throw 'ZIP expansion limit' }
       }
     }
     foreach ($entry in $entries) {
