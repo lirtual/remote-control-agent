@@ -162,7 +162,9 @@ if ($Action -eq 'Switch') {
   # No global PATH dependency; verify the exact newly installed package.
   $manifestPath = [IO.Path]::Combine($candidate,'bundle.json')
   $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-  if ($manifest.version -cne $Version -or $manifest.upgrade_profile -cne 'read-only-no-shell-v1') {
+  if ($manifest.version -cne $Version -or
+      $manifest.upgrade_profile -cnotin @('read-only-no-shell-v1', 'paired-full-v1') -or
+      ($Direction -eq 'Upgrade' -and $manifest.upgrade_profile -cne 'paired-full-v1')) {
     throw 'Unreviewed Windows package version or capability profile'
   }
   $validator = [IO.Path]::Combine($candidate,'apps','remote-control-agent','scripts','verify-windows-preview.mjs')
