@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { newEnrollment } from "../src/v2-enrollment.ts";
 import { maintainAuthenticatedDeviceSession, monitorDeviceSocket } from "../src/v2-connection-lifecycle.ts";
+import { collectDeviceInfo } from "../src/device-info.ts";
 import { createAgentExecutionEngine } from "../src/execution.ts";
 
 class FakeSocket extends EventTarget {
@@ -152,8 +153,13 @@ test("reconnect obtains a fresh challenge and stops on abort without executing c
     assert.deepEqual(states, ["connected", "disconnected", "connected"]);
     assert.deepEqual(delays, [1000]);
     assert.equal(sockets.length, 2);
-    assert.deepEqual(sockets[0]!.sent, ["rc-v2:ping"]);
-    assert.deepEqual(sockets[1]!.sent, []);
+    assert.equal(sockets[0]!.sent.length, 1);
+    assert.equal(sockets[1]!.sent.length, 1);
+    for (const socket of sockets) {
+      const info = JSON.parse(socket.sent[0]!) as { kind: string; capabilities: string[] };
+      assert.equal(info.kind, "device_info");
+      assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -816,4 +822,19 @@ test("Windows preview read-only capability rejects Shell and file mutations", as
     controller.abort();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("metadata reports only bounded non-secret runtime data and honors read-only capability", () => {
+  const readonly = collectDeviceInfo("read-only");
+  const full = collectDeviceInfo("full");
+  assert.equal(readonly.kind, "device_info");
+  assert.deepEqual(readonly.capabilities, ["read"]);
+  assert.deepEqual(full.capabilities, ["read", "file_write", "shell"]);
+  assert.ok(readonly.hostname.length > 0 && readonly.hostname.length <= 64);
+  assert.ok(readonly.os_version.length > 0 && readonly.os_version.length <= 96);
+  assert.ok(["native", "wsl2", "container"].includes(readonly.environment));
+  const wire = JSON.stringify(readonly);
+  assert.ok(wire.length <= 1200);
+  assert.equal(wire.includes("private_key"), false);
+  assert.equal(wire.includes("device_id"), false);
 });
