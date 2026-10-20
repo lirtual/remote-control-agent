@@ -84,6 +84,7 @@ test("#73 release package build rejects unverified architectures and unpinned ta
     ["--version",tag,"--target",target,"--node-bin","node","--native","/b","--out","/tmp/o"],
   ]) assert.throws(()=>parseArgs(args));
   assert.ok(runtimeSources().includes("v2-main.ts"));
+  assert.ok(runtimeSources().includes("upgrade-control.ts"));
   assert.ok(!runtimeSources().includes("main.ts"));
   assert.ok(!runtimeSources().includes("server.ts"));
   const mismatchedArch = process.arch === "arm64" ? "linux-x64-glibc" : "linux-arm64-glibc";
