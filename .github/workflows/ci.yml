@@ -221,29 +221,23 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Registered task metadata failed direct validation' }
             $status = & $program task-status | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $status.installed -ne $true) { throw 'Task not registered' }
-            # Both versioned bundles are installed/hashed and the synthetic
-            # identity never leaves local Windows CI. No Worker access.
+            # Build an isolated second-version CI ZIP and use the *real*
+            # hash-verifying installer, not an ACL-changing Copy-Item fixture.
             $oldVersion = 'v0.0.0-ci'
             $newVersion = 'v0.0.1-ci'
             $basePrograms = Join-Path $root 'programs'
             $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
             $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
-            Copy-Item -LiteralPath $oldDir -Destination $newDir -Recurse -ErrorAction Stop
-            # A copied directory may inherit DACL state from PowerShell Copy-Item;
-            # reproduce the explicitly protected installer-owned version ACL.
-            # pwsh 7 lacks the .NET Framework FileSystem ACL static method.
-            # Run the ACL-copy fixture in the same Windows PowerShell 5.1
-            # that the production native Agent uses for its private ACLs.
-            $copyAcl = Join-Path $env:RUNNER_TEMP 'rca-clone-version-acl.ps1'
-            [IO.File]::WriteAllText($copyAcl,
-              'param([string]$Original,[string]$Clone)' + [Environment]::NewLine +
-              '[IO.Directory]::SetAccessControl($Clone,[IO.Directory]::GetAccessControl($Original))')
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $copyAcl -Original $oldDir -Clone $newDir
-            if ($LASTEXITCODE -ne 0) { throw 'Private version copy ACL fixture failed' }
-            $manifestPath = Join-Path $newDir 'bundle.json'
+            $sourceStage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle\remote-control-agent-v0.0.0-ci-windows-x64'
+            $manifestPath = Join-Path $sourceStage 'bundle.json'
             $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
             $manifest.version = $newVersion
             [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8))
+            $secondZip = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
+            Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $secondZip -CompressionLevel Optimal
+            $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-windows.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
             $newCli = Join-Path $newDir 'rca.cmd'
             $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
             $origKey = (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash
