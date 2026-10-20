@@ -1,9 +1,9 @@
-# Native Windows x64 bootstrap. Candidate source only: no Release is published here.
+# Native Windows x64 bootstrap. Refuses a Release unless published and immutable.
 # Verify GitHub Release immutability + official SHA256 BEFORE extracting/executing.
 [CmdletBinding()]
 param(
   [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$')]
-  [string]$Version = 'v0.1.9',
+  [string]$Version = 'v0.1.10-windows-rc.1',
   [string]$OfflineArchive,
   [string]$ExpectedSha256
 )

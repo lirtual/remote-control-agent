@@ -121,3 +121,15 @@ lifecycle and rollback are still outstanding.
 ## Upgrade / rollback of installed Windows versions (source-only)
 
 Install the desired **reviewed and manifest-verified** Windows x64 runtime to a distinct private version directory first. Then the bundled CLI can request `rca.cmd upgrade --version vNEW` or `rca.cmd rollback --version vOLD`. The same owner's existing interactive logon task is validated by SID; the Worker HTTPS origin and all identity/receipts remain untouched. The task action is switched only after the new version's checksum inventory and local identity status pass. If switching/restarting fails, the original task action is restored, or an explicit manual-remediation error is returned if restoration cannot be proven. A stopped task stays stopped; a running task is restarted and must remain running locally for initial acceptance. **A running local task does not establish signed WSS or cloud acceptance.**
+
+## Native Windows acceptance release guide
+
+The Windows-only `v0.1.10-windows-rc.1` pre-release is built on Windows CI and published only after its pinned Node SHA-256, full ZIP contents, private installer and CLI verification pass. It does not merge Draft PR #7 or modify any production Worker.
+
+Once that Release exists with `immutable=true`, use normal-user Windows PowerShell (not WSL2) to run:
+
+```powershell
+irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.10-windows-rc.1/install-windows.ps1 | iex
+```
+
+The installer verifies the immutable GitHub Release's official asset SHA-256 before unzipping. The installed `rca.cmd` is located under `$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.10-windows-rc.1-windows-x64\rca.cmd`. Use its `pair --endpoint` command to obtain one 10-character pairing code for owner authorization, followed by `run` and optionally `enable`. Never infer cloud acceptance from local task state.
