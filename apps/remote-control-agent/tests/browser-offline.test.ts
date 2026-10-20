@@ -12,11 +12,17 @@ import {
   type BrowserBlockedWebSocket,
 } from "../src/browser-offline.ts";
 
-function fakeDriver(options: { websocket?: boolean; snapshot?: string; failPage?: boolean } = {}) {
+function fakeDriver(options: { websocket?: boolean; snapshot?: string; failPage?: boolean; restored?: string } = {}) {
   const calls: string[] = [];
   let routeHandler: ((route: BrowserBlockedRoute) => Promise<void>) | undefined;
   let websocketHandler: ((ws: BrowserBlockedWebSocket) => Promise<void>) | undefined;
   const context: BrowserOfflineContext = {
+    pages() {
+      return options.restored ? [{
+        url: () => options.restored!,
+        async close() { calls.push("closeRestored"); },
+      }] : [];
+    },
     async route(glob, handler) {
       calls.push("route:" + glob);
       routeHandler = handler;
@@ -133,6 +139,21 @@ test("ARIA snapshots are bounded and never accept arbitrary navigation", async (
     assert.equal("navigate" in core, false);
     assert.equal("evaluate" in core, false);
     assert.equal("click" in core, false);
+  } finally {
+    await core.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("persistent profile with an existing site fails closed before any new page", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "rc-browser-restored-"));
+  const mock = fakeDriver({ restored: "https://unapproved.example.test/" });
+  const core = new BrowserOfflineCore(mock.driver, root);
+  try {
+    await assert.rejects(core.start(), /restored page/);
+    assert.equal(core.status(), null);
+    assert.equal(mock.calls.includes("newPage"), false);
+    assert.equal(mock.calls.includes("close"), true);
   } finally {
     await core.close();
     await rm(root, { recursive: true, force: true });
