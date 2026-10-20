@@ -17,6 +17,39 @@ const SHA=/^[a-f0-9]{40}$/;
 const VERSION=/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const APP="apps/remote-control-agent";
 
+/**
+ * Discover the immutable Release pin from this device's already-bound Worker.
+ * Treat the installer as DATA only; never execute fetched shell text.
+ * The existing GitHub release verifier still checks tag, commit and SHA-256.
+ */
+export async function resolveWorkerUpgradePin(endpoint,{request=fetch}={}){
+  const origin=new URL(endpoint);
+  if(origin.protocol!=="https:"||origin.username||origin.password||
+     origin.port||origin.search||origin.hash||origin.pathname!=="/"||
+     origin.origin+"/"!==endpoint)throw Error("Untrusted installed Worker endpoint");
+  const url=origin.origin+"/install.sh";
+  const response=await request(url,{
+    method:"GET",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(12000),
+  });
+  if(response.status!==200||!response.ok||response.url!==url)
+    throw Error("Reviewed Worker installer is unavailable");
+  const length=Number(response.headers.get("content-length")??"0");
+  if(!Number.isFinite(length)||length<0||length>16384)
+    throw Error("Unexpected Worker installer size");
+  const script=await response.text();
+  if(Buffer.byteLength(script,"utf8")>16384||
+     !script.startsWith("#!/bin/sh\n# Worker-origin Agent installer: published immutable GitHub archive only\nset -eu\n")||
+     !script.includes('sha256sum -c -')||
+     !script.includes('case "$(uname -m)" in'))
+    throw Error("Unrecognized reviewed Worker installer");
+  const matches=[...script.matchAll(/--tag "(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?)" --commit "([a-f0-9]{40})" --sha256 "\$expected" --endpoint "(https:\/\/[^"\s]+\/)" "\$@" < \/dev\/tty/g)];
+  if(matches.length!==1||matches[0][3]!==endpoint||
+     !/x86_64\) target=linux-x64-glibc; expected=[a-f0-9]{64} ;;/.test(script)||
+     !/aarch64\) target=linux-arm64-glibc; expected=[a-f0-9]{64} ;;/.test(script))
+    throw Error("Worker installer has no unambiguous immutable Release pin");
+  return Object.freeze({tag:matches[0][1],commit:matches[0][2]});
+}
+
 function ownedFile(p,mode){
   const st=lstatSync(p);
   if(!st.isFile()||st.isSymbolicLink()||st.uid!==process.getuid()||
