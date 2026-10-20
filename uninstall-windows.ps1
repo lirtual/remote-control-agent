@@ -69,9 +69,12 @@ if ($task) {
 }
 # Avoid unlinking a still-running runtime. A Get-Cim failure is uncertain, not safe.
 $node = [IO.Path]::Combine($target, 'bin', 'node.exe')
-foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction Stop)) {
+$background = [IO.Path]::Combine($target, 'bin', 'rca-background.exe')
+foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'rca-background.exe'" -ErrorAction Stop)) {
   $executable = [string]$process.ExecutablePath
-  if ($executable -and $executable.Equals($node, [StringComparison]::OrdinalIgnoreCase)) {
+  if ($executable -and
+      ($executable.Equals($node, [StringComparison]::OrdinalIgnoreCase) -or
+       $executable.Equals($background, [StringComparison]::OrdinalIgnoreCase))) {
     throw 'Version still running; stop it before uninstall'
   }
 }
