@@ -92,7 +92,7 @@ test("device revocation attempts owned browser shutdown and reports uncertainty"
   const sid = randomUUID();
   let active=true, closures=0, refuse=false;
   const browser={
-    status:()=>active?{session_id:sid,tab_id:"tab-1",backend:"agent-browser",uncertain:false}:null,
+    status:()=>active?{session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}:null,
     close:async()=>{closures++;if(refuse)throw Error("busy");active=false;},
   } as unknown as BrowserBackend;
   const engine=createAgentExecutionEngine({browser,receiptDirectory:dir});

@@ -53,6 +53,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   private sessionId: string | null = null;
   private uncertain = false;
   private busy = false;
+  private revoked = false;
   private version = 0;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -88,6 +89,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   }
 
   private touch(): void {
+    if (this.revoked || !this.context) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
       const id = this.sessionId;
@@ -98,6 +100,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
 
   async start(): Promise<BrowserStatus> {
     return this.exclusive(async () => {
+      if (this.revoked) throw Error("Browser ownership revoked; startup denied.");
       if (this.context || this.sessionId) throw Error("Automation Profile is already in use.");
       await mkdir(this.profile, { recursive: true, mode: 0o700 });
       const context = await this.driver.launchPersistentContext(this.profile, {
@@ -105,6 +108,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         acceptDownloads: false, serviceWorkers: "block",
       });
       try {
+        if (this.revoked) throw Error("Browser ownership revoked during startup.");
         const pages = context.pages();
         // A persistent Profile may restore tabs. Never operate pre-existing pages.
         if (pages.some(page => page.url() !== "about:blank")) {
@@ -112,6 +116,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         }
         for (const page of pages) await page.close();
         this.page = await context.newPage();
+        if (this.revoked) throw Error("Browser ownership revoked during startup.");
         this.page.setDefaultTimeout(5_000);
         this.context = context;
         this.sessionId = randomUUID();
@@ -131,11 +136,13 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     const url = checkedUrl(requestedUrl);
     return this.exclusive(async () => {
       this.validate(sessionId);
+      if (this.revoked) throw Error("Browser ownership revoked; navigation denied.");
       if (this.uncertain) throw Error("Uncertain browser navigation; no implicit replay.");
       this.uncertain = true;
       this.version++; // invalidate prior Ref generation before an effect
       try {
         await this.page!.goto(url, { waitUntil: "domcontentloaded", timeout: 20_000 });
+        if (this.revoked) throw Error("Browser ownership revoked during navigation.");
         this.uncertain = false;
         this.touch();
       } catch (e) {
@@ -149,13 +156,40 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   async snapshot(sessionId: string): Promise<{text: string; truncated: boolean; snapshot_version: number}> {
     return this.exclusive(async () => {
       this.validate(sessionId);
+      if (this.revoked) throw Error("Browser ownership revoked; observation denied.");
       // Even when a navigation outcome is unknown, observations are allowed.
       const raw = await this.page!.ariaSnapshot({ mode: "ai", timeout: 10_000 });
+      if (this.revoked) throw Error("Browser ownership revoked during observation.");
       this.version++;
       this.touch();
       return { text: raw.slice(0, SNAPSHOT_LIMIT), truncated: raw.length > SNAPSHOT_LIMIT,
         snapshot_version: this.version };
     });
+  }
+
+  /**
+   * A revocation is not an ordinary browser tool. It must cancel the owned
+   * context even when a navigation holds the normal operation lock.
+   * A pending external effect still makes the Agent's receipt outcome unknown.
+   */
+  async stopOwnedForRevocation(): Promise<"confirmed" | "uncertain"> {
+    this.revoked = true;
+    this.uncertain = true;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = undefined;
+    const active = this.context;
+    if (!active) return "confirmed"; // In-flight startup checks revoked before publishing.
+    try {
+      await active.close();
+      if (this.context === active) {
+        this.context = null;
+        this.page = null;
+        this.sessionId = null;
+      }
+      return "confirmed";
+    } catch {
+      return "uncertain"; // Never claim an owned Chromium was stopped on failure.
+    }
   }
 
   async close(sessionId: string): Promise<void> {

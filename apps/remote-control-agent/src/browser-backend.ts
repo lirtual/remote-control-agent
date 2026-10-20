@@ -13,4 +13,6 @@ export interface BrowserBackend {
   navigate(sessionId: string, url: string): Promise<void>;
   snapshot(sessionId: string): Promise<{text:string;truncated:boolean;snapshot_version:number}>;
   close(sessionId: string): Promise<void>;
+  /** Locally trusted revocation: cancel owned browser, including in-flight page work. */
+  stopOwnedForRevocation?(): Promise<"confirmed" | "uncertain">;
 }

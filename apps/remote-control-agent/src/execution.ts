@@ -526,7 +526,10 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false);
       let browserOutcome: "confirmed" | "uncertain" = "confirmed";
       const active = options.browser?.status();
-      if (active) {
+      if (options.browser?.stopOwnedForRevocation) {
+        try { browserOutcome = await options.browser.stopOwnedForRevocation(); }
+        catch { browserOutcome = "uncertain"; }
+      } else if (active) {
         try { await options.browser!.close(active.session_id); }
         catch { browserOutcome = "uncertain"; }
       }

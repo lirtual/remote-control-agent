@@ -6,12 +6,13 @@ import { test } from "node:test";
 import type { BrowserType } from "playwright-core";
 import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
-function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string } = {}) {
+function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
   const calls: string[] = [];
   const page = {
     setDefaultTimeout: (ms: number) => { calls.push("timeout:"+ms); },
     goto: async (url: string) => {
       calls.push("goto:"+url);
+      if (options.navigationWait) await options.navigationWait;
       if (options.navigationFails) throw Error("Navigation outcome uncertain.");
     },
     ariaSnapshot: async (args: {mode: string}) => {
@@ -30,6 +31,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.equal(settings.headless,true);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
+      if (options.launchWait) await options.launchWait;
       return context;
     },
   } as unknown as BrowserType<{}>;
@@ -98,4 +100,42 @@ test("source browser manager applies 8000 character output limit",async()=>{
     assert.equal(result.truncated,true);
     await browser.close(session_id);
   } finally {await rm(tmp,{recursive:true,force:true});}
+});
+
+test("revocation interrupts active navigation and denies any later reuse",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-pw-revoke-busy-"));
+  let release!:()=>void;
+  const gate=new Promise<void>(done=>{release=done;});
+  const fake=fakeBrowser({navigationWait:gate});
+  const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
+  try{
+    const {session_id}=await browser.start();
+    const navigation=browser.navigate(session_id,"https://example.com/");
+    assert.ok(fake.calls.includes("goto:https://example.com/"));
+    assert.equal(await browser.stopOwnedForRevocation(),"confirmed");
+    assert.equal(browser.status(),null,"revoked session must be forgotten immediately");
+    release();
+    await assert.rejects(navigation,/revoked during navigation/);
+    await assert.rejects(browser.start(),/revoked/);
+    assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
+  }finally{release();await rm(tmp,{recursive:true,force:true});}
+});
+
+test("revocation during slow Chromium startup prevents publishing a session",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-pw-revoke-start-"));
+  let release!:()=>void;
+  const gate=new Promise<void>(done=>{release=done;});
+  const fake=fakeBrowser({launchWait:gate});
+  const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
+  try{
+    const starting=browser.start();
+    for(let i=0;i<40&&!fake.calls.some(x=>x.startsWith("launch:"));i++)
+      await new Promise(done=>setTimeout(done,5));
+    assert.ok(fake.calls.some(x=>x.startsWith("launch:")));
+    assert.equal(await browser.stopOwnedForRevocation(),"confirmed");
+    release();
+    await assert.rejects(starting,/revoked during startup/);
+    assert.equal(browser.status(),null);
+    assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
+  }finally{release();await rm(tmp,{recursive:true,force:true});}
 });
