@@ -1,8 +1,6 @@
 // Windowless Windows Task Scheduler entrypoint. No shell, no command interpreter.
 // A private job owns the native Node Agent and kills it when the task is stopped.
 #define WIN32_LEAN_AND_MEAN
-#define UNICODE
-#define _UNICODE
 #include <windows.h>
 #include <shellapi.h>
 #include <wchar.h>
