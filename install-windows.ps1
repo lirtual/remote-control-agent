@@ -122,7 +122,7 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
         throw 'ZIP traversal, alias or duplicate'
       }
       $allowedDir = $name -cmatch '^(?:bin|apps|apps/remote-control-agent|apps/remote-control-agent/src|apps/remote-control-agent/scripts)/$'
-      $allowedFile = $name -cmatch '^(?:bin/node\.exe|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$'
+      $allowedFile = $name -cmatch '^(?:bin/(?:node\.exe|rca-background\.exe)|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$'
       if (($name.EndsWith('/') -and -not $allowedDir) -or
           (-not $name.EndsWith('/') -and -not $allowedFile)) {
         if ($env:GITHUB_ACTIONS -eq 'true') {
