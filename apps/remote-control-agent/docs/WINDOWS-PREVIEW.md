@@ -95,3 +95,13 @@ acceptance.
   live pairing, production reliability, or service persistence.
 
 This preview must not be described as a completed Windows rollout.
+
+
+## Local diagnostics (no remote log collection)
+
+After installing a private Windows preview candidate, use `rca.cmd logs` to
+read up to 80 recent fixed Agent lifecycle events. The local bounded file
+`agent-events.ndjson` contains only UTC times and `starting`, `connected`,
+`disconnected`, `rejected`, `stopping`. It never stores device identity,
+keys, pairing codes, endpoint URLs or raw operation arguments. It is **not** a
+write-operation receipt store and does not prove cloud liveness.

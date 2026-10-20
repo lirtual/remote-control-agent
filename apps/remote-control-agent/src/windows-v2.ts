@@ -12,19 +12,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { newEnrollment, saveNewPrivateKey } from "./v2-enrollment.ts";
 import { recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
+import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
 
 const TASK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-user-task.ps1");
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-private-store.ps1");
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string;
+  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs"; endpoint?: string; name?: string;
 } {
   const action = argv[0];
-  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop"].includes(action ?? "")) {
+  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name") ||
@@ -35,7 +36,7 @@ export function parseWindowsAgentArgs(argv: string[]): {
     if (key === "--endpoint") options.endpoint = value;
     else options.name = value;
   }
-  if (["status", "disable", "task-status", "start", "stop"].includes(action ?? "")) {
+  if (["status", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
     if (argv.length !== 1) throw Error("This command has no options.");
   } else {
     if (!options.endpoint || (action !== "pair" && options.name !== undefined)) {
@@ -122,6 +123,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     process.stdout.write(runUserTask(mapping[options.action]) + "\n");
     return;
   }
+  if (options.action === "logs") {
+    process.stdout.write(readWindowsEvents(directory));
+    return;
+  }
   if (options.action === "status") {
     let device_id: string | null = null;
     if (idExists) {
@@ -190,14 +195,19 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   process.on("SIGINT", abort);
   process.on("SIGTERM", abort);
   try {
+    recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       capability: "read-only",
-      onState: state => process.stderr.write(JSON.stringify({
+      onState: state => {
+        recordWindowsEvent(directory, state);
+        process.stderr.write(JSON.stringify({
         service: "remote-control-windows-preview", event: state,
-      }) + "\n"),
+      }) + "\n");
+      },
     });
   } finally {
+    recordWindowsEvent(directory, "stopping");
     process.off("SIGINT", abort);
     process.off("SIGTERM", abort);
   }
