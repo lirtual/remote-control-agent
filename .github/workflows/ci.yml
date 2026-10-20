@@ -173,5 +173,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Reopened archive file inventory failed' }
           & (Join-Path $extracted 'rca.cmd') status
           if ($LASTEXITCODE -ne 0) { throw 'Portable rca launcher failed' }
+          # CI-only offline fixture: hash verification, safe extraction, private
+          # staging and bundled CLI; no pairing, task creation or cloud access.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.0.0-ci -OfflineArchive $zip -ExpectedSha256 $hash
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows offline installer failed' }
+          $installed = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control\programs\v0.0.0-ci-windows-x64'
+          & (Join-Path $installed 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Installed bundled CLI failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.0.0-ci -OfflineArchive $zip -ExpectedSha256 $hash 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Repeat-install unexpectedly succeeded' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.0.1-ci -OfflineArchive $zip -ExpectedSha256 ('0' * 64) 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 

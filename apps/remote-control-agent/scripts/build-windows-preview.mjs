@@ -91,7 +91,7 @@ export function buildWindowsPreview(args) {
     .replace(/\r?\n/g, "\r\n"));
   writeFileSync(path.join(stage, "rca.cmd"), launcherBytes, { mode: 0o600 });
   hashes["rca.cmd"] = digest(launcherBytes);
-  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1"];
+  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "verify-windows-preview.mjs"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
     const bytes = readFileSync(path.join(root, "scripts", name));
