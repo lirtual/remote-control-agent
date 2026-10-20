@@ -230,6 +230,23 @@ jobs:
             if ($created) { & $program disable }
             Remove-Item -LiteralPath $device -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+
+      - name: Uninstall inactive native version without deleting identity or logs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
+          $sentinel = Join-Path $root 'agent-events.ndjson'
+          [IO.File]::WriteAllText($sentinel, '{"utc":"2026-01-01T00:00:00.000Z","event":"stopping"}' + [char]10)
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Safe Windows runtime uninstall failed' }
+          $old = Join-Path $root 'programs\v0.0.0-ci-windows-x64'
+          if (Test-Path -LiteralPath $old) { throw 'Uninstalled version still exists' }
+          if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Windows Agent diagnostics not preserved' }
+          if (-not (Test-Path -LiteralPath $root)) { throw 'Private identity directory was deleted' }
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
+          Remove-Item -LiteralPath $sentinel -Force
           }
 
 

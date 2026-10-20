@@ -105,3 +105,15 @@ read up to 80 recent fixed Agent lifecycle events. The local bounded file
 `disconnected`, `rejected`, `stopping`. It never stores device identity,
 keys, pairing codes, endpoint URLs or raw operation arguments. It is **not** a
 write-operation receipt store and does not prove cloud liveness.
+
+
+## Uninstall inactive version (source-only)
+
+The repository's reviewed `uninstall-windows.ps1 -Version VERSION` removes
+**only** a specified installed runtime. It refuses removal when the user's
+registered task points to that version, a Node process still uses it, an ACL
+has changed, or the installed file manifest is invalid. First stop/disable
+the version's user task. Identity PEM, device ID, local diagnostics and
+operation receipt data are deliberately preserved, with **no cloud revoke**.
+This is a separate PowerShell command, not yet `rca uninstall`; full CLI
+lifecycle and rollback are still outstanding.
