@@ -120,7 +120,7 @@ jobs:
           compression-level: 0
 
   windows-native-preview:
-    name: Native Windows read-only preview / x64
+    name: Native Windows full tools preview / x64
     runs-on: windows-2025
     timeout-minutes: 15
     steps:
@@ -132,11 +132,11 @@ jobs:
         run: corepack pnpm install --frozen-lockfile --ignore-scripts
       - name: Typecheck shared and Windows preview sources
         run: corepack pnpm --filter remote-control-agent typecheck
-      - name: Windows path and private ACL smoke (no Worker, no pairing, no Shell)
+      - name: Windows path, identity ACL and native full-tool smoke (isolated temp fixtures)
         shell: pwsh
         run: |
           Set-Location apps/remote-control-agent
-          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
       - name: User task negative checks (never create a task)
         shell: pwsh
         run: |
