@@ -211,6 +211,38 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
+      - name: Verify optional Playwright runtime in repacked Windows candidate (Draft-only)
+        if: github.event_name == 'pull_request' && github.head_ref == 'feat/browser-offline-core'
+        shell: pwsh
+        timeout-minutes: 7
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64'
+          $cache = Join-Path $env:RUNNER_TEMP 'rc-pinned-browser-cache'
+          $archive = Join-Path $env:RUNNER_TEMP 'browser-offline-candidate.zip'
+          $extracted = Join-Path $env:RUNNER_TEMP 'browser-offline-reopened'
+          try {
+            $env:PLAYWRIGHT_BROWSERS_PATH = $cache
+            # Only the exact lockfile-pinned Playwright installs its own
+            # matching Chromium headless-shell on this temporary CI runner.
+            node apps/remote-control-agent/node_modules/playwright-core/cli.js install --only-shell chromium
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned Chromium browser installation failed' }
+            node apps/remote-control-agent/scripts/stage-browser-runtime.mjs $stage $cache
+            if ($LASTEXITCODE -ne 0) { throw 'Browser runtime staging failed' }
+            node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage
+            if ($LASTEXITCODE -ne 0) { throw 'Browser staging inventory invalid' }
+            Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+            Expand-Archive -LiteralPath $archive -DestinationPath $extracted -ErrorAction Stop
+            node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
+            if ($LASTEXITCODE -ne 0) { throw 'Reopened browser archive verification failed' }
+            $bundledNode = Join-Path $extracted 'bin/node.exe'
+            & $bundledNode apps/remote-control-agent/scripts/smoke-staged-browser.mjs $extracted
+            if ($LASTEXITCODE -ne 0) { throw 'Bundled Playwright real browser/ARIA acceptance failed' }
+          } finally {
+            Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
+            if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force }
+            if (Test-Path -LiteralPath $extracted) { Remove-Item -LiteralPath $extracted -Recurse -Force }
+          }
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
         run: |
