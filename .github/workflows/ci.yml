@@ -257,6 +257,8 @@ jobs:
             if ($badSwitch.ExitCode -eq 0) { throw 'Injected task switch unexpectedly succeeded' }
             $failureEvidence = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt') -Raw
             if ($failureEvidence -notmatch 'previous task restored') {
+              # Disposable synthetic device only. No production identifiers.
+              Write-Output ('CI SWITCH FAILURE REASON: ' + $failureEvidence.Substring(0,[Math]::Min(1800,$failureEvidence.Length)))
               throw 'Injected failure did not exercise the post-switch rollback path'
             }
             $taskName = 'RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_')
