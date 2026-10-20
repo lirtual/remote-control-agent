@@ -229,6 +229,9 @@ jobs:
             $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
             $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
             Copy-Item -LiteralPath $oldDir -Destination $newDir -Recurse -ErrorAction Stop
+            # A copied directory may inherit DACL state from PowerShell Copy-Item;
+            # reproduce the explicitly protected installer-owned version ACL.
+            [IO.Directory]::SetAccessControl($newDir,[IO.Directory]::GetAccessControl($oldDir))
             $manifestPath = Join-Path $newDir 'bundle.json'
             $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
             $manifest.version = $newVersion
@@ -244,6 +247,10 @@ jobs:
               '-Direction','Upgrade','-CIInjectFailure'
             ) -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt')
             if ($badSwitch.ExitCode -eq 0) { throw 'Injected task switch unexpectedly succeeded' }
+            $failureEvidence = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt') -Raw
+            if ($failureEvidence -notmatch 'previous task restored') {
+              throw 'Injected failure did not exercise the post-switch rollback path'
+            }
             $taskName = 'RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_')
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
@@ -251,7 +258,11 @@ jobs:
               throw 'Failed switch did not restore old executable'
             }
             & $newCli upgrade --version $newVersion
-            if ($LASTEXITCODE -ne 0) { throw 'Verified Windows version upgrade failed' }
+            if ($LASTEXITCODE -ne 0) {
+              # Fixture-only diagnostics; owner-facing CLI keeps OS details private.
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Switch -Version $newVersion -Direction Upgrade
+              throw 'Verified Windows version upgrade failed'
+            }
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
                 (Join-Path $newDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
