@@ -6,10 +6,11 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile } from "node:fs/promises";
+import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { newEnrollment, saveNewPrivateKey } from "./v2-enrollment.ts";
+import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enrollment.ts";
 import { recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
@@ -174,7 +175,19 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   }
   if (options.action === "pair") {
     if (idExists) throw Error("Already paired. Pairing never rotates an approved key.");
-    const material = newEnrollment(options.name || os.hostname(),
+    const suggested = os.hostname();
+    let name: string;
+    if (options.name !== undefined) {
+      name = selectDeviceLabel(options.name, "");
+    } else {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        throw Error("Interactive terminal required to select the device name; use --name explicitly.");
+      }
+      const prompt = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+      try { name = selectDeviceLabel(await prompt.question(`Device name [${suggested}]: `), suggested); }
+      finally { prompt.close(); }
+    }
+    const material = newEnrollment(name,
       exists ? await readFile(keyPath, "utf8") : undefined, "permanent");
     if (!exists) {
       // The private directory already has a protected DACL. Exclusive create
