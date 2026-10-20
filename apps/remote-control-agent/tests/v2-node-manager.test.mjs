@@ -25,6 +25,8 @@ function fixture(){
   const info={version:"v0.1.2",target:"linux-x64-glibc",artifact_schema:1,
     device_protocol:2,receipt_schema:1,upgrade_profile:"read-only-no-shell-v1"};
   writeFileSync(path.join(root,"bundle.json"),JSON.stringify(info),{mode:0o600});
+  const src=directory(rel+"/programs/v0.1.2-linux-x64-glibc/apps/remote-control-agent/src");
+  writeFileSync(path.join(src,"v2-main.js"),"const caps={readOnly: true, writeFile: false, shell: false,};\n",{mode:0o600});
   const ids=directory(rel);
   writeFileSync(path.join(ids,"v2-identity.pem.device-id"),UUID,{mode:0o600});
   const units=directory(".config/systemd/user");
