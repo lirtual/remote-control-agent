@@ -68,7 +68,26 @@ test("Windows paired engine supports file effects, receipts and bounded native s
     assert.notEqual((stopped?.body as { status: string }).status, "unknown",
       "Windows session must not claim successful termination without exit evidence");
 
+    // Revoke while a real native command is still running; cleanup must
+    // terminate Agent-owned work and prevent a new process from starting.
+    const duringRevoke = await invoke("start_process", {
+      command: "Start-Sleep -Seconds 60", timeout_ms: 0,
+    });
+    assert.equal(duringRevoke?.status, 200);
+    assert.equal((duringRevoke?.body as { status: string }).status, "running");
     assert.equal(await engine.stopOwnedForRevocation(), "confirmed");
+    const deniedAfterRevoke = await invoke("start_process", {
+      command: "Write-Output MUST_NOT_RUN_AFTER_REVOKE", timeout_ms: 1000,
+    });
+    assert.equal(deniedAfterRevoke?.status, 200);
+    assert.equal((deniedAfterRevoke?.body as { status: string }).status, "failed");
+    const sessions = await engine.executeTool({ tool: "list_sessions", arguments: {} }, controller.signal);
+    assert.equal(sessions?.status, 200);
+    const visible = JSON.parse(
+      (sessions.body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text
+    ) as Array<{ state: string }>;
+    assert.ok(visible.every(s => s.state !== "running" && s.state !== "unknown"));
+
   } finally {
     controller.abort();
     await engine.close();
