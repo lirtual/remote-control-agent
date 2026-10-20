@@ -137,6 +137,15 @@ jobs:
         run: |
           Set-Location apps/remote-control-agent
           node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-acl.test.mjs
+      - name: User task negative checks (never create a task)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = 'apps/remote-control-agent/scripts/windows-user-task.ps1'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Status
+          if ($LASTEXITCODE -ne 0) { throw 'Task status failed' }
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Enable -Endpoint 'https://rca.example.test/' -Node $env:SystemRoot\System32\not-node.exe -Entry 'C:\Temp\windows-v2.js' 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Untrusted native task path was accepted' }
       - name: Stage native Windows x64 offline candidate (no publishing)
         shell: pwsh
         run: |

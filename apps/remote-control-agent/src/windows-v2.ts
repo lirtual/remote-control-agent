@@ -13,17 +13,18 @@ import { newEnrollment, saveNewPrivateKey } from "./v2-enrollment.ts";
 import { recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 
+const TASK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-user-task.ps1");
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-private-store.ps1");
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status"; endpoint?: string; name?: string;
+  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string;
 } {
   const action = argv[0];
-  if (action !== "pair" && action !== "run" && action !== "status") {
+  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status"; endpoint?: string; name?: string } = { action };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop"; endpoint?: string; name?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name") ||
@@ -34,10 +35,10 @@ export function parseWindowsAgentArgs(argv: string[]): {
     if (key === "--endpoint") options.endpoint = value;
     else options.name = value;
   }
-  if (action === "status") {
-    if (argv.length !== 1) throw Error("status has no options.");
+  if (["status", "disable", "task-status", "start", "stop"].includes(action ?? "")) {
+    if (argv.length !== 1) throw Error("This command has no options.");
   } else {
-    if (!options.endpoint || (action === "run" && options.name !== undefined)) {
+    if (!options.endpoint || (action !== "pair" && options.name !== undefined)) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
     const url = new URL(options.endpoint);
@@ -87,6 +88,20 @@ async function hasFile(filename: string): Promise<boolean> {
   }
 }
 
+function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status", endpoint?: string): string {
+  const windows = process.env.SystemRoot;
+  if (!windows) throw Error("Missing Windows system directory.");
+  const powershell = path.win32.join(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const result = spawnSync(powershell, [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", TASK_SCRIPT,
+    "-Action", action,
+    ...(action === "Enable" ? ["-Node", process.execPath,
+      "-Entry", fileURLToPath(import.meta.url), "-Endpoint", endpoint!] : []),
+  ], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+  if (result.error || result.status !== 0) throw Error("Native Windows user task refused.");
+  return result.stdout.trim();
+}
+
 export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64" ||
       !/^v24\./.test(process.version)) {
@@ -101,6 +116,12 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (idExists && !exists) throw Error("Orphaned device ID; preserve and inspect existing store.");
   assertPrivateStore("Check", directory);
 
+  if (options.action === "task-status" || options.action === "disable" ||
+      options.action === "start" || options.action === "stop") {
+    const mapping = { "task-status": "Status", disable: "Disable", start: "Start", stop: "Stop" } as const;
+    process.stdout.write(runUserTask(mapping[options.action]) + "\n");
+    return;
+  }
   if (options.action === "status") {
     let device_id: string | null = null;
     if (idExists) {
@@ -112,6 +133,13 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       platform: "win32", mode: "foreground-preview", identity_present: exists,
       device_id, remote_connection: "unconfirmed", shell: false, write_file: false,
     }, null, 2) + "\n");
+    return;
+  }
+  if (options.action === "enable") {
+    if (!exists || !idExists) throw Error("Approve a native Windows device before enabling autostart.");
+    const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
+    process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
     return;
   }
   if (options.action === "pair") {

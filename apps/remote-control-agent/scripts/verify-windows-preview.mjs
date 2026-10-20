@@ -26,6 +26,7 @@ export function inspectWindowsPreview(root) {
   if (!expected.has("bin/node.exe") ||
       !expected.has("rca.cmd") ||
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
+      !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
       expected.size < 8 || expected.size > 40 ||
       expected.get("bin/node.exe") !==
@@ -41,7 +42,7 @@ export function inspectWindowsPreview(root) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
-      if (!/^(?:bin\/node\.exe|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/windows-private-store\.ps1))$/.test(name) ||
+      if (!/^(?:bin\/node\.exe|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:windows-private-store|windows-user-task)\.ps1))$/.test(name) ||
           seen.has(name) || !expected.has(name) ||
           typeof expected.get(name) !== "string" ||
           !/^[a-f0-9]{64}$/.test(expected.get(name))) {

@@ -26,6 +26,8 @@ test("All Windows filesystem parsers reuse the same checked path contract", () =
 });
 test("Windows preview CLI fails closed on untrusted flags and endpoints", () => {
   assert.equal(parseWindowsAgentArgs(["status"]).action, "status");
+  assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
+  assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
   for (const args of [
     ["pair", "--endpoint", "http://example.test/"],
@@ -35,6 +37,8 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
     ["run", "--endpoint", "https://example.test/", "--name", "inject"],
     ["pair", "--endpoint", "https://example.test/", "--endpoint", "https://other.test/"],
     ["status", "--endpoint", "https://example.test/"],
+    ["disable", "--endpoint", "https://example.test/"],
+    ["enable", "--endpoint", "https://example.test/", "--name", "injected"],
   ]) assert.throws(() => parseWindowsAgentArgs(args));
   assert.equal(windowsAgentStore("C:\\Users\\ray\\AppData\\Local"),
     "C:\\Users\\ray\\AppData\\Local\\mcp-workers\\remote-control");
