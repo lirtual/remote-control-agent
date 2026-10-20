@@ -217,7 +217,10 @@ jobs:
         timeout-minutes: 7
         run: |
           $ErrorActionPreference = 'Stop'
-          $stage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64'
+          $originalStage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64'
+          $stage = Join-Path $env:RUNNER_TEMP 'browser-offline-isolated-stage'
+          if (Test-Path -LiteralPath $stage) { throw 'Browser candidate staging directory already exists' }
+          Copy-Item -LiteralPath $originalStage -Destination $stage -Recurse -ErrorAction Stop
           $cache = Join-Path $env:RUNNER_TEMP 'rc-pinned-browser-cache'
           $archive = Join-Path $env:RUNNER_TEMP 'browser-offline-candidate.zip'
           $extracted = Join-Path $env:RUNNER_TEMP 'browser-offline-reopened'
@@ -242,6 +245,7 @@ jobs:
             Remove-Item Env:PLAYWRIGHT_BROWSERS_PATH -ErrorAction SilentlyContinue
             if (Test-Path -LiteralPath $cache) { Remove-Item -LiteralPath $cache -Recurse -Force }
             if (Test-Path -LiteralPath $extracted) { Remove-Item -LiteralPath $extracted -Recurse -Force }
+            if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
           }
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
