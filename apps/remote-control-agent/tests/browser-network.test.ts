@@ -74,13 +74,17 @@ test("real offline BrowserCore prevents request delivery to an otherwise reachab
       page.goto(base + "/public", { waitUntil: "domcontentloaded", timeout: 3_000 }),
       /ERR_|Navigation|net::|aborted|offline|closed/i,
     );
+    // A failed navigation invalidates that tab's execution context; use a
+    // separate test-only page in the SAME protected BrowserContext to probe
+    // subresources without relying on a destroyed frame.
+    const resourcePage = await context!.newPage();
     // Exercise subresource and child-frame creation using trusted synthetic HTML
     // even though no caller-controlled HTML interface exists in the product.
-    await page.setContent(
+    await resourcePage.setContent(
       `<!doctype html><body><img src="${base}/simulated-sensitive?via=image"><iframe src="${base}/simulated-sensitive?via=iframe"></iframe><link rel="stylesheet" href="${base}/simulated-sensitive?via=css"></body>`,
       { waitUntil: "domcontentloaded", timeout: 5_000 },
     );
-    await page.waitForTimeout(300);
+    await resourcePage.waitForTimeout(300);
     assert.deepEqual(requests, [], "Guarded Chromium sent a request to the synthetic sensitive target");
     assert.equal(core.status()?.session_id, session.session_id);
     await core.close();
