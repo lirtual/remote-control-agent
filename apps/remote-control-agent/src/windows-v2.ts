@@ -136,7 +136,14 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     return;
   }
   if (options.action === "enable") {
-    if (!exists || !idExists) throw Error("Approve a native Windows device before enabling autostart.");
+    if (!exists) throw Error("Pair a native Windows device before enabling autostart.");
+    if (!idExists) {
+      // Only an already-approved key can recover its original server-signed ID.
+      // No second pairing code, key rotation, or cloud grant is created.
+      await recoverDeviceId(options.endpoint!, keyPath);
+      assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
+      assertPrivateStore("Check", directory);
+    }
     const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
     if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
     process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
