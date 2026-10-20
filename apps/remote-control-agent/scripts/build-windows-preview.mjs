@@ -65,7 +65,7 @@ export function buildWindowsPreview(args) {
   const launcher = readFileSync(args.backgroundBin);
   const header = launcher.length >= 256 ? launcher.readUInt32LE(0x3c) : 0;
   if (launcher.toString("ascii", 0, 2) !== "MZ" || header < 64 ||
-      header + 96 > launcher.length || launcher.toString("ascii", header, header + 4) !== "PE\\0\\0" ||
+      header + 96 > launcher.length || launcher.readUInt32LE(header) !== 0x00004550 ||
       launcher.readUInt16LE(header + 24 + 68) !== 2) {
     throw Error("Native background launcher must have a real Windows GUI subsystem.");
   }
