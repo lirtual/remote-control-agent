@@ -213,9 +213,13 @@ jobs:
             if ($digest -cne '9efb4de1a5406f1b32dfcca2890e272053caace3369b6294d47240384e0a4732') {
               throw 'Pinned agent-browser npm tarball SHA-256 mismatch'
             }
-            & tar.exe -xzf $tarball 'package/bin/agent-browser-win32-x64.exe'
+            & tar.exe -xzf $tarball 'package/bin/agent-browser-win32-x64.exe' 'package/LICENSE'
             if ($LASTEXITCODE -ne 0) { throw 'Native browser extraction failed' }
             $native = Join-Path $source 'package/bin/agent-browser-win32-x64.exe'
+            $upstreamLicense = Join-Path $source 'package/LICENSE'
+            if ((Get-FileHash -LiteralPath $upstreamLicense -Algorithm SHA256).Hash.ToLowerInvariant() -cne '014bb31e83d5c2e76aea1cc6e82217346ab41362f32cb355ad0f5c10aa0aeaff') {
+              throw 'Pinned upstream agent-browser Apache-2.0 license is missing or altered'
+            }
             $nativeSha = (Get-FileHash -LiteralPath $native -Algorithm SHA256).Hash.ToLowerInvariant()
             if ($nativeSha -cne 'af1ff5f2afd5c187fb50ac3bbc1e7114baadc180d67cef63f644af9031be5049') {
               throw 'Pinned Windows agent-browser native SHA-256 mismatch'
@@ -231,7 +235,7 @@ jobs:
           $nodeSha = (Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($nodeSha -cne $official) { throw 'Pinned Agent Node binary changed' }
           $out = Join-Path $env:RUNNER_TEMP 'rca-browser-optional-bundle'
-          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out --browser-bin $native
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out --browser-bin $native --browser-license $upstreamLicense
           if ($LASTEXITCODE -ne 0) { throw 'Optional native browser candidate refused' }
           $stage = Join-Path $out 'remote-control-agent-v0.0.0-ci-windows-x64'
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage

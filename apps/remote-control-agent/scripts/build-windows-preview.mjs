@@ -20,6 +20,7 @@ const ts = require("typescript");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXPECTED_NODE_VERSION = "v24.21.0";
 const PINNED_BROWSER_NATIVE_SHA256 = "af1ff5f2afd5c187fb50ac3bbc1e7114baadc180d67cef63f644af9031be5049";
+const PINNED_BROWSER_LICENSE_SHA256 = "014bb31e83d5c2e76aea1cc6e82217346ab41362f32cb355ad0f5c10aa0aeaff";
 const EXPECTED_NODE_SHA256 =
   "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32";
 
@@ -27,16 +28,19 @@ export function parseWindowsPreviewBuildArgs(argv) {
   const keys = new Map([
     ["--version", "version"], ["--node-bin", "nodeBin"], ["--node-sha256", "nodeSha256"],
     ["--out", "out"], ["--background-bin", "backgroundBin"],
-    ["--browser-bin", "browserBin"],
+    ["--browser-bin", "browserBin"], ["--browser-license", "browserLicense"],
   ]);
   const out = {};
-  if (argv.length !== 10 && argv.length !== 12) throw Error("Windows candidate requires exactly five or six reviewed arguments.");
+  if (argv.length !== 10 && argv.length !== 14) throw Error("Windows candidate requires exactly five or seven reviewed arguments.");
   for (let i = 0; i < argv.length; i += 2) {
     const key = keys.get(argv[i]);
     if (!key || out[key] !== undefined || !argv[i + 1]) throw Error("Unsafe packaging arguments.");
     out[key] = argv[i + 1];
   }
-  if (out.browserBin !== undefined && !path.isAbsolute(out.browserBin)) throw Error("Browser native executable must be an absolute build input.");
+  if ((out.browserBin !== undefined) !== (out.browserLicense !== undefined) ||
+      (out.browserBin !== undefined && (!path.isAbsolute(out.browserBin) || !path.isAbsolute(out.browserLicense)))) {
+    throw Error("Browser executable and license require absolute pinned build inputs.");
+  }
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(out.version) ||
       !/^[a-f0-9]{64}$/.test(out.nodeSha256) ||
       out.nodeSha256 !== EXPECTED_NODE_SHA256 ||
@@ -68,11 +72,17 @@ export function buildWindowsPreview(args) {
   // Optional, independently pinned native browser candidate. No npm, Rust,
   // network lookup, postinstall hook or auto-update inside the installed Agent.
   let browserNative;
+  let browserLicense;
   if (args.browserBin !== undefined) {
     if (!statSync(args.browserBin).isFile() ||
         digest(readFileSync(args.browserBin)) !== PINNED_BROWSER_NATIVE_SHA256) {
       throw Error("Unreviewed agent-browser Windows native executable.");
     }
+    if (!statSync(args.browserLicense).isFile() ||
+        digest(readFileSync(args.browserLicense)) !== PINNED_BROWSER_LICENSE_SHA256) {
+      throw Error("Missing or modified upstream Apache-2.0 browser license.");
+    }
+    browserLicense = readFileSync(args.browserLicense);
     browserNative = readFileSync(args.browserBin);
     if (browserNative.toString("ascii", 0, 2) !== "MZ")
       throw Error("Invalid native Windows browser header.");
@@ -97,9 +107,12 @@ export function buildWindowsPreview(args) {
   if (browserNative) {
     const browserEntry = path.join(stage, "bin/agent-browser.exe");
     writeFileSync(browserEntry, browserNative, { mode: 0o600 });
+    mkdirSync(path.join(stage, "licenses"), { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(stage, "licenses/agent-browser.LICENSE"), browserLicense, { mode: 0o600 });
   }
   const hashes = {
-    ...(browserNative ? { "bin/agent-browser.exe": PINNED_BROWSER_NATIVE_SHA256 } : {}),
+    ...(browserNative ? { "bin/agent-browser.exe": PINNED_BROWSER_NATIVE_SHA256,
+      "licenses/agent-browser.LICENSE": PINNED_BROWSER_LICENSE_SHA256 } : {}),
     "bin/node.exe": EXPECTED_NODE_SHA256,
     "bin/rca-background.exe": digest(launcher),
   };
@@ -138,7 +151,7 @@ export function buildWindowsPreview(args) {
     node: EXPECTED_NODE_VERSION, device_protocol: 2, artifact_schema: 1,
     upgrade_profile: "paired-full-v1", preview: true, modules, hashes,
     ...(browserNative ? { browser_native: { name: "agent-browser", version: "0.39.1",
-      sha256: PINNED_BROWSER_NATIVE_SHA256 } } : {}),
+      sha256: PINNED_BROWSER_NATIVE_SHA256, license: "Apache-2.0" } } : {}),
   }, null, 2) + "\n", { mode: 0o600 });
   return {
     stage, target: "windows-x64", modules: modules.length,
