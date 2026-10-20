@@ -136,7 +136,7 @@ jobs:
         shell: pwsh
         run: |
           Set-Location apps/remote-control-agent
-          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+          node --experimental-strip-types --test tests/browser-offline.test.ts tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
       - name: User task negative checks (never create a task)
         shell: pwsh
         run: |
