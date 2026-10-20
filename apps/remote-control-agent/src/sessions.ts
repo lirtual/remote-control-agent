@@ -122,7 +122,8 @@ class SessionSupervisorControl {
  */
 class WindowsSessionControl implements SessionProcessControl {
   readonly ready = Promise.resolve(true);
-  constructor(private readonly child: ChildProcess) {}
+  private readonly child: ChildProcess;
+  constructor(child: ChildProcess) { this.child = child; }
 
   async signal(_signal: "SIGTERM" | "SIGKILL"): Promise<boolean> {
     const pid = this.child.pid;
