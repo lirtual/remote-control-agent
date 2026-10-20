@@ -9,6 +9,7 @@ import { gzipSync } from "node:zlib";
 import test from "node:test";
 import { parseArgs, runtimeSources, ensureNativeTarget, requiredGlibcVersion,stagePinnedPlaywrightLibrary } from "../scripts/build-v2-release.mjs";
 import { resolvePinnedRelease, downloadPinnedAsset, inspectTarGzip, extractVerifiedAsset, releaseAssetName, PINNED_PLAYWRIGHT_FILES, PINNED_PLAYWRIGHT_VERSION } from "../scripts/verify-v2-release.mjs";
+import { PINNED_WINDOWS_PLAYWRIGHT_FILES, PINNED_WINDOWS_PLAYWRIGHT_VERSION } from "../scripts/verify-windows-preview.mjs";
 
 const tag="v0.1.0",target="linux-x64-glibc",commit="1".repeat(40);
 const sha=b=>createHash("sha256").update(b).digest("hex");
@@ -251,4 +252,10 @@ test("#P3 offline vendor stage verifies exact upstream hashes without copying ex
       '{"name":"playwright-core","version":"1.63.0"}');
     assert.throws(()=>stagePinnedPlaywrightLibrary(tamperedSource,rejectedStage),/Unverified/);
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+
+test("#P3 Windows and Linux independently pinned Playwright files never drift",()=>{
+  assert.equal(PINNED_WINDOWS_PLAYWRIGHT_VERSION,PINNED_PLAYWRIGHT_VERSION);
+  assert.deepEqual(PINNED_WINDOWS_PLAYWRIGHT_FILES,PINNED_PLAYWRIGHT_FILES);
 });

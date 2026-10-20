@@ -198,6 +198,33 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
+      - name: Native Windows pinned Playwright candidate and real Chrome validation (offline archive)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Same Node and background EXE as the existing reviewed Windows preview.
+          $official = 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32'
+          $nodeBinary = (Get-Command node.exe).Source
+          if ((Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant() -ne $official) {
+            throw 'Untrusted Windows Node for Playwright candidate'
+          }
+          $core = & node -e "console.log(require('node:fs').realpathSync('apps/remote-control-agent/node_modules/playwright-core'))"
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Playwright source unavailable' }
+          $out = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-core'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.1-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out --browser-core-dir $core
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows candidate failed to build' }
+          $staged = Join-Path $out 'remote-control-agent-v0.0.1-ci-windows-x64'
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $staged
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows candidate stage verification failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
+          Compress-Archive -Path (Join-Path $staged '*') -DestinationPath $archive -CompressionLevel Optimal
+          $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-extracted'
+          Expand-Archive -LiteralPath $archive -DestinationPath $extracted -ErrorAction Stop
+          & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle.test.mjs $extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Installed Chrome and tamper checks failed for pinned Playwright candidate' }
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }
+
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
         run: |
@@ -238,13 +265,12 @@ jobs:
             $basePrograms = Join-Path $root 'programs'
             $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
             $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
-            $sourceStage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle\remote-control-agent-v0.0.0-ci-windows-x64'
-            $manifestPath = Join-Path $sourceStage 'bundle.json'
-            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-            $manifest.version = $newVersion
-            [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8))
+            # New version is the separately built, checksum-verified
+            # nine-file Playwright candidate from the preceding native CI step.
             $secondZip = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
-            Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $secondZip -CompressionLevel Optimal
+            if (-not (Test-Path -LiteralPath $secondZip)) {
+              throw 'Pinned browser upgrade candidate ZIP unavailable'
+            }
             $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
             & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-windows.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
             if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
@@ -277,6 +303,8 @@ jobs:
               & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Switch -Version $newVersion -Direction Upgrade
               throw 'Verified Windows version upgrade failed'
             }
+            & (Join-Path $newDir 'bin/node.exe') (Join-Path $newDir 'apps/remote-control-agent/scripts/verify-windows-preview.mjs') $newDir
+            if ($LASTEXITCODE -ne 0) { throw 'Installed upgraded Playwright candidate hashes failed' }
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
                 (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
