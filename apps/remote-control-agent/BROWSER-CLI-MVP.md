@@ -36,3 +36,16 @@ pnpm --filter remote-control-agent test
 ```
 
 The isolated mock runner tests cover explicit profile and session argument shape, stale IDs, bad URL refusal, output caps, uncertain-effect non-replay, recoverable failed startup, concurrency, and absence of generic command/effect tools. These tests are **not** a substitute for future real packaged browser and MCP end-to-end tests.
+
+## Live Windows adapter smoke (2026-10-20)
+
+Through the existing authorized Remote Control Shell on paired native Windows device `71b4b4d8-6496-4898-9b80-1ea3a03f6ccd`, staged this exact Draft source and `agent-browser@0.39.1` inside a disposable user Temp tree. Used the installed Node v24 and Chrome executable, *with a separate temporary automation Profile*; did not attach a personal profile or install a production Agent dependency.
+
+- `BrowserCliAdapter.start()` — **PASS**.
+- `navigate()` to `https://demo.playwright.dev/todomvc/` — **PASS**.
+- `snapshot()` — **PASS**, 175 characters, expected TodoMVC textbox present, no truncation.
+- `close()` — **PASS**.
+- Tagged Chrome process count two seconds after close — **0**.
+- Removed the exact disposable source, CLI package and Profile tree; subsequent check `TEMP_REMAINS=False`, `TAGGED_PROCESS_COUNT=0`.
+
+This is a **real direct Windows adapter-level smoke**, not ChatGPT→MCP→Worker→Agent browser-tool acceptance. No browser tool was registered or deployed. The existing browser-wide hostile-egress and verified one-use consequential-action consent gates remain untested/unpassed.
