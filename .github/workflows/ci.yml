@@ -48,6 +48,9 @@ jobs:
           # CI runner. No system-browser replacement or Agent release change.
           node apps/remote-control-agent/node_modules/playwright-core/cli.js install --only-shell chromium
           node --experimental-strip-types --test apps/remote-control-agent/tests/browser-playwright.test.ts apps/remote-control-agent/tests/browser-network.test.ts
+          # A negative result is a documented platform constraint, never an
+          # implicit request to enable sudo/AppArmor/sysctls on the runner.
+          node apps/remote-control-agent/scripts/probe-linux-network-namespace.mjs
       - name: Build and unpack unpublished native candidate (no Release publishing)
         shell: bash
         run: |
