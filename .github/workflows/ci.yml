@@ -188,3 +188,40 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
+      - name: Register and remove user-logon task with synthetic identity (no cloud calls)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Synthetic task acceptance requires isolated CI' }
+          $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
+          $key = Join-Path $root 'v2-identity.pem'
+          $device = $key + '.device-id'
+          $program = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control\programs\v0.0.0-ci-windows-x64\rca.cmd'
+          $acl = 'apps/remote-control-agent/scripts/windows-private-store.ps1'
+          if (Test-Path -LiteralPath $key) { throw 'Refusing to replace an existing key' }
+          if (Test-Path -LiteralPath $device) { throw 'Refusing to replace an existing ID' }
+          $created = $false
+          try {
+            [IO.File]::WriteAllText($key,'TEST_ONLY_NON_PRIVATE_KEY')
+            [IO.File]::WriteAllText($device,("00000000-0000-4000-8000-000000000001" + [char]10))
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic key ACL seal failed' }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem.device-id'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic ID ACL seal failed' }
+            & $program enable --endpoint 'https://rca.example.test/'
+            if ($LASTEXITCODE -ne 0) { throw 'Task registration failed' }
+            $created = $true
+            $status = & $program task-status | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $status.installed -ne $true) { throw 'Task not registered' }
+            & $program disable
+            if ($LASTEXITCODE -ne 0) { throw 'Task removal failed' }
+            $created = $false
+            $status = & $program task-status | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $status.installed -ne $false) { throw 'Task remained after removal' }
+          } finally {
+            if ($created) { & $program disable }
+            Remove-Item -LiteralPath $device -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+          }
+
+
