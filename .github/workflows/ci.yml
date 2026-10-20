@@ -144,8 +144,10 @@ jobs:
           $script = 'apps/remote-control-agent/scripts/windows-user-task.ps1'
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Status
           if ($LASTEXITCODE -ne 0) { throw 'Task status failed' }
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Enable -Endpoint 'https://rca.example.test/' -Node $env:SystemRoot\System32\not-node.exe -Entry 'C:\Temp\windows-v2.js' 2>$null
-          if ($LASTEXITCODE -eq 0) { throw 'Untrusted native task path was accepted' }
+          # A deliberate native-process error is an expected negative result.
+          # Start-Process avoids treating stderr as a pwsh terminating error.
+          $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'-Action','Enable','-Endpoint','https://rca.example.test/','-Node','C:\Windows\System32\not-node.exe','-Entry','C:\Temp\windows-v2.js') -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-task-rejection.txt')
+          if ($p.ExitCode -eq 0) { throw 'Untrusted native task path was accepted' }
       - name: Stage native Windows x64 offline candidate (no publishing)
         shell: pwsh
         run: |
