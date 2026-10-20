@@ -221,6 +221,53 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Registered task metadata failed direct validation' }
             $status = & $program task-status | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $status.installed -ne $true) { throw 'Task not registered' }
+            # Both versioned bundles are installed/hashed and the synthetic
+            # identity never leaves local Windows CI. No Worker access.
+            $oldVersion = 'v0.0.0-ci'
+            $newVersion = 'v0.0.1-ci'
+            $basePrograms = Join-Path $root 'programs'
+            $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
+            $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
+            Copy-Item -LiteralPath $oldDir -Destination $newDir -Recurse -ErrorAction Stop
+            $manifestPath = Join-Path $newDir 'bundle.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $manifest.version = $newVersion
+            [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8))
+            $newCli = Join-Path $newDir 'rca.cmd'
+            $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
+            $origKey = (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash
+            # Forced post-switch failure must restore original task's action.
+            $badSwitch = Start-Process -FilePath powershell.exe -ArgumentList @(
+              '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+              'apps/remote-control-agent/scripts/windows-user-task.ps1',
+              '-Action','Switch','-Version',$newVersion,
+              '-Direction','Upgrade','-CIInjectFailure'
+            ) -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt')
+            if ($badSwitch.ExitCode -eq 0) { throw 'Injected task switch unexpectedly succeeded' }
+            $taskName = 'RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_')
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $oldDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Failed switch did not restore old executable'
+            }
+            & $newCli upgrade --version $newVersion
+            if ($LASTEXITCODE -ne 0) { throw 'Verified Windows version upgrade failed' }
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $newDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Windows task did not switch to new executable'
+            }
+            & $newCli rollback --version $oldVersion
+            if ($LASTEXITCODE -ne 0) { throw 'Verified Windows version rollback failed' }
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $oldDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Windows task did not restore old executable'
+            }
+            if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
+                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
+              throw 'Windows upgrade or rollback changed protected identity'
+            }
             & $program disable
             if ($LASTEXITCODE -ne 0) { throw 'Task removal failed' }
             $created = $false
@@ -239,6 +286,8 @@ jobs:
           $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
           $sentinel = Join-Path $root 'agent-events.ndjson'
           [IO.File]::WriteAllText($sentinel, '{"utc":"2026-01-01T00:00:00.000Z","event":"stopping"}' + [char]10)
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.1-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstall of inactive upgrade version failed' }
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Safe Windows runtime uninstall failed' }
           $old = Join-Path $root 'programs\v0.0.0-ci-windows-x64'
