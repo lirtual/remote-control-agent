@@ -11,7 +11,6 @@ import { SearchSessions } from "./search.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
 import { parseBrowserArguments } from "./browser-operations.ts";
-import type { BrowserCliAdapter } from "./browser-cli.ts";
 
 /** One bounded Session read adapter, shared by the Agent and MCP/WSS tests. */
 export async function executeV2SessionRead(
@@ -343,8 +342,6 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
-    /** Test/staging injection only. No browser runtime is enabled by default. */
-    browser?: BrowserCliAdapter;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -359,7 +356,7 @@ export async function maintainAuthenticatedDeviceSession(
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
   const full = options.capability !== "read-only";
-  const execution = full ? createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory, browser: options.browser }) : undefined;
+  const execution = full ? createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory }) : undefined;
   let failures = 0;
   try {
   while (!signal.aborted) {
