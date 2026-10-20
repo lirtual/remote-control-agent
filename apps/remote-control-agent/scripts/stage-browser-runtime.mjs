@@ -38,15 +38,14 @@ function walkSafeFiles(rootDir) {
 }
 
 export function stageBrowserRuntime(stage, browserCache, platform = process.platform) {
-  if (!["win32", "linux"].includes(platform) || !path.isAbsolute(stage) ||
+  if (platform !== "win32" || !path.isAbsolute(stage) ||
       !path.isAbsolute(browserCache) || !existsSync(path.join(stage, "bundle.json"))) {
     throw Error("An existing absolute native Agent stage and browser cache are required.");
   }
   const bundlePath = path.join(stage, "bundle.json");
   const manifest = JSON.parse(readFileSync(bundlePath, "utf8"));
   if (manifest.browser_runtime || manifest.name !== "remote-control-agent" ||
-      (platform === "win32" && manifest.target !== "windows-x64") ||
-      (platform === "linux" && !/^linux-(?:x64|arm64)-glibc$/.test(manifest.target)) ||
+      manifest.target !== "windows-x64" ||
       manifest.upgrade_profile !== "paired-full-v1" ||
       !manifest.hashes || typeof manifest.hashes !== "object") {
     throw Error("Unexpected browser candidate manifest.");
