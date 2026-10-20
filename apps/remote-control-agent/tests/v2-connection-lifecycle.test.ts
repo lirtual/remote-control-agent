@@ -77,6 +77,43 @@ test("policy closure and unexpected server messages stop the monitor without rep
   assert.equal(await normalClose, "offline");
 });
 
+test("a device-local invalid read returns failed and does not revoke the signed socket", async () => {
+  const socket = new FakeSocket();
+  const stopped = new AbortController();
+  let invocations = 0;
+  const monitored = monitorDeviceSocket(socket as unknown as WebSocket, stopped.signal,
+    { intervalMs: 60_000, timeoutMs: 10_000 },
+    async (_tool, _args) => { invocations++; return "READ_OK"; });
+  const malformedId = randomUUID();
+  // POSIX has no drive path; native Windows likewise refuses POSIX '/'.
+  // The correct response on either OS is a failed read, not disconnection.
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: malformedId, tool: "read_file",
+    arguments: { path: "https://untrusted.example/secret" },
+  }) });
+  assert.deepEqual(JSON.parse(socket.sent[0]!), {
+    kind: "read_result", request_id: malformedId, status: "failed",
+  });
+  assert.equal(socket.closeCount, 0);
+  assert.equal(invocations, 0);
+  // An ordinary read on the SAME signed connection must still be dispatched.
+  const validId = randomUUID();
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: validId, tool: "read_file",
+    arguments: { path: "/tmp/safe" },
+  }) });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(socket.sent[1]!), {
+    kind: "read_result", request_id: validId, status: "completed", text: "READ_OK",
+  });
+  assert.equal(invocations, 1);
+  assert.equal(socket.closeCount, 0);
+  // An unrecognized command remains a permanent policy violation.
+  socket.event("message", { data: JSON.stringify({ kind: "unknown", request_id: randomUUID() }) });
+  assert.equal(await monitored, "policy");
+  assert.equal(socket.closeCount, 1);
+});
+
 test("reconnect obtains a fresh challenge and stops on abort without executing commands", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "rc-v2-reconnect-"));
   const keyPath = path.join(dir, "device.pem");
