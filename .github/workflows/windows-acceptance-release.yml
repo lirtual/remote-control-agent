@@ -1,0 +1,135 @@
+name: Approved Windows-only acceptance prerelease
+on:
+  push:
+    branches: [feat/windows-native-preview]
+    paths: [.github/windows-acceptance-release-request.txt]
+permissions:
+  contents: read
+concurrency:
+  group: remote-agent-native-win-rc1
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: v0.1.10-windows-rc.1
+  ASSET: remote-control-agent-v0.1.10-windows-rc.1-windows-x64.zip
+  NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
+jobs:
+  windows-verified-bundle:
+    name: Build and verify pinned Windows RC
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Confirm one-time approved release marker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (Get-Content '.github/windows-acceptance-release-request.txt' -Raw).Trim()
+          if ($actual -cne 'Authorize one Windows-only acceptance pre-release: v0.1.10-windows-rc.1') { throw 'Unapproved release request' }
+          if ($env:GITHUB_REF -cne 'refs/heads/feat/windows-native-preview') { throw 'Wrong branch' }
+      - name: Install locked dependencies without scripts
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Windows typecheck
+        run: corepack pnpm --filter remote-control-agent typecheck
+      - name: Windows path, identity ACL and CLI checks
+        shell: pwsh
+        run: |
+          Set-Location apps/remote-control-agent
+          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows test failed' }
+      - name: Build and verify exact ZIP with shipping installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $node = (Get-Command node.exe).Source
+          if ((Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:NODE_SHA256) { throw 'Node checksum mismatch' }
+          $dir = Join-Path $env:RUNNER_TEMP 'windows-rc-stage'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $env:RELEASE_TAG --node-bin $node --node-sha256 $env:NODE_SHA256 --out $dir
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle build refused' }
+          $stage = Join-Path $dir ('remote-control-agent-' + $env:RELEASE_TAG + '-windows-x64')
+          $verifier = Join-Path $stage 'apps\remote-control-agent\scripts\verify-windows-preview.mjs'
+          $bundleNode = Join-Path $stage 'bin\node.exe'
+          & $bundleNode $verifier $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle inventory refused' }
+          $dist = Join-Path $PWD 'release-candidate-windows'
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          $zip = Join-Path $dist $env:ASSET
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+          $expanded = Join-Path $env:RUNNER_TEMP 'windows-rc-unpacked'
+          Expand-Archive -LiteralPath $zip -DestinationPath $expanded
+          & $bundleNode $verifier $expanded
+          if ($LASTEXITCODE -ne 0) { throw 'Expanded ZIP file inventory refused' }
+          & (Join-Path $expanded 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Portable CLI refused' }
+          $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-windows.ps1 -Version $env:RELEASE_TAG -OfflineArchive $zip -ExpectedSha256 $digest
+          if ($LASTEXITCODE -ne 0) { throw 'Shipping installer rejected ZIP' }
+          $installed = Join-Path $env:LOCALAPPDATA ('mcp-workers\remote-control\programs\' + $env:RELEASE_TAG + '-windows-x64')
+          & (Join-Path $installed 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Installed CLI refused' }
+          [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'), ($digest + '  ' + $env:ASSET + [Environment]::NewLine))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-windows-rc
+          path: release-candidate-windows/
+          if-no-files-found: error
+          retention-days: 5
+          compression-level: 0
+  publish-immutable-rc:
+    name: Publish immutable Windows-only Release (not main)
+    needs: windows-verified-bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-windows-rc
+          path: dist
+      - name: Validate accepted ZIP and refuse existing immutable tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/feat/windows-native-preview
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
+          (cd dist && sha256sum -c SHA256SUMS.txt)
+          test -s "dist/$ASSET"
+          if gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Existing release tag must never be overwritten' >&2
+            exit 1
+          fi
+      - name: Upload complete draft then publish immutable prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat > notes.txt <<'NOTES'
+          Windows x64 acceptance-only prerelease from Draft PR #7 / Issue #5.
+          Bundled official Node v24.21.0; normal Windows user only.
+          No Shell or file mutation permissions. Explicit owner pairing required.
+          No main merge or production Worker/Cloudflare changes.
+          NOTES
+          gh release create "$RELEASE_TAG" "dist/$ASSET" dist/SHA256SUMS.txt --draft --prerelease --target "$GITHUB_SHA" --title "Native Windows acceptance $RELEASE_TAG" --notes-file notes.txt
+          gh release edit "$RELEASE_TAG" --draft=false
+      - name: Confirm Release immutability, asset digests and source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > metadata.json
+          jq -e --arg tag "$RELEASE_TAG" --arg asset "$ASSET" '.tag_name == $tag and .draft == false and .prerelease == true and .immutable == true and ((.assets | map(.name)) | sort) == ([$asset, "SHA256SUMS.txt"] | sort) and ([.assets[] | select(.name == $asset) | .digest][0] | test("^sha256:[a-f0-9]{64}$"))' metadata.json
+          actual=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          test "$actual" = "$GITHUB_SHA"
+          echo "Published immutable Windows acceptance: $RELEASE_TAG"
