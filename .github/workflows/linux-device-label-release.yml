@@ -1,0 +1,207 @@
+name: Approved Linux device-label prerelease
+
+# One reviewed main-branch approval marker triggers a fresh, native dual-arch
+# build. Existing v0.1.9 publisher/pins are untouched.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/linux-release-approval/v0.1.10.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-agent-linux-v0.1.10
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: v0.1.10
+  SOURCE_SHA: 8b78294a2fbff18a53d6e3ce0a13e6992ea63478
+  APPROVAL_FILE: .github/linux-release-approval/v0.1.10.txt
+
+jobs:
+  native-candidate:
+    name: Verify Linux Agent / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: linux-x64-glibc
+            node_arch: x64
+            node_archive_sha256: fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+          - os: ubuntu-24.04-arm
+            target: linux-arm64-glibc
+            node_arch: arm64
+            node_archive_sha256: 6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact approval marker and check out pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.10 from $SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+          git checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Typecheck, native supervisor and all Agent tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack pnpm install --frozen-lockfile --ignore-scripts
+          corepack pnpm --filter remote-control-agent typecheck
+          corepack pnpm --filter remote-control-agent test
+      - name: Assemble pinned native archive and verify isolated bootstrap
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          NODE_ARCH: ${{ matrix.node_arch }}
+          NODE_ARCHIVE_SHA256: ${{ matrix.node_archive_sha256 }}
+        run: |
+          set -euo pipefail
+          temp="$(mktemp -d)"
+          trap 'rm -rf "$temp"' EXIT
+          test -x apps/remote-control-agent/.build/session-supervisor
+          archive="$temp/node-v24.21.0-linux-$NODE_ARCH.tar.xz"
+          curl --fail --silent --show-error --location --max-time 60 \
+            --proto '=https' --tlsv1.2 \
+            "https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-$NODE_ARCH.tar.xz" -o "$archive"
+          echo "$NODE_ARCHIVE_SHA256  $archive" | sha256sum -c --status
+          node_bin="$temp/node"
+          tar -xJOf "$archive" "node-v24.21.0-linux-$NODE_ARCH/bin/node" > "$node_bin"
+          chmod 700 "$node_bin"
+          test "$("$node_bin" --version)" = v24.21.0
+          native="$(realpath apps/remote-control-agent/.build/session-supervisor)"
+          node apps/remote-control-agent/scripts/build-v2-release.mjs \
+            --version "$RELEASE_TAG" --target "$TARGET" \
+            --node-bin "$node_bin" --node-sha256 "$(sha256sum "$node_bin" | cut -d' ' -f1)" \
+            --native "$native" --native-sha256 "$(sha256sum "$native" | cut -d' ' -f1)" \
+            --out "$temp/build"
+          name="remote-control-agent-$RELEASE_TAG-$TARGET.tar.gz"
+          candidate="$temp/build/$name"
+          python3 -B apps/remote-control-agent/scripts/validate-local-archive.py \
+            "$candidate" "$RELEASE_TAG" "$TARGET"
+          mkdir -p "$temp/bootstrap"
+          cp apps/remote-control-agent/scripts/bootstrap-v2.py \
+             apps/remote-control-agent/scripts/validate-local-archive.py "$temp/bootstrap/"
+          chmod 755 "$temp/bootstrap"
+          chmod 644 "$temp/bootstrap/"*.py "$candidate"
+          docker pull --quiet python:3.12-slim-bookworm >/dev/null
+          docker run --rm --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --user 65534:65534 --tmpfs /tmp:rw,exec,mode=1777 \
+            -v "$candidate:/opt/agent.tar.gz:ro" \
+            -v "$temp/bootstrap:/opt/bootstrap:ro" \
+            python:3.12-slim-bookworm sh -ec \
+            'for tool in node git cc; do
+               if command -v "$tool" >/dev/null; then exit 11; fi
+             done
+             exec python3 -B /opt/bootstrap/validate-local-archive.py \
+               /opt/agent.tar.gz "$2" "$1"' shell "$TARGET" "$RELEASE_TAG"
+          mkdir -p "candidate/$TARGET"
+          cp -- "$candidate" "candidate/$TARGET/$name"
+          ( cd "candidate/$TARGET" && sha256sum "$name" > SHA256SUMS.txt && sha256sum -c SHA256SUMS.txt )
+          echo "Native candidate $TARGET verified for pinned $SOURCE_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-v0.1.10-${{ matrix.target }}
+          path: candidate/${{ matrix.target }}/
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  publish-immutable:
+    name: Publish immutable Linux Release
+    needs: native-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Confirm explicit release approval and one-time tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.10 from $SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+             test -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")"; then
+            echo "Existing tag or Release may never be overwritten" >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: candidate-v0.1.10-*
+          path: dist
+          merge-multiple: false
+      - name: Check exact dual-arch archives and their hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir publish
+          for target in linux-x64-glibc linux-arm64-glibc; do
+            dir="dist/candidate-v0.1.10-$target"
+            name="remote-control-agent-$RELEASE_TAG-$target.tar.gz"
+            test "$(find "$dir" -maxdepth 1 -type f | wc -l)" -eq 2
+            ( cd "$dir" && sha256sum --check SHA256SUMS.txt )
+            tar -xzOf "$dir/$name" bundle.json | jq -e \
+              --arg target "$target" --arg tag "$RELEASE_TAG" \
+              '.name == "remote-control-agent" and .version == $tag and
+               .target == $target and .artifact_schema == 1 and
+               .device_protocol == 2 and .receipt_schema == 1 and
+               .upgrade_profile == "paired-full-v1"' >/dev/null
+            cp -- "$dir/$name" publish/
+          done
+          ( cd publish && sha256sum ./*.tar.gz > SHA256SUMS && sha256sum --check SHA256SUMS )
+          test "$(find publish -maxdepth 1 -type f | wc -l)" -eq 3
+      - name: Create draft, verify downloaded assets, publish immutable prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > notes.txt <<'NOTES'
+          Linux x64/ARM64 immutable Agent v0.1.10 from reviewed main source.
+          First pairing prompts for an editable hostname-based device name;
+          Enter keeps the suggested hostname and --name stays noninteractive.
+          Already-approved identities are never re-paired by this release.
+          Full-tools runtime and signed device protocol are unchanged.
+          This Release does not deploy the Worker, modify /install.sh pins,
+          or upgrade any installed Linux/WSL2 device.
+          NOTES
+          gh release create "$RELEASE_TAG" \
+            publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz \
+            publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz \
+            publish/SHA256SUMS \
+            --target "$SOURCE_SHA" --title "Remote Control Agent v0.1.10 — Editable Device Label" \
+            --notes-file notes.txt --prerelease --draft
+          mkdir -p recheck
+          gh release download "$RELEASE_TAG" --dir recheck --clobber
+          test "$(find recheck -maxdepth 1 -type f | wc -l)" -eq 3
+          ( cd recheck && sha256sum --check SHA256SUMS )
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
+            jq -e --arg tag "$RELEASE_TAG" \
+              '.tag_name == $tag and .draft == false and
+               .prerelease == true and .immutable == true' >/dev/null
+          gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" |
+            jq -e --arg sha "$SOURCE_SHA" \
+              '.object.type == "commit" and .object.sha == $sha' >/dev/null
+          echo "Published immutable Linux $RELEASE_TAG with both native assets."
