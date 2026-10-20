@@ -1,7 +1,12 @@
 name: Publish approved Agent Release
 
-# No push, PR, tag or CI-completion trigger. Explicit maintainer approval only.
+# Only a reviewed, committed release request or an explicit maintainer dispatch.
+# Ordinary main pushes, tags, CI completion and PRs never publish.
 on:
+  push:
+    branches: [main]
+    paths:
+      - .github/release-requests/v0.1.9.json
   workflow_dispatch:
     inputs:
       release_tag:
@@ -18,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-release-${{ inputs.release_tag }}
+  group: agent-release-v0.1.9
   cancel-in-progress: false
 
 jobs:
@@ -32,8 +37,9 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ inputs.release_tag }}
-      RELEASE_APPROVAL: ${{ inputs.approval }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.1.9' }}
+      RELEASE_APPROVAL: ${{ github.event_name == 'workflow_dispatch' && inputs.approval || 'PUBLISH-v0.1.9' }}
+      RELEASE_EVENT: ${{ github.event_name }}
     steps:
       - name: Checkout reviewed publishing manifest
         uses: actions/checkout@v4
@@ -63,6 +69,14 @@ jobs:
           sha="$(jq -r .source_sha "$pin")"
           git merge-base --is-ancestor "$sha" "$GITHUB_SHA"
           run_id="$(jq -r .candidate_run_id "$pin")"
+          if [[ "$RELEASE_EVENT" == push ]]; then
+            request=".github/release-requests/v0.1.9.json"
+            test -f "$request"
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$sha" --argjson run "$run_id" '
+              .approved == true and .tag == $tag and
+              .source_sha == $sha and .candidate_run_id == $run
+            ' "$request" >/dev/null
+          fi
           gh api "repos/$GH_REPO/actions/runs/$run_id" |
             jq -e --arg sha "$sha" '
               .event == "workflow_dispatch" and
