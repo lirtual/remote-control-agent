@@ -148,6 +148,11 @@ jobs:
           # Start-Process avoids treating stderr as a pwsh terminating error.
           $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'-Action','Enable','-Endpoint','https://rca.example.test/','-Node','C:\Windows\System32\not-node.exe','-Entry','C:\Temp\windows-v2.js') -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-task-rejection.txt')
           if ($p.ExitCode -eq 0) { throw 'Untrusted native task path was accepted' }
+      - name: Build native windowless scheduled launcher (no user install)
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/scripts/build-windows-background.ps1 -Output (Join-Path $env:RUNNER_TEMP 'rca-background.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Windowless background launcher compile failed' }
       - name: Stage native Windows x64 offline candidate (no publishing)
         shell: pwsh
         run: |
@@ -158,7 +163,7 @@ jobs:
           $digest = (Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($digest -ne $official) { throw 'Pinned Node binary SHA-256 mismatch' }
           $output = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle'
-          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --out $output
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $output
           if ($LASTEXITCODE -ne 0) { throw 'Native bundle build failed' }
           $stage = Join-Path $output 'remote-control-agent-v0.0.0-ci-windows-x64'
           & (Join-Path $stage 'bin/node.exe') --version
@@ -258,7 +263,7 @@ jobs:
             $taskName = 'RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_')
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
-                (Join-Path $oldDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Failed switch did not restore old executable'
             }
             & $newCli upgrade --version $newVersion
@@ -269,14 +274,14 @@ jobs:
             }
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
-                (Join-Path $newDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+                (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not switch to new executable'
             }
             & $newCli rollback --version $oldVersion
             if ($LASTEXITCODE -ne 0) { throw 'Verified Windows version rollback failed' }
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
-                (Join-Path $oldDir 'bin\node.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not restore old executable'
             }
             if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
