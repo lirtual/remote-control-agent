@@ -50,6 +50,13 @@ test("#77 reviewed full-tools upgrade requires authoritative in-process freeze",
     assert.equal(result.oldProgram,oldRoot);
     assert.equal(result.newProgram,newRoot);
     assert.equal(result.needsFreeze,false);
+    const foreignUnit=renderV2Service({home,repoRoot:oldRoot,node:oldRoot+"/bin/node",
+      endpoint:"https://rc.example.org/",
+      keyPath:home+"/.local/share/mcp-workers/remote-control/unexpected-identity.pem",
+      entryExt:"js"});
+    await assert.rejects(
+      assertSafePortableUpgrade(foreignUnit,home,newRoot+"/bundle.json"),/identity binding/);
+
     await assert.rejects(assertSafePortableUpgrade(unit,home,oldRoot+"/bundle.json"),/Already running/);
     await assert.rejects(assertSafePortableUpgrade(null,home,newRoot+"/bundle.json"),/owned/);
 

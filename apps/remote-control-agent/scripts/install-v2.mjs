@@ -240,6 +240,11 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
     throw new Error("Manual upgrade requires an owned v2 service.");
   }
+  // The local freeze socket must belong to THIS exact permanent identity,
+  // not merely another same-user Agent or a service with a similar label.
+  const installed = assertCanonicalV2UnitTemplate(unit, home);
+  if (installed.keyPath !== keyForInstallMode(home, "permanent"))
+    throw new Error("Upgrade service identity binding differs; refusing quiescence probe.");
   const settings = unit.split("\n");
   const working = settings.filter(line => line.startsWith("WorkingDirectory="));
   const starts = settings.filter(line => line.startsWith("ExecStart="));
