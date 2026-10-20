@@ -250,6 +250,28 @@ jobs:
             if (Test-Path -LiteralPath $extracted) { Remove-Item -LiteralPath $extracted -Recurse -Force }
             if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
           }
+      - name: Check Windows ProcessContainer enforcement tier (Draft-only, read-only)
+        if: github.event_name == 'pull_request' && github.head_ref == 'feat/browser-offline-core'
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          # Package is used only in the disposable CI Runner: no Agent bundle,
+          # product dependency, sandbox creation or device policy change.
+          $root = Join-Path $env:RUNNER_TEMP 'rc-mxc-readonly-probe'
+          try {
+            New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+            & npm install --prefix $root --no-save --ignore-scripts --no-audit --no-fund --silent '@microsoft/mxc-sdk@1.0.1'
+            if ($LASTEXITCODE -ne 0) {
+              Write-Output '::warning::Optional pinned MXC SDK install unavailable on ephemeral Runner; OS isolation NOT ACCEPTED.'
+            } else {
+              & node apps/remote-control-agent/scripts/probe-windows-mxc.mjs $root
+              if ($LASTEXITCODE -ne 0) { Write-Output '::warning::Read-only MXC probe failed; OS isolation NOT ACCEPTED.' }
+            }
+          } catch {
+            Write-Output '::warning::Read-only MXC capability probe unavailable; OS isolation NOT ACCEPTED.'
+          } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+          }
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
         run: |
