@@ -715,3 +715,68 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+
+test("Windows preview read-only capability rejects Shell and file mutations", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "rc-v2-windows-readonly-"));
+  const keyPath = path.join(dir, "device.pem");
+  const filePath = path.join(dir, "unchanged.txt");
+  const deviceId = randomUUID();
+  const controller = new AbortController();
+  const replies: Array<Record<string, unknown>> = [];
+  let socket: FakeSocket | undefined;
+  const checks = [
+    { kind: "read", tool: "read_file", arguments: { path: filePath } },
+    { kind: "operation", tool: "write_file",
+      arguments: { path: filePath, content: "MUST_NOT_CHANGE", mode: "rewrite" },
+      operation_id: "write-" + randomUUID() },
+    { kind: "operation", tool: "start_process",
+      arguments: { command: "printf MUST_NOT_RUN", timeout_ms: 2000 },
+      operation_id: "shell-" + randomUUID() },
+  ];
+  let index = 0;
+  function next(): void {
+    if (index >= checks.length) { controller.abort(); return; }
+    const check = checks[index++]!;
+    socket!.event("message", { data: JSON.stringify({
+      kind: check.kind, request_id: randomUUID(), tool: check.tool,
+      arguments: check.arguments,
+      ...("operation_id" in check ? { operation_id: check.operation_id } : {}),
+    }) });
+  }
+  try {
+    const enrollment = newEnrollment("windows-readonly-test");
+    await writeFile(keyPath, enrollment.privateKeyPem, { mode: 0o600 });
+    await writeFile(keyPath + ".device-id", deviceId + "\n", { mode: 0o600 });
+    await writeFile(filePath, "ORIGINAL");
+    await maintainAuthenticatedDeviceSession("https://agent.example/", keyPath, controller.signal, {
+      capability: "read-only",
+      send: async () => Response.json({ device_id: deviceId, nonce: "A".repeat(24) }),
+      makeSocket: () => {
+        socket = new FakeSocket();
+        socket.readyState = WebSocket.CONNECTING;
+        socket.onSend = wire => {
+          if (!wire.startsWith("{")) { if (wire === "rc-v2:ping") queueMicrotask(() => socket!.pong()); return; }
+          const reply = JSON.parse(wire) as Record<string, unknown>;
+          if (reply.kind !== "read_result" && reply.kind !== "operation_result") return;
+          replies.push(reply);
+          queueMicrotask(next);
+        };
+        queueMicrotask(() => socket!.emitOpen());
+        return socket as unknown as WebSocket;
+      },
+      onState: state => { if (state === "connected") setTimeout(next, 0); },
+    });
+    assert.equal(replies.length, 3);
+    assert.equal(replies[0]!.kind, "read_result");
+    assert.equal(replies[0]!.text, "ORIGINAL");
+    for (const reply of replies.slice(1)) {
+      assert.equal(reply.kind, "operation_result");
+      assert.equal((reply.result as { status: string }).status, "unavailable");
+    }
+    assert.equal(await readFile(filePath, "utf8"), "ORIGINAL");
+  } finally {
+    controller.abort();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
