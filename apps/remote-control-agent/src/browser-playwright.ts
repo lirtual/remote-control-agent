@@ -33,10 +33,13 @@ export function createPlaywrightOfflineDriver(
           url: () => page.url(),
           close: () => page.close(),
         })),
-        route: (glob, handler) =>
-          context.route(glob, route => handler({
+        async route(glob, handler): Promise<void> {
+          // Playwright 1.64 returns a Disposable; the offline core keeps the
+          // route installed for the entire context and closes the context.
+          await context.route(glob, route => handler({
             abort: code => route.abort(code),
-          })),
+          }));
+        },
         routeWebSocket: (glob, handler) =>
           context.routeWebSocket(glob, socket => handler({
             close: options => socket.close(options),
