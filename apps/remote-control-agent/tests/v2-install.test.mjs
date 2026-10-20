@@ -11,7 +11,7 @@ import { MARKER, UNIT, assertExistingServiceEndpoint, classifyLinuxKernel, asser
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
 import { DeviceSessionRejectedError, recoverDeviceId, verifyApprovedDeviceId, signedSessionProof } from "../src/v2-session-client.ts";
-import { newEnrollment } from "../src/v2-enrollment.ts";
+import { newEnrollment, selectDeviceLabel } from "../src/v2-enrollment.ts";
 
 const example = {
   node: "/opt/node24/bin/node",
@@ -51,6 +51,17 @@ test("#97 one-code Agent fails closed on denied or expired owner approval",async
   await assert.rejects(awaitOwnerMcpApproval("https://rc.example.org/","/tmp/device",{
     claim:async()=>{throw new Error("upstream unavailable");},
   }),/upstream unavailable/);
+});
+
+test("editable device label defaults to hostname without altering identity rules", () => {
+  assert.equal(selectDeviceLabel("", "RAY-WORKSPACE"), "RAY-WORKSPACE");
+  assert.equal(selectDeviceLabel("   ", "RAY-WORKSPACE"), "RAY-WORKSPACE");
+  assert.equal(selectDeviceLabel("  WSL-Ubuntu  ", "RAY-WORKSPACE"), "WSL-Ubuntu");
+  assert.equal(selectDeviceLabel("Windows-PC", "RAY-WORKSPACE"), "Windows-PC");
+  for (const candidate of ["a".repeat(65), "\\nunsafe", "\\u0000bad"]) {
+    assert.throws(() => selectDeviceLabel(candidate, "host"), /Invalid device label/);
+  }
+  assert.throws(() => selectDeviceLabel("", ""), /Invalid device label/);
 });
 
 test("minimal Linux v2 CLI supports install, explicit paired-key resume, upgrade, and safe uninstall", () => {
