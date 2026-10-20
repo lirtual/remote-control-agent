@@ -5,6 +5,7 @@
  * Hibernation heartbeat responses do not wake the DO.
  */
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
+import { collectDeviceInfo } from "./device-info.ts";
 import { executeReadTool } from "./read-execution.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
 import { SearchSessions } from "./search.ts";
@@ -357,6 +358,8 @@ export async function maintainAuthenticatedDeviceSession(
         baseAddress, keyPath, options.send, options.makeSocket, signal,
       );
       if (signal.aborted) { connection.socket.close(); break; }
+      // Send one bounded report only after the signed session has opened.
+      connection.socket.send(JSON.stringify(collectDeviceInfo(options.capability ?? "full")));
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
