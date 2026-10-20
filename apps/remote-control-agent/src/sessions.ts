@@ -302,7 +302,8 @@ export class ManagedSessions {
     // Native Windows has no Linux supervisor handshake: allow the first
     // event loop turn to reveal immediate spawn errors before admitting work.
     if (process.platform === "win32") await new Promise<void>(resolve => setImmediate(resolve));
-    if (!ready || session.state !== "running") {
+    // A command that already exited successfully is a valid managed session.
+    if (!ready || session.state === "failed") {
       await control.signal("SIGTERM");
       await new Promise((resolve) => setTimeout(resolve, 500));
       await control.signal("SIGKILL");
