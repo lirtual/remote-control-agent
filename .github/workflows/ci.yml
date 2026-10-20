@@ -211,6 +211,10 @@ jobs:
             & $program enable --endpoint 'https://rca.example.test/'
             if ($LASTEXITCODE -ne 0) { throw 'Task registration failed' }
             $created = $true
+            # CI-only task fixture: expose safe structural validation errors
+            # while the end-user CLI continues redacting local OS details.
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Status
+            if ($LASTEXITCODE -ne 0) { throw 'Raw native Task Scheduler validation failed' }
             $status = & $program task-status | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $status.installed -ne $true) { throw 'Task not registered' }
             & $program disable
