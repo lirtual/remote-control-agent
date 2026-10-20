@@ -1,1 +1,1 @@
-Authorize one Windows-only acceptance pre-release: v0.1.11-windows-rc.1
+Authorize one Windows-only acceptance pre-release: v0.1.11-windows-rc.2
