@@ -95,3 +95,82 @@ test("real offline BrowserCore prevents request delivery to an otherwise reachab
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+/**
+ * Deliberately unsafe proof of failure, NOT a production guard.
+ *
+ * Playwright documents that route.continue() does NOT invoke the handler
+ * again for redirects. This test proves the security consequence with
+ * two different ephemeral 127.0.0.1 ports. If a route handler only
+ * authorizes the first URL, a redirect can hit a sensitive second origin.
+ */
+test("real HTTP route allowed-initial URL can redirect to an otherwise denied fixture", {
+  skip: process.env.RCA_REAL_PLAYWRIGHT_SMOKE !== "1",
+  timeout: 60_000,
+}, async () => {
+  let targetHits = 0;
+  let allowedHits = 0;
+  const routed: string[] = [];
+  const target = createServer((_req, res) => {
+    targetHits++;
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<html><body>SYNTHETIC_SENSITIVE_ENDPOINT_REACHED</body></html>");
+  });
+  const entry = createServer((_req, res) => {
+    allowedHits++;
+    const sensitiveAddr = target.address();
+    if (!sensitiveAddr || typeof sensitiveAddr === "string") throw Error("Sensitive target not bound.");
+    res.writeHead(302, { location: "http://127.0.0.1:" + sensitiveAddr.port + "/private" });
+    res.end();
+  });
+  const profile = await mkdtemp(path.join(os.tmpdir(), "rc-route-redirect-baseline-"));
+  let browser: BrowserContext | undefined;
+  const listen = async (server: ReturnType<typeof createServer>) => {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+  };
+  const close = async (server: ReturnType<typeof createServer>) => {
+    if (!server.listening) return;
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  };
+  try {
+    await listen(target);
+    await listen(entry);
+    const entryAddr = entry.address();
+    const targetAddr = target.address();
+    if (!entryAddr || typeof entryAddr === "string" || !targetAddr || typeof targetAddr === "string")
+      throw Error("Ephemeral fixture unavailable.");
+    const allowedBase = "http://127.0.0.1:" + entryAddr.port + "/";
+    const deniedBase = "http://127.0.0.1:" + targetAddr.port + "/";
+
+    browser = await chromium.launchPersistentContext(profile, {
+      headless: true, serviceWorkers: "block", javaScriptEnabled: false,
+    });
+    // The first URL is deliberately allowed: unlike the offline-only
+    // BrowserCore, this is an intentionally inadequate URL-based allowlist.
+    await browser.route("**/*", async route => {
+      const url = route.request().url();
+      routed.push(url);
+      if (url.startsWith(allowedBase)) await route.continue();
+      else await route.abort("blockedbyclient");
+    });
+    const page = await browser.newPage();
+    await page.goto(allowedBase + "entry", { waitUntil: "domcontentloaded", timeout: 5_000 });
+
+    // Explicitly assert the unsafe behavior so nobody can misinterpret
+    // this test as an egress security acceptance.
+    assert.equal(allowedHits, 1, "Positive-control source request must arrive");
+    assert.equal(targetHits, 1, "Unsafe redirect must reach the would-be denied destination");
+    assert.equal(routed.some(url => url.startsWith(deniedBase)), false,
+      "Playwright did not reauthorize the redirect destination");
+    assert.match(await page.content(), /SYNTHETIC_SENSITIVE_ENDPOINT_REACHED/);
+  } finally {
+    if (browser) await browser.close();
+    await close(entry);
+    await close(target);
+    await rm(profile, { recursive: true, force: true });
+  }
+});
