@@ -80,7 +80,11 @@ async function parentProbe() {
     const address = server.address();
     if (!address || typeof address === "string") throw Error("Cannot bind local fixture");
     const port = address.port;
-    if (await dialLocal(port) !== "connected" || hits !== 1)
+    const positiveControl = await dialLocal(port);
+    // TCP connect completion and the server's connection event need not
+    // settle in the same event-loop turn.
+    await new Promise(resolve => setTimeout(resolve, 30));
+    if (positiveControl !== "connected" || hits !== 1)
       throw Error("Positive-control localhost fixture is not reachable.");
 
     // CLONE_NEWUSER + CLONE_NEWNET only: no global routing, iptables,
