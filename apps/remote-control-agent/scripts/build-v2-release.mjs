@@ -8,11 +8,12 @@
  */
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, chmodSync, lstatSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import {PINNED_PLAYWRIGHT_FILES,PINNED_PLAYWRIGHT_VERSION} from "./verify-v2-release.mjs";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,16 +24,16 @@ const source = path.join(root, "src");
 export function parseArgs(argv) {
   const params = {};
   for (let i = 0; i < argv.length; i += 2) {
-    if (!["--version", "--target", "--node-bin", "--native", "--out", "--node-sha256", "--native-sha256"].includes(argv[i]) ||
+    if (!["--version", "--target", "--node-bin", "--native", "--out", "--node-sha256", "--native-sha256","--browser-core-dir"].includes(argv[i]) ||
       !argv[i+1] || params[argv[i]]) throw new Error("Invalid packaging parameters.");
-    params[{"--node-bin":"nodeBin","--node-sha256":"nodeSha256","--native-sha256":"nativeSha256"}[argv[i]] ?? argv[i].slice(2)] = argv[i+1];
+    params[{"--node-bin":"nodeBin","--node-sha256":"nodeSha256","--native-sha256":"nativeSha256","--browser-core-dir":"browserCoreDir"}[argv[i]] ?? argv[i].slice(2)] = argv[i+1];
   }
-  if (Object.keys(params).length !== 7 ||
+  if (![7,8].includes(Object.keys(params).length) ||
       !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(params.version) ||
       !ALLOWED.has(params.target) ||
       !/^[a-f0-9]{64}$/.test(params.nodeSha256) ||
       !/^[a-f0-9]{64}$/.test(params.nativeSha256) ||
-      ![params.nodeBin, params.native, params.out].every(x => path.isAbsolute(x))) {
+      ![params.nodeBin, params.native, params.out, ...(params.browserCoreDir ? [params.browserCoreDir] : [])].every(x => path.isAbsolute(x))) {
     throw new Error("Specify pinned version, supported target, absolute Node24/native paths and output.");
   }
   return params;
@@ -121,6 +122,39 @@ export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "v2-re
   return [...visited].sort();
 }
 
+/** Offline opt-in: only the nine audited 1.64.1 files; no npm, Chromium, symlinks or downloads. */
+export function stagePinnedPlaywrightLibrary(sourceDir,work) {
+  if(!path.isAbsolute(sourceDir)||!path.isAbsolute(work)||
+     !lstatSync(sourceDir).isDirectory()||lstatSync(sourceDir).isSymbolicLink())
+    throw Error("Untrusted browser source directory.");
+  const prefix="apps/remote-control-agent/node_modules/playwright-core/";
+  for(const [dest,expected] of Object.entries(PINNED_PLAYWRIGHT_FILES)){
+    const relative=dest.slice(prefix.length);
+    if(!dest.startsWith(prefix))throw Error("Unsafe browser source path.");
+    let parent=sourceDir;
+    for(const segment of relative.split("/").slice(0,-1)){
+      parent=path.join(parent,segment);
+      const meta=lstatSync(parent);
+      if(!meta.isDirectory()||meta.isSymbolicLink())throw Error("Linked browser directory.");
+    }
+    const src=path.join(sourceDir,relative),meta=lstatSync(src);
+    if(!meta.isFile()||meta.isSymbolicLink()||meta.size>6*1024*1024||
+       createHash("sha256").update(readFileSync(src)).digest("hex")!==expected)
+      throw Error("Unverified Playwright core file: "+relative);
+  }
+  const pkg=JSON.parse(readFileSync(path.join(sourceDir,"package.json"),"utf8"));
+  if(pkg.name!=="playwright-core"||pkg.version!==PINNED_PLAYWRIGHT_VERSION)
+    throw Error("Unreviewed Playwright version.");
+  for(const relative of Object.keys(PINNED_PLAYWRIGHT_FILES)){
+    const src=path.join(sourceDir,relative.slice(prefix.length));
+    const dest=path.join(work,relative);
+    mkdirSync(path.dirname(dest),{recursive:true,mode:0o700});
+    copyFileSync(src,dest);chmodSync(dest,0o600);
+  }
+  return {name:"playwright-core",version:PINNED_PLAYWRIGHT_VERSION,
+    files:Object.keys(PINNED_PLAYWRIGHT_FILES)};
+}
+
 function tarball(dir, file) {
   const args = ["--format=ustar", "--sort=name", "--owner=0", "--group=0",
     "--numeric-owner", "--mtime=@0", "--mode=u+rwX,go-rwx", "-cf", "-",
@@ -181,11 +215,13 @@ export function build(args) {
     chmodSync(dest,name==="rca.sh" ? 0o700 : 0o600);
   }
   writeFileSync(path.join(work,"apps/remote-control-agent/package.json"),JSON.stringify({type:"module"})+"\n",{mode:0o600});
+  const browserRuntime=args.browserCoreDir ? stagePinnedPlaywrightLibrary(args.browserCoreDir,work):undefined;
   writeFileSync(path.join(work,"bundle.json"),JSON.stringify({
     name:"remote-control-agent",version:args.version,target:args.target,
     node:nodeVersion,glibc_build:libc,glibc_min:glibcMin,modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
-    upgrade_profile:"paired-full-v1"
+    upgrade_profile:"paired-full-v1",
+    ...(browserRuntime?{browser_runtime:browserRuntime}:{})
   })+"\n",{mode:0o600});
   const name="remote-control-agent-"+args.version+"-"+args.target+".tar.gz";
   tarball(work,path.join(args.out,name));

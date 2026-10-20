@@ -95,3 +95,37 @@ To avoid custom executable scans, the one source-only `PlaywrightBrowserManager`
 **Outcome:** Direct Playwright + existing Chrome is the simplest runtime on a device that already has a supported compatible Chrome. It is **not** an acceptable promise of zero-configuration browser support for Linux/WSL, macOS or systems with only Edge/other browsers. Chrome channel uses the host's installed version and may break compatibility after auto-updates; re-test before enabling. The existing signed Agent package/installer still needs a **separately reviewed dependency and manifest strategy**. Do not automatically add a second installer or download path. Consider whether a version-matched Chromium variant is truly necessary on platforms lacking a supported browser, and only then adjust the existing vetted release/install path under a distinct explicit approval gate.
 
 **Checked:** TypeScript typecheck PASS, 12 browser-focused tests PASS; Windows actual manager/channel runtime PASS and clean close. The browser remains **source-only and inactive**, Worker `BROWSER_TOOLS_ACCEPTED = false`, production Node/browser installation unchanged, and no merge, release or deployment.
+
+## P3 signed Linux library-only candidate — 9 pinned upstream files (2026-10-20)
+
+**Latest result: unpublished Linux x64 Release candidate VALIDATED for library carriage and real Chromium launch, NOT a production/browser-enabled Agent.** This refines the earlier *full npm package* (~14 MiB/115 files) and *Chromium-in-archive* (~273 MiB/289 files) estimates. The broad upstream copy is **not** the selected library-only distribution.
+
+### Reuse official prebuilt Playwright bundles without a new bundler
+
+The pinned \`playwright-core@1.64.1\` npm package already ships \`lib/coreBundle.js\` and \`lib/utilsBundle.js\`. For the verified phase-one API scope, an isolated Windows Chrome 155 PoC ran with **eight official upstream files** (package.json, browsers.json, index.js, index.mjs, LICENSE, lib/bootstrap.js, lib/coreBundle.js, lib/utilsBundle.js). The Release candidate includes a ninth, \`lib/utilsBundle.js.LICENSE\`, preserving embedded dependency notices. **Every one** has a fixed SHA-256 pinned from the verified local 1.64.1 npm package; independent supply-chain review is still required in the existing Linux verifier; no standalone esbuild/ncc tool, full npm tree, native CLI or separate installer.
+
+The **existing** Linux Release builder now accepts an explicit opt-in \`--browser-core-dir /absolute/verified/playwright-core\` and copies only those nine files. It checks source and intermediate path file *types* (rejects symlinks), exact per-file SHA-256 and package version before staging. Ordinary builds with no option retain the existing browser-free file inventory and behavior; the verifier source has changed, so byte-identical archives from old commits are **not** asserted. The existing \`verify-v2-release.mjs\` accepts those exact names **only with a complete \`bundle.json.browser_runtime\` manifest**, requires the nine files and three precise directories, and verifies fixed SHA-256 for every file *before* installation. The existing 180 MiB compressed, 240 MiB decompressed and 80-entry limits, tar path whitelist, immutable Release digest check and no-overwrite installer remain intact.
+
+### Actual offline builds and verified installation staging
+
+Using pinned Agent Node **24.21.0** and the original native session-supervisor built locally on paired WSL/Linux x64:
+
+| Unpublished artifact | Compressed bytes | Checked tar entries | Real original verifier and isolated extraction |
+| --- | ---: | ---: | --- |
+| Standard browser-free Agent | **44,422,981** | 33 | PASS |
+| Optional nine-file Playwright Agent | **45,713,662** | 45 | PASS |
+
+Optional Playwright costs only **1,290,681 bytes** compressed and **12 entries** (9 pinned files plus 3 required directories); archive SHA-256, architecture, entry inventory, per-file digests and no-overwrite installation semantics passed. The **real Node binary extracted from that exact candidate archive**, together with the nine extracted Playwright files and an *externally staged, version-matched* Chromium Headless Shell revision 1248, completed controlled TodoMVC navigation, AI ARIA Snapshot, \`getByRef\` text input, iframe inspection and context close. This does **not** bundle Chromium and does not test a full browser-enabled production Agent.
+
+**Negative tests:** existing old-format archives pass unchanged; extra vendor files without an opt-in are rejected; missing files, altered bytes and version mismatches are rejected before extraction; symlinked upstream inputs refused; an intentionally corrupted upstream bundle cannot create partial staging. A disposable HOME/no-TTY attempt using the candidate package's real installer was refused before device identity or systemd unit creation.
+
+**Regression:** typecheck PASS; Release suite **8/8 PASS** (2 added vendor security tests); upgrade/rollback *mocked/local* suites **25 pass, 1 skip, 0 fail**. Full Agent suite: **261 tests, 257 pass, 3 skipped, 1 failed** — the already-known \`v2-connection-lifecycle.test.ts:744\` Shell/WSS \`unavailable\` vs \`completed\`, not a new Playwright failure. Do not describe full regression as green.
+
+### Boundaries and next gates
+
+- **Library packaging Linux x64:** verified only as an unpublished candidate; not merged or published. Agent startup still injects no browser. Worker browser tools remain **disabled**.
+- **Actual Chrome on Windows:** source BrowserManager with \`channel:"chrome"\` passed real Windows tests, but these Linux-only builder changes do **not** make an installed Windows browser-enabled release. Windows file allowlist and signing remain separate acceptance gates.
+- **Linux without Chrome:** the candidate contains **only** the Playwright library; compatible Chromium and its platform dependencies must still be supplied or otherwise approved within the existing install flow. No silent browser download, auto-install, new hosted service or external CLI is implied.
+- **Support surface:** selected official bundle files passed phase-one start/navigate/semantic snapshot/ref/iframe scenarios on real browsers. Full Playwright (downloads, trace, browser inspection, future APIs) is **not** asserted supported by this small fixed-file inventory. Every upstream version change needs a fresh digest audit and real cross-platform tests.
+- **Upgrade and rollback:** isolated staging and existing simulated rollback tests passed, but a real installed permanent Agent's promotion/upgrade/rollback with this candidate is **not accepted**; current \`paired-full-v1\` upgrade-profile restrictions must be reviewed, not bypassed.
+- **No extra systems:** one Agent, one Playwright backend, existing signed archive and verifier, zero runtime configuration switches added. Preserve existing auth, receipts and explicitly confirmed high-impact behavior gates.

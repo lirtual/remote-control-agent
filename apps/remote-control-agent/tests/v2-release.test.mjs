@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {readFileSync,realpathSync} from "node:fs";
+import {fileURLToPath} from "node:url";
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink, copyFile, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import test from "node:test";
-import { parseArgs, runtimeSources, ensureNativeTarget, requiredGlibcVersion } from "../scripts/build-v2-release.mjs";
-import { resolvePinnedRelease, downloadPinnedAsset, inspectTarGzip, extractVerifiedAsset, releaseAssetName } from "../scripts/verify-v2-release.mjs";
+import { parseArgs, runtimeSources, ensureNativeTarget, requiredGlibcVersion,stagePinnedPlaywrightLibrary } from "../scripts/build-v2-release.mjs";
+import { resolvePinnedRelease, downloadPinnedAsset, inspectTarGzip, extractVerifiedAsset, releaseAssetName, PINNED_PLAYWRIGHT_FILES, PINNED_PLAYWRIGHT_VERSION } from "../scripts/verify-v2-release.mjs";
 
 const tag="v0.1.0",target="linux-x64-glibc",commit="1".repeat(40);
 const sha=b=>createHash("sha256").update(b).digest("hex");
@@ -36,7 +38,7 @@ function tar(entries) {
   return gzipSync(Buffer.concat(chunks),{mtime:0});
 }
 function fixture(extra=[],opts={}) {
-  const manifest=Buffer.from(JSON.stringify({name:"remote-control-agent",artifact_schema:1,version:tag,target,node:"v24.21.0",modules:["v2-main.ts"]}));
+  const manifest=Buffer.from(JSON.stringify({name:"remote-control-agent",artifact_schema:1,version:tag,target,node:"v24.21.0",modules:["v2-main.ts"],...opts}));
   return tar([
     {name:"bin/node",data:elf(62)},
     {name:"bundle.json",data:manifest},
@@ -174,4 +176,79 @@ test("#73 builder selects maximum actual glibc version across ELF requirements",
     /no verifiable glibc/);
   assert.throws(()=>requiredGlibcVersion("/fake/readelf-fail",()=>({status:1,stdout:""})),
     /Cannot determine/);
+});
+
+const upstreamSource=()=>realpathSync(path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),"../node_modules/playwright-core"));
+const vendoredPrefix="apps/remote-control-agent/node_modules/playwright-core/";
+function validVendorFixture(){
+  const dirs=["apps/remote-control-agent/node_modules/",
+    "apps/remote-control-agent/node_modules/playwright-core/",
+    "apps/remote-control-agent/node_modules/playwright-core/lib/"];
+  const entries=dirs.map(name=>({name,type:"5"}));
+  for(const name of Object.keys(PINNED_PLAYWRIGHT_FILES))
+    entries.push({name,data:readFileSync(path.join(upstreamSource(),name.slice(vendoredPrefix.length)))});
+  const manifest={browser_runtime:{name:"playwright-core",version:PINNED_PLAYWRIGHT_VERSION,
+    files:Object.keys(PINNED_PLAYWRIGHT_FILES)}};
+  return {entries,manifest};
+}
+
+test("#P3 verified nine-file browser runtime is optional and fail-closed",async()=>{
+  const {entries,manifest}=validVendorFixture();
+  assert.equal(Object.keys(PINNED_PLAYWRIGHT_FILES).length,9);
+  const archive=fixture(entries,manifest);
+  assert.equal(inspectTarGzip(archive,{tag,target}).size,18);
+  assert.equal(inspectTarGzip(fixture(),{tag,target}).size,6,
+    "Previously signed browser-free releases remain supported.");
+  assert.throws(()=>inspectTarGzip(fixture(entries),{tag,target}),/Unrequested/);
+  assert.throws(()=>inspectTarGzip(fixture(entries.slice(0,-1),manifest),{tag,target}),/inventory/);
+  const tampered=entries.map((e,i)=>i===entries.length-1 ?
+    {...e,data:Buffer.from("tampered-vendor-data")} : e);
+  assert.throws(()=>inspectTarGzip(fixture(tampered,manifest),{tag,target}),/pinned browser/);
+  const vBad={browser_runtime:{...manifest.browser_runtime,version:"1.63.0"}};
+  assert.throws(()=>inspectTarGzip(fixture(entries,vBad),{tag,target}),/inventory/);
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rca-p3-library-release-"));
+  try{
+    const install=path.join(dir,"unpublished-program");
+    const result=await extractVerifiedAsset({tag,target,digest:sha(archive)},archive,install);
+    assert.equal(result.files,18);
+    for(const [name,digest] of Object.entries(PINNED_PLAYWRIGHT_FILES)){
+      const bytes=await readFile(path.join(install,name));
+      assert.equal(sha(bytes),digest);
+    }
+    await assert.rejects(extractVerifiedAsset({tag,target,digest:sha(archive)},archive,install));
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test("#P3 offline vendor stage verifies exact upstream hashes without copying extras",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"rca-p3-pinned-core-stage-"));
+  try{
+    const staged=path.join(dir,"candidate");
+    const result=stagePinnedPlaywrightLibrary(upstreamSource(),staged);
+    assert.equal(result.version,"1.64.1");
+    assert.equal(result.files.length,9);
+    const bundled=await import(path.join(staged,vendoredPrefix,"index.mjs"));
+    assert.ok(bundled.chromium,"Official Playwright Chromium exports load without 115-file npm tree");
+    const linked=path.join(dir,"unsafe-link");
+    await symlink(upstreamSource(),linked);
+    assert.throws(()=>stagePinnedPlaywrightLibrary(linked,path.join(dir,"other")),/Untrusted/);
+    const tamperedSource=path.join(dir,"tampered-upstream");
+    const prefix="apps/remote-control-agent/node_modules/playwright-core/";
+    for(const name of Object.keys(PINNED_PLAYWRIGHT_FILES)){
+      const dest=path.join(tamperedSource,name.slice(prefix.length));
+      await mkdir(path.dirname(dest),{recursive:true});
+      await copyFile(path.join(upstreamSource(),name.slice(prefix.length)),dest);
+    }
+    const tampered=path.join(tamperedSource,"lib/utilsBundle.js");
+    await writeFile(tampered,Buffer.from("unreviewed runtime"));
+    const rejectedStage=path.join(dir,"rejected-tamper");
+    assert.throws(()=>stagePinnedPlaywrightLibrary(tamperedSource,rejectedStage),/Unverified/);
+    await assert.rejects(access(rejectedStage),/ENOENT/,
+      "Invalid upstream bytes must fail BEFORE staging files.");
+    // A deceptive package version cannot bypass the independently pinned bytes.
+    await copyFile(path.join(upstreamSource(),"lib/utilsBundle.js"),tampered);
+    await writeFile(path.join(tamperedSource,"package.json"),
+      '{"name":"playwright-core","version":"1.63.0"}');
+    assert.throws(()=>stagePinnedPlaywrightLibrary(tamperedSource,rejectedStage),/Unverified/);
+  }finally{await rm(dir,{recursive:true,force:true});}
 });
