@@ -78,6 +78,43 @@ test("policy closure and unexpected server messages stop the monitor without rep
   assert.equal(await normalClose, "offline");
 });
 
+test("a device-local invalid read returns failed and does not revoke the signed socket", async () => {
+  const socket = new FakeSocket();
+  const stopped = new AbortController();
+  let invocations = 0;
+  const monitored = monitorDeviceSocket(socket as unknown as WebSocket, stopped.signal,
+    { intervalMs: 60_000, timeoutMs: 10_000 },
+    async (_tool, _args) => { invocations++; return "READ_OK"; });
+  const malformedId = randomUUID();
+  // POSIX has no drive path; native Windows likewise refuses POSIX '/'.
+  // The correct response on either OS is a failed read, not disconnection.
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: malformedId, tool: "read_file",
+    arguments: { path: "https://untrusted.example/secret" },
+  }) });
+  assert.deepEqual(JSON.parse(socket.sent[0]!), {
+    kind: "read_result", request_id: malformedId, status: "failed",
+  });
+  assert.equal(socket.closeCount, 0);
+  assert.equal(invocations, 0);
+  // An ordinary read on the SAME signed connection must still be dispatched.
+  const validId = randomUUID();
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: validId, tool: "read_file",
+    arguments: { path: "/tmp/safe" },
+  }) });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(socket.sent[1]!), {
+    kind: "read_result", request_id: validId, status: "completed", text: "READ_OK",
+  });
+  assert.equal(invocations, 1);
+  assert.equal(socket.closeCount, 0);
+  // An unrecognized command remains a permanent policy violation.
+  socket.event("message", { data: JSON.stringify({ kind: "unknown", request_id: randomUUID() }) });
+  assert.equal(await monitored, "policy");
+  assert.equal(socket.closeCount, 1);
+});
+
 test("reconnect obtains a fresh challenge and stops on abort without executing commands", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "rc-v2-reconnect-"));
   const keyPath = path.join(dir, "device.pem");
@@ -116,9 +153,10 @@ test("reconnect obtains a fresh challenge and stops on abort without executing c
     assert.deepEqual(states, ["connected", "disconnected", "connected"]);
     assert.deepEqual(delays, [1000]);
     assert.equal(sockets.length, 2);
+    assert.equal(sockets[0]!.sent.length, 1);
+    assert.equal(sockets[1]!.sent.length, 1);
     for (const socket of sockets) {
-      assert.equal(socket.sent.length, 1, "one metadata report per signed session");
-      const info = JSON.parse(socket.sent[0]!) as {kind: string; capabilities: string[]};
+      const info = JSON.parse(socket.sent[0]!) as { kind: string; capabilities: string[] };
       assert.equal(info.kind, "device_info");
       assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
     }
@@ -722,15 +760,82 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
   }
 });
 
-test("minimal runtime metadata never includes device ID or secrets", () => {
-  const info = collectDeviceInfo("full");
-  assert.equal(info.kind, "device_info");
-  assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
-  assert.ok(info.hostname.length > 0 && info.hostname.length <= 64);
-  assert.ok(info.os_version.length > 0 && info.os_version.length <= 96);
-  assert.ok(["native", "wsl2", "container"].includes(info.environment));
-  const json = JSON.stringify(info);
-  assert.ok(json.length <= 1200);
-  assert.equal(json.includes("private_key"), false);
-  assert.equal(json.includes("device_id"), false);
+
+test("Windows preview read-only capability rejects Shell and file mutations", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "rc-v2-windows-readonly-"));
+  const keyPath = path.join(dir, "device.pem");
+  const filePath = path.join(dir, "unchanged.txt");
+  const deviceId = randomUUID();
+  const controller = new AbortController();
+  const replies: Array<Record<string, unknown>> = [];
+  let socket: FakeSocket | undefined;
+  const checks = [
+    { kind: "read", tool: "read_file", arguments: { path: filePath } },
+    { kind: "operation", tool: "write_file",
+      arguments: { path: filePath, content: "MUST_NOT_CHANGE", mode: "rewrite" },
+      operation_id: "write-" + randomUUID() },
+    { kind: "operation", tool: "start_process",
+      arguments: { command: "printf MUST_NOT_RUN", timeout_ms: 2000 },
+      operation_id: "shell-" + randomUUID() },
+  ];
+  let index = 0;
+  function next(): void {
+    if (index >= checks.length) { controller.abort(); return; }
+    const check = checks[index++]!;
+    socket!.event("message", { data: JSON.stringify({
+      kind: check.kind, request_id: randomUUID(), tool: check.tool,
+      arguments: check.arguments,
+      ...("operation_id" in check ? { operation_id: check.operation_id } : {}),
+    }) });
+  }
+  try {
+    const enrollment = newEnrollment("windows-readonly-test");
+    await writeFile(keyPath, enrollment.privateKeyPem, { mode: 0o600 });
+    await writeFile(keyPath + ".device-id", deviceId + "\n", { mode: 0o600 });
+    await writeFile(filePath, "ORIGINAL");
+    await maintainAuthenticatedDeviceSession("https://agent.example/", keyPath, controller.signal, {
+      capability: "read-only",
+      send: async () => Response.json({ device_id: deviceId, nonce: "A".repeat(24) }),
+      makeSocket: () => {
+        socket = new FakeSocket();
+        socket.readyState = WebSocket.CONNECTING;
+        socket.onSend = wire => {
+          if (!wire.startsWith("{")) { if (wire === "rc-v2:ping") queueMicrotask(() => socket!.pong()); return; }
+          const reply = JSON.parse(wire) as Record<string, unknown>;
+          if (reply.kind !== "read_result" && reply.kind !== "operation_result") return;
+          replies.push(reply);
+          queueMicrotask(next);
+        };
+        queueMicrotask(() => socket!.emitOpen());
+        return socket as unknown as WebSocket;
+      },
+      onState: state => { if (state === "connected") setTimeout(next, 0); },
+    });
+    assert.equal(replies.length, 3);
+    assert.equal(replies[0]!.kind, "read_result");
+    assert.equal(replies[0]!.text, "ORIGINAL");
+    for (const reply of replies.slice(1)) {
+      assert.equal(reply.kind, "operation_result");
+      assert.equal((reply.result as { status: string }).status, "unavailable");
+    }
+    assert.equal(await readFile(filePath, "utf8"), "ORIGINAL");
+  } finally {
+    controller.abort();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("metadata reports only bounded non-secret runtime data and honors read-only capability", () => {
+  const readonly = collectDeviceInfo("read-only");
+  const full = collectDeviceInfo("full");
+  assert.equal(readonly.kind, "device_info");
+  assert.deepEqual(readonly.capabilities, ["read"]);
+  assert.deepEqual(full.capabilities, ["read", "file_write", "shell"]);
+  assert.ok(readonly.hostname.length > 0 && readonly.hostname.length <= 64);
+  assert.ok(readonly.os_version.length > 0 && readonly.os_version.length <= 96);
+  assert.ok(["native", "wsl2", "container"].includes(readonly.environment));
+  const wire = JSON.stringify(readonly);
+  assert.ok(wire.length <= 1200);
+  assert.equal(wire.includes("private_key"), false);
+  assert.equal(wire.includes("device_id"), false);
 });

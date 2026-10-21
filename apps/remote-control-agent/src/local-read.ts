@@ -16,8 +16,22 @@ function isIntegerInRange(value: unknown, min: number, max: number): value is nu
 }
 
 /** Linux paths only. A scheme such as http: or file: is a URL read, not a local path. */
-function hasUriScheme(path: string): boolean {
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path);
+/** Windows accepts local fully qualified drive paths only. UNC, device namespaces,
+ * drive-relative paths, alternate data streams and reserved device names are
+ * refused before any filesystem access, on *every* read/search operation. */
+export function isPermittedLocalPath(value: string, platform = process.platform): boolean {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096 ||
+      value.includes("\0")) return false;
+  if (platform === "win32") {
+    if (!/^[A-Za-z]:[\\/]/.test(value) || value.slice(2).includes(":") ||
+        value.startsWith("\\\\") || value.startsWith("//")) return false;
+    const parts = value.slice(3).split(/[\\/]/);
+    if (parts.some(part => /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(part))) {
+      return false;
+    }
+    return true;
+  }
+  return !value.startsWith("//") && !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value);
 }
 
 export function parseLocalRead(input: unknown): LocalRead | null {
@@ -33,7 +47,7 @@ export function parseLocalRead(input: unknown): LocalRead | null {
   const filePath = record.path;
   if (typeof filePath !== "string") return null;
   if (filePath.length === 0 || filePath.length > MAX_PATH_LENGTH) return null;
-  if (filePath.includes("\0") || filePath.startsWith("//") || hasUriScheme(filePath)) return null;
+  if (!isPermittedLocalPath(filePath)) return null;
 
   const read: LocalRead = { path: filePath };
   if (record.offset !== undefined) {
@@ -150,7 +164,7 @@ const SEARCH_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{
 function parsePath(value: unknown): string | null {
   if (typeof value !== "string") return null;
   if (value.length === 0 || value.length > MAX_PATH_LENGTH) return null;
-  if (value.includes("\0") || value.startsWith("//") || hasUriScheme(value)) return null;
+  if (!isPermittedLocalPath(value)) return null;
   return value;
 }
 

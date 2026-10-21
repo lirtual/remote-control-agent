@@ -190,11 +190,21 @@ export function monitorDeviceSocket(
             Object.hasOwn(readParsers, request.tool) &&
             typeof request.request_id === "string" &&
             /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(request.request_id) &&
-            Object.keys(request).length === 4 && readParsers[request.tool]?.(request.arguments) &&
-            readsInFlight < 4) {
-          readsInFlight++;
+            Object.keys(request).length === 4) {
+          // A valid owner-routed READ with an unsupported *device-local* path
+          // must not destroy the signed WSS identity. In particular, a POSIX
+          // path sent to native Windows is a failed read, not device revocation
+          // or an unrecognized protocol frame. Fail closed on file access,
+          // reply with the existing bounded failure frame and stay connected.
           const id = request.request_id;
           const tool = request.tool;
+          if (!readParsers[tool]?.(request.arguments) || readsInFlight >= 4) {
+            try {
+              socket.send(JSON.stringify({ kind: "read_result", request_id: id, status: "failed" }));
+            } catch { finish("offline"); }
+            return;
+          }
+          readsInFlight++;
           void Promise.resolve().then(() => readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
               if (settled || signal.aborted || socket.readyState !== WebSocket.OPEN) return;
@@ -323,6 +333,9 @@ export async function maintainAuthenticatedDeviceSession(
     send?: typeof fetch;
     makeSocket?: (url: string, protocols: string[]) => WebSocket;
     heartbeat?: { intervalMs: number; timeoutMs: number; authIntervalMs?: number };
+    // Windows native preview explicitly keeps reads only; existing Linux
+    // defaults remain full, preserving the already deployed owner contract.
+    capability?: "read-only" | "full";
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
     /** Isolated local persistence for integration tests; defaults to normal receipts. */
@@ -339,10 +352,13 @@ export async function maintainAuthenticatedDeviceSession(
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
   if (signal.aborted) return;
-  const execution = createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory });
-  let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>>;
-  try { upgradeControl = await startUpgradeControl(execution, keyPath); }
-  catch (error) { await execution.close(); throw error; }
+  const full = options.capability !== "read-only";
+  const execution = full ? createAgentExecutionEngine({ receiptDirectory: options.receiptDirectory }) : undefined;
+  let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
+  if (full && process.platform !== "win32") {
+    try { upgradeControl = await startUpgradeControl(execution!, keyPath); }
+    catch (error) { await execution!.close(); throw error; }
+  }
   let failures = 0;
   try {
   while (!signal.aborted) {
@@ -351,8 +367,8 @@ export async function maintainAuthenticatedDeviceSession(
         baseAddress, keyPath, options.send, options.makeSocket, signal,
       );
       if (signal.aborted) { connection.socket.close(); break; }
-      // Report only after signed authentication; each reconnect refreshes the snapshot.
-      connection.socket.send(JSON.stringify(collectDeviceInfo("full")));
+      // Send one bounded report only after the signed session has opened.
+      connection.socket.send(JSON.stringify(collectDeviceInfo(options.capability ?? "full")));
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
@@ -363,16 +379,18 @@ export async function maintainAuthenticatedDeviceSession(
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
             if (tool === "list_sessions" || tool === "read_process_output") {
-              return executeV2SessionRead(execution, tool, args, requestSignal);
+              return full && execution ? executeV2SessionRead(execution, tool, args, requestSignal) : null;
             }
             // Reuse the original bounded file/search engine.
             const reply = await executeReadTool(tool, args, searches, requestSignal);
             return reply.kind === "completed" ? reply.text : null;
           },
-          (tool, args, operationId, requestSignal) =>
-            executeV2FileOperation(execution, tool, args, operationId, requestSignal),
-          true,
-          () => execution.stopOwnedForRevocation());
+          full && execution
+            ? (tool, args, operationId, requestSignal) =>
+              executeV2FileOperation(execution, tool, args, operationId, requestSignal)
+            : undefined,
+          full,
+          full && execution ? () => execution.stopOwnedForRevocation() : undefined);
       } finally {
         await searches.close();
       }
@@ -399,7 +417,7 @@ export async function maintainAuthenticatedDeviceSession(
     await delay(capped, signal);
   }
   } finally {
-    await upgradeControl.close();
-    await execution.close();
+    await upgradeControl?.close();
+    await execution?.close();
   }
 }

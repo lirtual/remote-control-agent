@@ -118,3 +118,204 @@ jobs:
           retention-days: 2
           if-no-files-found: error
           compression-level: 0
+
+  windows-native-preview:
+    name: Native Windows read-only preview / x64
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Install pinned source dependencies
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Typecheck shared and Windows preview sources
+        run: corepack pnpm --filter remote-control-agent typecheck
+      - name: Windows path and private ACL smoke (no Worker, no pairing, no Shell)
+        shell: pwsh
+        run: |
+          Set-Location apps/remote-control-agent
+          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+      - name: User task negative checks (never create a task)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = 'apps/remote-control-agent/scripts/windows-user-task.ps1'
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Status
+          if ($LASTEXITCODE -ne 0) { throw 'Task status failed' }
+          # A deliberate native-process error is an expected negative result.
+          # Start-Process avoids treating stderr as a pwsh terminating error.
+          $p = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'-Action','Enable','-Endpoint','https://rca.example.test/','-Node','C:\Windows\System32\not-node.exe','-Entry','C:\Temp\windows-v2.js') -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-task-rejection.txt')
+          if ($p.ExitCode -eq 0) { throw 'Untrusted native task path was accepted' }
+      - name: Build native windowless scheduled launcher (no user install)
+        shell: pwsh
+        run: |
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/scripts/build-windows-background.ps1 -Output (Join-Path $env:RUNNER_TEMP 'rca-background.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'Windowless background launcher compile failed' }
+      - name: Stage native Windows x64 offline candidate (no publishing)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # SHA-256 from official Node.js v24.21.0 signed release checksums.
+          $official = 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32'
+          $nodeBinary = (Get-Command node.exe).Source
+          $digest = (Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne $official) { throw 'Pinned Node binary SHA-256 mismatch' }
+          $output = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.0-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $output
+          if ($LASTEXITCODE -ne 0) { throw 'Native bundle build failed' }
+          $stage = Join-Path $output 'remote-control-agent-v0.0.0-ci-windows-x64'
+          & (Join-Path $stage 'bin/node.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled native Node cannot run' }
+          $entry = Join-Path $stage 'apps/remote-control-agent/src/windows-v2.js'
+          & (Join-Path $stage 'bin/node.exe') $entry status
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Windows Agent local status failed' }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $output 'candidate.zip') -CompressionLevel Optimal
+          $zip = Join-Path $output 'candidate.zip'
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-reopened'
+          Expand-Archive -LiteralPath $zip -DestinationPath $extracted -ErrorAction Stop
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
+          if ($LASTEXITCODE -ne 0) { throw 'Reopened archive file inventory failed' }
+          & (Join-Path $extracted 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Portable rca launcher failed' }
+          # CI-only offline fixture: hash verification, safe extraction, private
+          # staging and bundled CLI; no pairing, task creation or cloud access.
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.0.0-ci -OfflineArchive $zip -ExpectedSha256 $hash
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows offline installer failed' }
+          $installed = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control\programs\v0.0.0-ci-windows-x64'
+          & (Join-Path $installed 'rca.cmd') status
+          if ($LASTEXITCODE -ne 0) { throw 'Installed bundled CLI failed' }
+          $rejectRepeat = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','install-windows.ps1','-Version','v0.0.0-ci','-OfflineArchive',$zip,'-ExpectedSha256',$hash) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-repeat-rejection.txt')
+          if ($rejectRepeat.ExitCode -eq 0) { throw 'Repeat-install unexpectedly succeeded' }
+          $rejectDigest = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','install-windows.ps1','-Version','v0.0.1-ci','-OfflineArchive',$zip,'-ExpectedSha256',('0' * 64)) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-digest-rejection.txt')
+          if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
+          Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
+
+      - name: Register and remove user-logon task with synthetic identity (no cloud calls)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Synthetic task acceptance requires isolated CI' }
+          $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
+          $key = Join-Path $root 'v2-identity.pem'
+          $device = $key + '.device-id'
+          $program = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control\programs\v0.0.0-ci-windows-x64\rca.cmd'
+          $acl = 'apps/remote-control-agent/scripts/windows-private-store.ps1'
+          if (Test-Path -LiteralPath $key) { throw 'Refusing to replace an existing key' }
+          if (Test-Path -LiteralPath $device) { throw 'Refusing to replace an existing ID' }
+          $created = $false
+          try {
+            [IO.File]::WriteAllText($key,'TEST_ONLY_NON_PRIVATE_KEY')
+            [IO.File]::WriteAllText($device,("00000000-0000-4000-8000-000000000001" + [char]10))
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic key ACL seal failed' }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem.device-id'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic ID ACL seal failed' }
+            & $program enable --endpoint 'https://rca.example.test/'
+            if ($LASTEXITCODE -ne 0) { throw 'Task registration failed' }
+            $created = $true
+            # CI-only task fixture: expose safe structural validation errors
+            # while the end-user CLI continues redacting local OS details.
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Status
+            if ($LASTEXITCODE -ne 0) { throw 'Raw native Task Scheduler validation failed' }
+            # A direct PowerShell call in an isolated runner surfaces a safe,
+            # non-secret status validation reason if metadata round-trip differs.
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Status
+            if ($LASTEXITCODE -ne 0) { throw 'Registered task metadata failed direct validation' }
+            $status = & $program task-status | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $status.installed -ne $true) { throw 'Task not registered' }
+            # Build an isolated second-version CI ZIP and use the *real*
+            # hash-verifying installer, not an ACL-changing Copy-Item fixture.
+            $oldVersion = 'v0.0.0-ci'
+            $newVersion = 'v0.0.1-ci'
+            $basePrograms = Join-Path $root 'programs'
+            $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
+            $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
+            $sourceStage = Join-Path $env:RUNNER_TEMP 'windows-preview-bundle\remote-control-agent-v0.0.0-ci-windows-x64'
+            $manifestPath = Join-Path $sourceStage 'bundle.json'
+            $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+            $manifest.version = $newVersion
+            [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8))
+            $secondZip = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
+            Compress-Archive -Path (Join-Path $sourceStage '*') -DestinationPath $secondZip -CompressionLevel Optimal
+            $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-windows.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
+            $newCli = Join-Path $newDir 'rca.cmd'
+            $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
+            $origKey = (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash
+            # Forced post-switch failure must restore original task's action.
+            $badSwitch = Start-Process -FilePath powershell.exe -ArgumentList @(
+              '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+              'apps/remote-control-agent/scripts/windows-user-task.ps1',
+              '-Action','Switch','-Version',$newVersion,
+              '-Direction','Upgrade','-CIInjectFailure'
+            ) -PassThru -Wait -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt')
+            if ($badSwitch.ExitCode -eq 0) { throw 'Injected task switch unexpectedly succeeded' }
+            $failureEvidence = Get-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'expected-switch-refusal.txt') -Raw
+            if ($failureEvidence -notmatch 'previous task restored') {
+              # Disposable synthetic device only. No production identifiers.
+              Write-Output ('CI SWITCH FAILURE REASON: ' + $failureEvidence.Substring(0,[Math]::Min(1800,$failureEvidence.Length)))
+              throw 'Injected failure did not exercise the post-switch rollback path'
+            }
+            $taskName = 'RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_')
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Failed switch did not restore old executable'
+            }
+            & $newCli upgrade --version $newVersion
+            if ($LASTEXITCODE -ne 0) {
+              # Fixture-only diagnostics; owner-facing CLI keeps OS details private.
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Switch -Version $newVersion -Direction Upgrade
+              throw 'Verified Windows version upgrade failed'
+            }
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Windows task did not switch to new executable'
+            }
+            & $newCli rollback --version $oldVersion
+            if ($LASTEXITCODE -ne 0) { throw 'Verified Windows version rollback failed' }
+            $current = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$current.Actions[0].Execute,
+                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Windows task did not restore old executable'
+            }
+            if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
+                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
+              throw 'Windows upgrade or rollback changed protected identity'
+            }
+            & $program disable
+            if ($LASTEXITCODE -ne 0) { throw 'Task removal failed' }
+            $created = $false
+            $status = & $program task-status | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $status.installed -ne $false) { throw 'Task remained after removal' }
+          } finally {
+            if ($created) { & $program disable }
+            Remove-Item -LiteralPath $device -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Uninstall inactive native version without deleting identity or logs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
+          $sentinel = Join-Path $root 'agent-events.ndjson'
+          [IO.File]::WriteAllText($sentinel, '{"utc":"2026-01-01T00:00:00.000Z","event":"stopping"}' + [char]10)
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.1-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstall of inactive upgrade version failed' }
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Safe Windows runtime uninstall failed' }
+          $old = Join-Path $root 'programs\v0.0.0-ci-windows-x64'
+          if (Test-Path -LiteralPath $old) { throw 'Uninstalled version still exists' }
+          if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Windows Agent diagnostics not preserved' }
+          if (-not (Test-Path -LiteralPath $root)) { throw 'Private identity directory was deleted' }
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
+          Remove-Item -LiteralPath $sentinel -Force
+
+
