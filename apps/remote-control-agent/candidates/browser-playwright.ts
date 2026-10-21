@@ -34,12 +34,14 @@ function checkedUrl(value: string, initialNavigation = true): string {
       /[\x00-\x20\x7f]/.test(value)) throw Error("Invalid navigation URL.");
   let url: URL;
   try { url = new URL(value); } catch { throw Error("Invalid navigation URL."); }
-  if (!["https:", "http:"].includes(url.protocol) || !url.hostname ||
+  // Accept public FQDN root dots without permitting dotted local aliases.
+  const hostname = url.hostname.replace(/\.+$/, "");
+  if (!["https:", "http:"].includes(url.protocol) || !hostname ||
       url.username || url.password ||
-      url.hostname === "localhost" || url.hostname.endsWith(".localhost") ||
-      url.hostname.endsWith(".local") || url.hostname.endsWith(".internal") ||
-      /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) ||
-      url.hostname.startsWith("[") || !url.hostname.includes(".")) {
+      hostname === "localhost" || hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local") || hostname.endsWith(".internal") ||
+      /^\d+\.\d+\.\d+\.\d+$/.test(hostname) ||
+      hostname.startsWith("[") || !hostname.includes(".")) {
     throw Error("Navigation target outside first-phase public HTTP(S) scope.");
   }
   // Hostname-only hygiene. DNS rebinding, alternate address resolution,

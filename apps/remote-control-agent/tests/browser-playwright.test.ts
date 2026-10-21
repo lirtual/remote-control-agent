@@ -76,6 +76,12 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.match(fake.calls[0] ?? "",/browser-automation-profile$/);
     await assert.rejects(browser.start(),/already in use/);
     await assert.rejects(browser.navigate(status.session_id,"http://localhost/"),/outside first-phase/);
+    for (const url of ["http://localhost./","http://localhost../",
+      "https://printer.local./","https://db.internal..","http://127.0.0.1../"]) {
+      await assert.rejects(browser.navigate(status.session_id,url),/outside first-phase/,url);
+    }
+    await browser.navigate(status.session_id,"https://example.com./");
+    assert.ok(fake.calls.includes("goto:https://example.com./"));
     await browser.navigate(status.session_id,"https://example.com/page");
     assert.ok(fake.calls.includes("goto:https://example.com/page"));
     const snap=await browser.snapshot(status.session_id);
@@ -210,6 +216,9 @@ test("context filters intercepted direct local requests; real browser redirect f
       "http://2130706433/admin",
       "http://localhost:18781/",
       "https://printer.local/file",
+      "https://printer.local./file",
+      "https://db.internal../query",
+      "http://localhost./",
       "https://db.internal/query",
       "https://intranet/",
       "file:///C:/Users/owner/secrets",
