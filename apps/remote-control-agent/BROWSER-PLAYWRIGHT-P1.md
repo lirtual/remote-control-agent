@@ -25,6 +25,20 @@ Design-only amendment H1–H4, from the new interview's **Q1=A, Q2=A, Q3=A, Q4=B
 
 **Current candidate is not yet compliant:** its Playwright manager still hardcodes headless:true and channel:"chrome", single Profile location and single-tab lifecycle; it lacks verified user-activity detection, handoff/resume tool/state and a Windows-default browser resolver. The existing 30-minute idle timer is currently based on Agent activity, not demonstrated trusted human input. No code, manifest, runtime verification, release, task, Portal/Worker toggle or production Agent was changed by this documentation commit. High-impact/ambiguous webpage effects remain denied without separately proven exact one-use owner approval. Browser MCP tools remain disabled.
 
+## Owner-accepted Windows browser handoff — Grill With Docs round 3 (2026-10-21)
+
+**H12=A, H13=A, H14=A, H15=A, H16=A, H17=A, H18=A.** The accepted behavior is described in [mcp-workers PR #117's canonical architecture](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md#grill-with-docs-round-3--h12h18-2026-10-21). The following items are **future design contracts**, not currently implemented runtime behavior:
+
+- **H12:** Prefer page-scoped Playwright-observable clicks, keyboard, scrolls and user-originated navigation for positive idle-time activity credit; do not collect typed values/passwords or install Windows-global input hooks. Chrome/Edge address-bar/window-control activity may not be observable; synthetic scripts cannot attest a human. How to validate trusted activity is still to be tested.
+- **H13:** No extra expiry warning popup. After 30 minutes of real inactivity, including in Human Control, auto-close the managed session; keep the automation Profile and receipts. Report idle expiration on subsequent status.
+- **H14:** Upon explicit owner resume, invalidate **all pre-handoff snapshots and element refs** and take a new bounded semantic observation before any target-dependent effect; unchanged URL is not enough.
+- **H15:** Allow takeover when an already-admitted browser effect has a bounded timeout and Unknown receipt. Never retry/replay the ambiguous effect or equate closing the browser with undoing website behavior; user resume entails fresh observation.
+- **H16:** On Agent restart, do not auto-attach to leftover Chrome/Edge sessions or Profiles; only allow a new session after existing process ownership/exit and Profile safety are established. On uncertainty, report conflict, preserve data/receipts and never kill unrelated processes or add public CDP.
+- **H17:** If Windows becomes locked or a headed desktop unavailable mid-session, suspend admissions of new Agent page actions; keep 30-minute idle lifetime, existing bounded/unknown receipts and no headless fallback. Exact unlock conditions remain open.
+- **H18:** Ordinary resume requires an explicit owner command via ChatGPT and the existing authenticated MCP route for the intended session/device; do not add a confirmation service. This is **not independently verified human presence** or approval for consequential website effects; the existing high-impact single-use verified approval gate remains independent and fail-closed.
+
+**Present candidate still lacks these behaviors:** its timer refreshes from Agent operations, not positively detected human page activity; it has no Human/Agent Control state machine, valid resume route or fresh-snapshot gate, no Windows default-browser selection and no headed desktop/lock handling. All browser MCP tools remain disabled in Worker. This docs-only change authorizes no feature edits, migration, tests requiring production resources, CI rollout, merge, immutable Release, installed-Agent upgrade or production enablement.
+
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
 ## P13 latest combined acceptance — installed host and signed MCP (2026-10-21)
