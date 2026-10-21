@@ -186,13 +186,12 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   const lifecycle = await readFile(path.join(testDir, "..", "src", "v2-connection-lifecycle.ts"), "utf8");
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
   assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
-  assert.match(lifecycle, /const execution = full\s*\?\s*createAgentExecutionEngine\(/);
-  assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
   assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
   // Match the actual capability and durable-receipt contract regardless of
   // line wrapping, and ensure browser injection remains an explicit local input.
   assert.match(lifecycle, /const execution = full[\s\S]{0,110}createAgentExecutionEngine\(\{[\s\S]{0,160}receiptDirectory: options\.receiptDirectory,\s*browser: options\.browser/);
   // The default paired profile is full; explicit read-only callers may still be denied.
+  assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
   assert.match(lifecycle, /full && execution/);
   assert.match(lifecycle, /const searches = new SearchSessions\(\)/);
   assert.match(lifecycle, /executeV2FileOperation\(execution,/);
