@@ -1,5 +1,16 @@
 # Browser P1: direct Playwright inside existing Remote Control Agent
 
+## Owner-accepted browser handoff and system-default selection — new Grill With Docs round 1 (2026-10-21)
+
+Design-only amendment H1–H4, from the new interview's **Q1=A, Q2=A, Q3=A, Q4=B** (do not confuse with the previous browser project's Q1–Q52). Primary design record: [mcp-workers browser architecture PR #117](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md#windows-browser-handoff-and-default-selection--new-grill-with-docs-round-1-2026-10-21).
+
+- **H1 / Q1=A:** for native Windows, launch the existing Agent-owned Playwright session in a **visible, headed window** to support mid-task takeover. This replaces the earlier Windows default of headless for the new target, not the past experiment results.
+- **H2 / Q2=A:** either owner or Agent can request handoff, but only **explicit owner direction** returns operation to Agent. While Human Control is active the Agent cannot submit new browser actions. A resume signal cannot approve consequential website actions; existing approval and receipt safeguards still apply. Exact handling of an operation already in flight is open.
+- **H3 / Q3=A:** when starting a **new** Windows session, select the current user's default **Chrome or Edge** through the one Playwright backend (chrome/msedge channels); a running session retains its current browser when Windows defaults change. Keep separate **Agent-owned Chrome and Edge automation Profile directories**, never attach to the owner's everyday Profile. Avoid an extra CLI/engine/Worker. Reliable Windows HTTPS app association discovery, ambiguous defaults, unsupported browsers and UI-session compatibility are pending decisions/tests.
+- **H4 / Q4=B:** **the existing 30-minute inactivity policy also operates during Human Control**; handoff does not suspend the timer. Human UI activity detection, warning/expiry behavior, and reconnect/restart races remain unsettled. Browser session closure must not wipe the private automation Profile.
+
+**Present source still differs from this agreed design:** BrowserManager currently uses headless:true, channel:"chrome", one fixed Profile path, and no handoff state or human-resume tool. No code was changed by this document. All browser tools remain disabled in the Worker; no high-impact authorization, real browser MCP E2E, public Release, installation, merge or deployment is inferred or authorized.
+
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
 ## P13 latest combined acceptance — installed host and signed MCP (2026-10-21)
