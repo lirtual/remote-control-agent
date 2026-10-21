@@ -15,6 +15,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
   }) => Promise<void>) | undefined;
   const page = {
     setDefaultTimeout: (ms: number) => { calls.push("timeout:"+ms); },
+    isClosed: () => false,
     goto: async (url: string) => {
       calls.push("goto:"+url);
       if (options.navigationWait) await options.navigationWait;
@@ -41,7 +42,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
   const driver = {
     launchPersistentContext: async (profile:string,settings: Record<string,unknown>) => {
       calls.push("launch:"+profile);
-      assert.equal(settings.headless,true);
+      assert.equal(settings.headless,false);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
       calls.push("channel:"+String(settings.channel));
@@ -73,8 +74,8 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.equal(status.backend,"playwright");
     assert.equal(status.tab_id,"tab-1");
     assert.equal(status.snapshot_version,0);
-    assert.match(fake.calls[0] ?? "",/browser-automation-profile$/);
-    await assert.rejects(browser.start(),/already in use/);
+    assert.match(fake.calls[0] ?? "",/browser-automation-profile-chrome$/);
+    assert.equal((await browser.start()).session_id,status.session_id);
     await assert.rejects(browser.navigate(status.session_id,"http://localhost/"),/outside first-phase/);
     for (const url of ["http://localhost./","http://localhost../",
       "https://printer.local./","https://db.internal..","http://127.0.0.1../"]) {
@@ -155,6 +156,13 @@ test("source browser manager applies 8000 character output limit",async()=>{
     const result=await browser.snapshot(session_id);
     assert.equal(result.text.length,8000);
     assert.equal(result.truncated,true);
+    assert.equal(result.next_offset,8000);
+    const second=await browser.snapshot(session_id,result.next_offset);
+    assert.equal(second.text.length,8000);
+    assert.equal(second.next_offset,16000);
+    const last=await browser.snapshot(session_id,second.next_offset);
+    assert.equal(last.text.length,4000);
+    assert.equal(last.truncated,false);
     await browser.close(session_id);
   } finally {await rm(tmp,{recursive:true,force:true});}
 });

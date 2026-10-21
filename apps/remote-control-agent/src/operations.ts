@@ -9,7 +9,7 @@ export type OperationState = "admitted" | "running" | "completed" | "failed" | "
 
 export interface OperationReceipt {
   operation_id: string;
-  tool_name: "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "browser_start" | "browser_navigate" | "browser_close";
+  tool_name: "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
   argument_digest: string;
   state: OperationState;
   created_at: string;
@@ -40,7 +40,8 @@ const RECEIPT_STATES = new Set<OperationState>(["admitted", "running", "complete
 const RECEIPT_TOOLS = new Set<OperationReceipt["tool_name"]>([
   "write_file", "create_directory", "edit_block", "move_file", "delete_file",
   "start_process", "interact_with_process", "force_terminate",
-  "browser_start", "browser_navigate", "browser_close",
+  "browser_start", "browser_navigate", "browser_close", "browser_tabs",
+  "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
 ]);
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";

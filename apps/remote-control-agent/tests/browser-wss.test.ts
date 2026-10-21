@@ -37,7 +37,7 @@ test("authenticated socket dispatches bounded browser commands through existing 
   const fakeBrowser = {
     start: async () => {
       started++;
-      active = { session_id:sid, tab_id:"tab-1" as const, backend:"playwright" as const, uncertain:false, snapshot_version:0 };
+      active = { session_id:sid, tab_id:"tab-1" as const, browser_family:"chrome" as const, backend:"playwright" as const, uncertain:false, snapshot_version:0 };
       return active;
     },
     status: () => active,

@@ -13,7 +13,7 @@ import { createAgentExecutionEngine, type AgentExecutionEngine } from "./executi
 import { startUpgradeControl } from "./upgrade-control.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
-import { parseBrowserArguments } from "./browser-operations.ts";
+import { parseBrowserArguments, browserToolIsRead } from "./browser-operations.ts";
 
 /** One bounded Session read adapter, shared by the Agent and MCP/WSS tests. */
 export async function executeV2SessionRead(
@@ -22,7 +22,7 @@ export async function executeV2SessionRead(
   args: unknown,
   signal: AbortSignal,
 ): Promise<string | null> {
-  if (!["list_sessions", "read_process_output", "browser_status", "browser_snapshot"].includes(tool)) return null;
+  if (!["list_sessions", "read_process_output", "browser_status", "browser_snapshot", "browser_tabs"].includes(tool)) return null;
   try {
     const answer = await execution.executeTool({ tool, arguments: args }, signal);
     if (answer?.status !== 200) return null;
@@ -32,7 +32,7 @@ export async function executeV2SessionRead(
   } catch { return null; }
 }
 
-type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close";
+type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
 
 /** One adapter shared by production and tests; no new mutation executor. */
 export async function executeV2FileOperation(
@@ -189,6 +189,7 @@ export function monitorDeviceSocket(
           list_sessions: parseListSessions, read_process_output: parseReadProcessOutput,
           browser_status: args => parseBrowserArguments("browser_status", args),
           browser_snapshot: args => parseBrowserArguments("browser_snapshot", args),
+          browser_tabs: args => browserToolIsRead("browser_tabs", args) ? parseBrowserArguments("browser_tabs", args) : null,
         };
         if (readOnly && request?.kind === "read" && typeof request.tool === "string" &&
             Object.hasOwn(readParsers, request.tool) &&
@@ -234,6 +235,11 @@ export function monitorDeviceSocket(
           browser_start: args => parseBrowserArguments("browser_start", args),
           browser_navigate: args => parseBrowserArguments("browser_navigate", args),
           browser_close: args => parseBrowserArguments("browser_close", args),
+          browser_tabs: args => !browserToolIsRead("browser_tabs", args) ? parseBrowserArguments("browser_tabs", args) : null,
+          browser_click: args => parseBrowserArguments("browser_click", args),
+          browser_fill: args => parseBrowserArguments("browser_fill", args),
+          browser_press_key: args => parseBrowserArguments("browser_press_key", args),
+          browser_select_option: args => parseBrowserArguments("browser_select_option", args),
         };
         // A paired but read-only Agent must deny valid unsupported operations
         // without disconnecting its otherwise healthy signed WSS session.
@@ -391,7 +397,7 @@ export async function maintainAuthenticatedDeviceSession(
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
             if (tool === "list_sessions" || tool === "read_process_output" ||
-                tool === "browser_status" || tool === "browser_snapshot") {
+                tool === "browser_status" || tool === "browser_snapshot" || tool === "browser_tabs") {
               return full && execution ? executeV2SessionRead(execution, tool, args, requestSignal) : null;
             }
             // Reuse the original bounded file/search engine.

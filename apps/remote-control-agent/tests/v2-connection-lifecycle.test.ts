@@ -847,9 +847,11 @@ test("P3 signed lifecycle exposes a local browser only when explicitly injected,
   const sid=randomUUID();
   let browserStarts=0;
   const fakeBrowser: BrowserBackend={
-    start:async()=>{browserStarts++;return {session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0};},
-    status:()=>({session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}),
+    start:async()=>{browserStarts++;return {session_id:sid,tab_id:"tab-1",browser_family:"chrome" as const,backend:"playwright",uncertain:false,snapshot_version:0};},
+    status:()=>({session_id:sid,tab_id:"tab-1",browser_family:"chrome" as const,backend:"playwright",uncertain:false,snapshot_version:0}),
     navigate:async()=>{},
+    tabs:async()=>({selected_tab_id:"tab-1",tabs:[]}),
+    click:async()=>{},fill:async()=>{},pressKey:async()=>{},selectOption:async()=>{},
     snapshot:async()=>({text:'- textbox "P3 Browser" [ref=e1]',truncated:false,snapshot_version:1}),
     close:async()=>{},
   };

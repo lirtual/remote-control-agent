@@ -11,7 +11,7 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
-import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS } from "./browser-operations.ts";
+import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
 import { SearchSessions } from "./search.ts";
@@ -231,7 +231,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     if (typeof body.tool === "string" &&
         ([...BROWSER_READ_TOOLS, ...BROWSER_EFFECT_TOOLS] as string[]).includes(body.tool)) {
       if (!browser) { respond(503, { status: "unavailable" }); return reply; }
-      if ((BROWSER_READ_TOOLS as readonly string[]).includes(body.tool)) {
+      if (browserToolIsRead(body.tool, body.arguments)) {
         const result = await browser.read(body.tool as typeof BROWSER_READ_TOOLS[number], body.arguments);
         respond(result === null ? 400 : 200, result === null
           ? { status: "failed" } : { status: "completed", result: { content: [{ type: "text", text: result }] } });
@@ -527,9 +527,11 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     const mutation = [
       "write_file", "create_directory", "edit_block", "move_file", "delete_file",
       "start_process", "interact_with_process", "force_terminate",
-      "browser_start", "browser_navigate", "browser_close",
+      "browser_start", "browser_navigate", "browser_close", "browser_tabs",
+      "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
     ].includes(String(body.tool));
-    if (!mutation) return executeToolCore(body, signal);
+    if (!mutation || body.tool === "browser_tabs" && browserToolIsRead("browser_tabs", body.arguments))
+      return executeToolCore(body, signal);
     if (upgradeFrozen) return { status: 503, body: { status: "unavailable" } };
     admittingMutations++;
     try { return await executeToolCore(body, signal); }

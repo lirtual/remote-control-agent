@@ -22,7 +22,7 @@ test("browser gateway reuses durable Agent receipts and honors 5s Worker deadlin
     start: async () => {
       starts++;
       await ready; // intentionally longer than the initial 150ms fast response
-      active = { session_id: sid, tab_id: "tab-1" as const, backend: "playwright" as const, uncertain: false, snapshot_version: 0 };
+      active = { session_id: sid, tab_id: "tab-1" as const, browser_family:"chrome" as const, backend: "playwright" as const, uncertain: false, snapshot_version: 0 };
       return active;
     },
     navigate: async (_id: string, _url: string) => { navigations++; throw Error("lost navigation reply"); },
@@ -92,7 +92,7 @@ test("device revocation attempts owned browser shutdown and reports uncertainty"
   const sid = randomUUID();
   let active=true, closures=0, refuse=false;
   const browser={
-    status:()=>active?{session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}:null,
+    status:()=>active?{session_id:sid,tab_id:"tab-1",browser_family:"chrome" as const,backend:"playwright",uncertain:false,snapshot_version:0}:null,
     close:async()=>{closures++;if(refuse)throw Error("busy");active=false;},
   } as unknown as BrowserBackend;
   const engine=createAgentExecutionEngine({browser,receiptDirectory:dir});
@@ -111,7 +111,7 @@ test("P3 Agent shutdown interrupts its owned busy browser instead of abandoning 
   const sid=randomUUID();
   let active=true, forceCalls=0, ordinaryCalls=0;
   const browser={
-    status:()=>active?{session_id:sid,tab_id:"tab-1",backend:"playwright",uncertain:false,snapshot_version:0}:null,
+    status:()=>active?{session_id:sid,tab_id:"tab-1",browser_family:"chrome" as const,backend:"playwright",uncertain:false,snapshot_version:0}:null,
     close:async()=>{ordinaryCalls++;throw Error("Navigation busy");},
     stopOwnedForRevocation:async()=>{
       forceCalls++;
@@ -126,4 +126,51 @@ test("P3 Agent shutdown interrupts its owned busy browser instead of abandoning 
     assert.equal(forceCalls,1,"Reuses existing cancel/owned-context close");
     assert.equal(ordinaryCalls,0,"Does not attempt a busy normal close");
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test("tab list stays a read; tab and semantic effects deduplicate without storing entered text",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"spec152-operation-gateway-"));
+  const sid=randomUUID();
+  let newTabs=0, fills=0;
+  const active={session_id:sid,tab_id:"tab-1",browser_family:"chrome",backend:"playwright",uncertain:false,snapshot_version:2};
+  const browser={
+    status:()=>active,
+    tabs:async (_id:string,action:string)=>{
+      if(action==="new")newTabs++;
+      return {selected_tab_id:"tab-1",tabs:[{tab_id:"tab-1",url:"about:blank",title:""}]};
+    },
+    fill:async (_id:string,_target:unknown,_text:string)=>{fills++;},
+    stopOwnedForRevocation:async()=> "confirmed" as const,
+  } as unknown as BrowserBackend;
+  const engine=createAgentExecutionEngine({browser,receiptDirectory:root});
+  const signal=new AbortController().signal;
+  try{
+    const list=await engine.executeTool({tool:"browser_tabs",arguments:{session_id:sid,action:"list"}},signal);
+    assert.equal(list?.status,200);
+    assert.match(JSON.stringify(list.body),/tab-1/);
+    const tabOp="spec152-tab-new-"+randomUUID();
+    const args={session_id:sid,action:"new"};
+    const effect=await engine.executeTool({tool:"browser_tabs",arguments:args,operation_id:tabOp},signal);
+    assert.equal((effect?.body as any)?.status,"completed");
+    await engine.executeTool({tool:"browser_tabs",arguments:args,operation_id:tabOp},signal);
+    assert.equal(newTabs,1);
+    const privateText="PRIVATE-SPEC152-VALUE";
+    const fillOp="spec152-fill-"+randomUUID();
+    const fill=await engine.executeTool({
+      tool:"browser_fill",
+      arguments:{session_id:sid,role:"textbox",name:"Search",snapshot_version:2,text:privateText},
+      operation_id:fillOp,
+    },signal);
+    assert.equal((fill?.body as any)?.status,"completed");
+    assert.equal(fills,1);
+    const receipt=await engine.getReceipt(fillOp);
+    assert.equal(receipt?.state,"completed");
+    assert.equal(JSON.stringify(receipt).includes(privateText),false);
+    const bad=await engine.executeTool({tool:"browser_tabs",
+      arguments:{session_id:sid,action:"list",operation_id:tabOp}},signal);
+    assert.equal(bad?.status,400);
+  }finally{
+    await engine.close();
+    await rm(root,{recursive:true,force:true});
+  }
 });
