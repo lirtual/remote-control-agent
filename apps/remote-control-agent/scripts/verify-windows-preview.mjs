@@ -16,7 +16,7 @@ export function inspectWindowsPreview(root) {
   if (manifest.name !== "remote-control-agent" ||
       manifest.target !== "windows-x64" || manifest.preview !== true ||
       manifest.node !== "v24.21.0" ||
-      manifest.upgrade_profile !== "read-only-no-shell-v1" ||
+      manifest.upgrade_profile !== "paired-full-v1" ||
       manifest.artifact_schema !== 1 || manifest.device_protocol !== 2 ||
       typeof manifest.hashes !== "object" || Array.isArray(manifest.hashes) ||
       !manifest.hashes) {

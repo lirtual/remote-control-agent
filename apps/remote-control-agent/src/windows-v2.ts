@@ -1,6 +1,6 @@
 /**
- * Windows native, foreground-only v2 preview. No Linux systemd, service, Shell
- * or mutable operations. Uses the existing single-code protocol and signed WSS.
+ * Windows native v2 agent, sharing the existing full paired-device tool surface.
+ * Uses Windows user-logon tasks, the single-code protocol and signed WSS.
  * No auto-enrolment on service start, implicit re-key, or remote consent bypass.
  */
 import { createHash } from "node:crypto";
@@ -154,8 +154,8 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       device_id = raw;
     }
     process.stdout.write(JSON.stringify({
-      platform: "win32", mode: "foreground-preview", identity_present: exists,
-      device_id, remote_connection: "unconfirmed", shell: false, write_file: false,
+      platform: "win32", mode: "native-user-agent", identity_present: exists,
+      device_id, remote_connection: "unconfirmed", shell: true, write_file: true,
     }, null, 2) + "\n");
     return;
   }
@@ -229,7 +229,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
-      capability: "read-only",
+      receiptDirectory: path.win32.join(directory, "receipts"),
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({

@@ -336,10 +336,10 @@ export async function maintainAuthenticatedDeviceSession(
     // Windows native preview explicitly keeps reads only; existing Linux
     // defaults remain full, preserving the already deployed owner contract.
     capability?: "read-only" | "full";
+    /** Durable receipt directory; native Windows passes its private user store. */
+    receiptDirectory?: string;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
-    /** Isolated local persistence for integration tests; defaults to normal receipts. */
-    receiptDirectory?: string;
   } = {},
 ): Promise<void> {
   const delay = options.wait ?? ((ms: number, abort: AbortSignal) =>
@@ -367,8 +367,8 @@ export async function maintainAuthenticatedDeviceSession(
         baseAddress, keyPath, options.send, options.makeSocket, signal,
       );
       if (signal.aborted) { connection.socket.close(); break; }
-      // Send one bounded report only after the signed session has opened.
-      connection.socket.send(JSON.stringify(collectDeviceInfo(options.capability ?? "full")));
+      // Report once per authenticated socket, including each reconnect.
+      connection.socket.send(JSON.stringify(collectDeviceInfo(full ? "full" : "read-only")));
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.

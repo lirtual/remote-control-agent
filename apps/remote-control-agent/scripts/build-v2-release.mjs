@@ -156,7 +156,7 @@ export function build(args) {
      /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
      !/const full = options\.capability !== "read-only"/.test(lifecycleSource) ||
      !/const execution = full \? createAgentExecutionEngine\(\{ receiptDirectory: options\.receiptDirectory \}\) : undefined/.test(lifecycleSource) ||
-     !/startUpgradeControl\(execution!, keyPath\)/.test(lifecycleSource) ||
+     !/startUpgradeControl\(execution(?:!)?, keyPath\)/.test(lifecycleSource) ||
      !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
      !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
     throw new Error("Reviewed paired full-tools release profile is not proven.");

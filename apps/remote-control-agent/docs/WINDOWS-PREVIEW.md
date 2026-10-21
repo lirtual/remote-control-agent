@@ -1,8 +1,43 @@
 # Native Windows preview (development only)
 
-This is the **Windows-native read-only preview** implementation, not a
-released Windows installer. It does not use WSL2, install a service, update
-existing Linux devices or grant remote Shell/file writes. A limited per-user logon task is available in the source candidate; it does not provide a boot-time Windows service.
+This document contains historical **read-only Windows RC** acceptance notes.
+The new **full-capability source branch** is an unmerged Draft; it is **not a
+released or deployed Windows installer**. It keeps the normal-user native Windows
+logon task and existing signed WSS pairing, with no WSL2/Linux service changes.
+Full file mutation and owned PowerShell session support require Windows CI and
+real-device acceptance before a separately authorized release.
+
+## Full-capability Windows source candidate (not released)
+
+The normal, paired Windows Agent in `feat/windows-full-remote-tools` uses the
+same full Remote Control operation engine as Linux. The native Windows entry
+no longer sets `capability: "read-only"`; it exposes Agent-authorized local
+file reads/writes, directory creation, editing, move/delete, search, and
+managed Shell/process operations with Operation ID/SQLite receipts.
+
+Managed commands run under the **existing logged-in Windows user** using
+Windows PowerShell (`-NoProfile -NonInteractive`), with hidden console
+windows. Agent-owned child process trees are terminated with Windows
+`taskkill /T /F` during force-terminate, timeout, revocation or shutdown;
+failed termination retains an unknown outcome rather than claiming success.
+Only an explicitly paired, signed authenticated device may receive these
+commands. No administrator escalation, shell capability flag, second MCP
+server, credential rotation or Worker secret is added.
+
+Operation receipts live below the Agent's existing privately ACL-protected
+`%LOCALAPPDATA%\\mcp-workers\\remote-control\\receipts` directory, not
+inside a versioned program folder. The new candidate uses the signed bundle
+profile `paired-full-v1` and keeps explicit verified rollback to installed
+`read-only-no-shell-v1` releases. A package with the new profile must be
+verified and accepted by real Windows CI; **existing installed RC releases
+remain read-only until separately authorized upgrade**.
+
+The Windows CI PR job performs synthetic temporary file and PowerShell
+session tests without contacting a real paired device, then checks the
+bundle manifest and local installer. **This is not production acceptance.**
+No publication, scheduled-task change on a real device, actual Remote
+Control command, Worker deployment or PR merge is authorized by this source
+branch alone.
 
 ## Developer smoke (Windows 11 x64, Node.js 24 and an approved HTTPS Worker)
 
@@ -39,7 +74,7 @@ pairing. Do not share the PEM file, modify ACLs or put secrets in the CLI.
 
 For native Windows file operations use drive-absolute paths such as
 `C:\Users\...`. UNC shares, Windows device namespaces, drive-relative
-paths, ADS and URL schemes are rejected. This preview enables only the
+paths, ADS and URL schemes are rejected. Older published RC builds enable only the
 existing bounded read/list/search tools; writes and Shell remain disabled.
 
 ## Unpublished portable candidate

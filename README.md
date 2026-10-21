@@ -2,13 +2,10 @@
 
 Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Native Windows preview — Draft only
-
-[PR #7](https://github.com/lirtual/remote-control-agent/pull/7) stages a native Windows x64 preview with independently paired Ed25519 identity, outbound signed WSS and a user-logon task. This PR's preview remains **read-only**; later full-tools and browser candidates are reviewed separately in Draft PRs #13 and #20. Do not install the draft over a running Agent or treat it as a released Windows package.
-
-See [Windows preview notes](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md) and [Issue #5](https://github.com/lirtual/remote-control-agent/issues/5). The Linux `install.sh` is not a native Windows installer.
-
 ## Current Linux v2 release
+
+Native Windows full-tools support is reviewed as a Draft branch, separate from published Linux releases. See [Windows preview notes](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md).
+
 
 The published immutable **v0.1.11** Agent enables file reads, file writes,
 Shell and managed sessions for approved paired devices. It runs as the user's
