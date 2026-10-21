@@ -322,5 +322,3 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
-
-

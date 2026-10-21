@@ -186,6 +186,8 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   const lifecycle = await readFile(path.join(testDir, "..", "src", "v2-connection-lifecycle.ts"), "utf8");
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
   assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
+  assert.match(lifecycle, /const execution = full\s*\?\s*createAgentExecutionEngine\(/);
+  assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
   assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
   assert.match(lifecycle, /const execution = full .*createAgentExecutionEngine.*receiptDirectory: options/);
   // The default paired profile is full; explicit read-only callers may still be denied.
