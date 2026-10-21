@@ -22,23 +22,25 @@ const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string;
+  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
 } {
   const action = argv[0];
   if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
-    if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version") ||
+    if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version" && key !== "--grant") ||
         (key === "--endpoint" && options.endpoint !== undefined) ||
         (key === "--name" && options.name !== undefined) ||
-        (key === "--version" && options.version !== undefined)) {
+        (key === "--version" && options.version !== undefined) ||
+        (key === "--grant" && (options.grant !== undefined || value !== "temporary"))) {
       throw Error("Unknown, duplicate or missing option.");
     }
     if (key === "--endpoint") options.endpoint = value;
     else if (key === "--name") options.name = value;
+    else if (key === "--grant") options.grant = "temporary";
     else options.version = value;
   }
   if (["status", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
@@ -46,12 +48,12 @@ export function parseWindowsAgentArgs(argv: string[]): {
   } else if (action === "upgrade" || action === "rollback") {
     if (argv.length !== 3 || !options.version ||
         !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(options.version) ||
-        options.endpoint !== undefined || options.name !== undefined) {
+        options.endpoint !== undefined || options.name !== undefined || options.grant !== undefined) {
       throw Error("Use upgrade/rollback --version vX.Y.Z.");
     }
   } else {
     if (options.version !== undefined) throw Error("Unexpected version flag.");
-    if (!options.endpoint || (action !== "pair" && options.name !== undefined)) {
+    if (!options.endpoint || (action !== "pair" && (options.name !== undefined || options.grant !== undefined))) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
     const url = new URL(options.endpoint);
@@ -221,7 +223,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       finally { prompt.close(); }
     }
     const material = newEnrollment(name,
-      exists ? await readFile(keyPath, "utf8") : undefined, "permanent");
+      exists ? await readFile(keyPath, "utf8") : undefined, options.grant ?? "permanent");
     if (!exists) {
       // The private directory already has a protected DACL. Exclusive create
       // prevents concurrent windows from overwriting a device's private key.
