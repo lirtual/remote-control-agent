@@ -155,7 +155,7 @@ test("reconnect obtains a fresh challenge and stops on abort without executing c
     assert.equal(sockets.length, 2);
     for (const socket of sockets) {
       assert.equal(socket.sent.length, 1, "one metadata report per signed session");
-      const info = JSON.parse(socket.sent[0]!) as {kind: string; capabilities: string[]};
+      const info = JSON.parse(socket.sent[0]!) as { kind: string; capabilities: string[] };
       assert.equal(info.kind, "device_info");
       assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
     }
@@ -835,4 +835,19 @@ test("Windows preview read-only capability rejects Shell and file mutations", as
     controller.abort();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("metadata reports only bounded non-secret runtime data and honors read-only capability", () => {
+  const readonly = collectDeviceInfo("read-only");
+  const full = collectDeviceInfo("full");
+  assert.equal(readonly.kind, "device_info");
+  assert.deepEqual(readonly.capabilities, ["read"]);
+  assert.deepEqual(full.capabilities, ["read", "file_write", "shell"]);
+  assert.ok(readonly.hostname.length > 0 && readonly.hostname.length <= 64);
+  assert.ok(readonly.os_version.length > 0 && readonly.os_version.length <= 96);
+  assert.ok(["native", "wsl2", "container"].includes(readonly.environment));
+  const wire = JSON.stringify(readonly);
+  assert.ok(wire.length <= 1200);
+  assert.equal(wire.includes("private_key"), false);
+  assert.equal(wire.includes("device_id"), false);
 });
