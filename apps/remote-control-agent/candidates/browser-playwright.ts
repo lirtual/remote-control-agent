@@ -113,10 +113,10 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         acceptDownloads: false, serviceWorkers: "block",
       });
       try {
-        // Apply to the entire dedicated context before allowing any page or
-        // navigation. Playwright invokes this for redirect hops and HTTP(S)
-        // subresources as well as the initial document. No new proxy, DNS
-        // resolver, or privileged network service is introduced.
+        // Apply to intercepted initial requests and direct HTTP(S) page
+        // subresources. Playwright does NOT re-route browser-followed HTTP
+        // redirects, so this is NOT redirect/private-network isolation.
+        // No proxy, DNS resolver or privileged network service is added.
         await context.route("**/*", async route => {
           try { checkedUrl(route.request().url(), false); }
           catch {

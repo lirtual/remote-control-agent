@@ -191,7 +191,7 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
   }finally{release();await rm(tmp,{recursive:true,force:true});}
 });
 
-test("context filters redirect hops and subresources with private/local-looking URLs before browser network fetch",async()=>{
+test("context filters intercepted direct local requests; real browser redirect follow-up is a separate unpassed gate",async()=>{
   const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-p5-request-guard-"));
   const fake=fakeBrowser();
   const manager=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
@@ -199,7 +199,8 @@ test("context filters redirect hops and subresources with private/local-looking 
     const session=await manager.start();
     assert.equal(fake.calls.filter(x=>x==="context-route").length,1);
     assert.ok(fake.calls.indexOf("context-route")<fake.calls.indexOf("timeout:5000"));
-    // Represent redirected document hops, iframes and HTTP(S) subresources.
+    // These are simulated requests delivered to the route callback.
+    // They do not prove the callback is re-invoked on a browser-followed 302.
     for (const url of [
       "http://127.0.0.1:18781/p4/private",
       "http://10.1.2.3/",
