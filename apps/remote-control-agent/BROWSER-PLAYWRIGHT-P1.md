@@ -11,6 +11,20 @@ Design-only amendment H1–H4, from the new interview's **Q1=A, Q2=A, Q3=A, Q4=B
 
 **Present source still differs from this agreed design:** BrowserManager currently uses headless:true, channel:"chrome", one fixed Profile path, and no handoff state or human-resume tool. No code was changed by this document. All browser tools remain disabled in the Worker; no high-impact authorization, real browser MCP E2E, public Release, installation, merge or deployment is inferred or authorized.
 
+## Owner-accepted Windows browser handoff — Grill With Docs round 2 (2026-10-21)
+
+**Decision H5–H11: all A**, extending the previous H1=A, H2=A, H3=A, H4=B. Authoritative reviewed architecture is [mcp-workers PR #117](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md#windows-browser-handoff-and-default-selection--new-grill-with-docs-round-1-2026-10-21).
+
+- **H5:** Positively established user activity **within the controlled browser page** counts toward the existing 30-minute idle deadline even in Human Control. No automatic assumption that window focus, global desktop activity, script-generated events or blind polling proves a human was active. The activity-detection mechanism and secrecy of typed data are undecided.
+- **H6:** After 30 actual idle minutes, the owned headed browser session closes **automatically even in Human Control**; keep private browser-family Profile and existing SQLite receipts. A new browser session is required afterward; expiration does not mean an unknown website effect was undone. Warning behavior remains undecided.
+- **H7:** Only owner-directed **ChatGPT → existing Remote Control MCP** resume returns control to Agent. No new local Windows control panel or external handoff service; do not confuse a resume message with verified one-use authorization of a website transaction. Exact owner/session binding remains unresolved.
+- **H8:** Handoff requests immediately stop *new* Agent browser-action admissions, wait for an already-admitted bounded effect to finish or reach its timeout, then transfer control while preserving completed/failed/unknown operation receipt semantics. Do not cancel externally-effectful actions optimistically or replay any ambiguous effect.
+- **H9:** At new-session start, only if the current Windows user's **HTTP and HTTPS** effective defaults both consistently resolve to supported, launchable Chrome or Edge may the Playwright manager select channel chrome or msedge. Missing, ambiguous, conflicting, unsupported or inaccessible defaults fail explicitly; no implicit installed-browser fallback. An active session stays on its originally selected browser.
+- **H10:** Regardless of browser-specific Agent-owned Profile directories, permit only **one active automation browser session per paired device**, preventing concurrent Chrome/Edge automation contexts.
+- **H11:** Native Windows sessions require a usable **visible interactive desktop**; fail clearly at startup if unavailable instead of silently launching headless. Lock/logout handling *during* a session is unresolved.
+
+**Current candidate is not yet compliant:** its Playwright manager still hardcodes headless:true and channel:"chrome", single Profile location and single-tab lifecycle; it lacks verified user-activity detection, handoff/resume tool/state and a Windows-default browser resolver. The existing 30-minute idle timer is currently based on Agent activity, not demonstrated trusted human input. No code, manifest, runtime verification, release, task, Portal/Worker toggle or production Agent was changed by this documentation commit. High-impact/ambiguous webpage effects remain denied without separately proven exact one-use owner approval. Browser MCP tools remain disabled.
+
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
 ## P13 latest combined acceptance — installed host and signed MCP (2026-10-21)
