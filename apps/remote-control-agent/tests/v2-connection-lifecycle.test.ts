@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { newEnrollment } from "../src/v2-enrollment.ts";
 import { maintainAuthenticatedDeviceSession, monitorDeviceSocket } from "../src/v2-connection-lifecycle.ts";
+import { collectDeviceInfo } from "../src/device-info.ts";
 import { createAgentExecutionEngine } from "../src/execution.ts";
 import type { BrowserBackend } from "../src/browser-backend.ts";
 
@@ -153,8 +154,12 @@ test("reconnect obtains a fresh challenge and stops on abort without executing c
     assert.deepEqual(states, ["connected", "disconnected", "connected"]);
     assert.deepEqual(delays, [1000]);
     assert.equal(sockets.length, 2);
-    assert.deepEqual(sockets[0]!.sent, ["rc-v2:ping"]);
-    assert.deepEqual(sockets[1]!.sent, []);
+    for (const socket of sockets) {
+      assert.equal(socket.sent.length, 1, "one metadata report per signed session");
+      const info = JSON.parse(socket.sent[0]!) as {kind: string; capabilities: string[]};
+      assert.equal(info.kind, "device_info");
+      assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
+    }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -722,6 +727,7 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
     await writeFile(keyPath, enrollment.privateKeyPem, { mode: 0o600 });
     await writeFile(keyPath + ".device-id", deviceId + "\n", { mode: 0o600 });
     await maintainAuthenticatedDeviceSession("https://agent.example/", keyPath, controller.signal, {
+      receiptDirectory: path.join(dir, "receipts"),
       send: async () => Response.json({ device_id: deviceId, nonce: "A".repeat(24) }),
       makeSocket: () => {
         socket = new FakeSocket();
@@ -752,6 +758,19 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
     controller.abort();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("minimal runtime metadata never includes device ID or secrets", () => {
+  const info = collectDeviceInfo("full");
+  assert.equal(info.kind, "device_info");
+  assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
+  assert.ok(info.hostname.length > 0 && info.hostname.length <= 64);
+  assert.ok(info.os_version.length > 0 && info.os_version.length <= 96);
+  assert.ok(["native", "wsl2", "container"].includes(info.environment));
+  const json = JSON.stringify(info);
+  assert.ok(json.length <= 1200);
+  assert.equal(json.includes("private_key"), false);
+  assert.equal(json.includes("device_id"), false);
 });
 
 

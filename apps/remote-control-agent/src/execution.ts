@@ -45,6 +45,8 @@ export interface AgentExecutionEngine {
   ): Promise<AgentExecutionReply | undefined>;
   getReceipt(id: string): Promise<OperationReceipt | null>;
   stopOwnedForRevocation(): Promise<"confirmed" | "uncertain">;
+  freezeForUpgrade(): boolean;
+  releaseUpgradeFreeze(): void;
   close(): Promise<void>;
 }
 
@@ -74,6 +76,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
+  let upgradeFrozen = false;
+  let admittingMutations = 0;
   const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
@@ -218,7 +222,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     }
   }
 
-  async function executeTool(
+  async function executeToolCore(
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined> {
@@ -514,8 +518,39 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     return reply;
   }
 
+  // Count admissions from BEFORE the first await. An async SQLite admit or
+  // process spawn must not be invisible to the in-process upgrade handshake.
+  async function executeTool(
+    body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
+    signal: AbortSignal,
+  ): Promise<AgentExecutionReply | undefined> {
+    const mutation = [
+      "write_file", "create_directory", "edit_block", "move_file", "delete_file",
+      "start_process", "interact_with_process", "force_terminate",
+      "browser_start", "browser_navigate", "browser_close",
+    ].includes(String(body.tool));
+    if (!mutation) return executeToolCore(body, signal);
+    if (upgradeFrozen) return { status: 503, body: { status: "unavailable" } };
+    admittingMutations++;
+    try { return await executeToolCore(body, signal); }
+    finally { admittingMutations--; }
+  }
+
   return {
     executeTool,
+    freezeForUpgrade: () => {
+      if (upgradeFrozen) return false;
+      // Setting this first excludes any new admission in the same JS event loop.
+      upgradeFrozen = true;
+      if (admittingMutations > 0 || inFlight.size > 0 ||
+          (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
+          !sessions.isQuiescentForUpgrade()) {
+        upgradeFrozen = false;
+        return false;
+      }
+      return true;
+    },
+    releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
       await ensureReceipts();
       return receipts.get(id);

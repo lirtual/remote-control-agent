@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import {
-  validateManualUpgrade,prepareManualUpgrade,activateManualUpgrade
+  validateManualUpgrade,prepareManualUpgrade,activateManualUpgrade,resolveWorkerUpgradePin
 } from "../scripts/upgrade-v2.mjs";
 import { runInteractiveLocalManager } from "../scripts/manage-v2.mjs";
 
@@ -177,4 +177,83 @@ test("service activation rejection propagates without touching keys or receipt",
     assert.equal(readFileSync(f.ids,"utf8"),ID);
     assert.equal(readFileSync(f.receipt,"utf8"),"PRESERVE_RECEIPT");
   }finally{cleanup(f);}
+});
+
+
+function workerInstallFixture(endpoint=ENDPOINT){
+  return [
+    "#!/bin/sh",
+    "# Worker-origin Agent installer: published immutable GitHub archive only",
+    "set -eu",
+    'case "$(uname -m)" in',
+    " x86_64) target=linux-x64-glibc; expected=" + "a".repeat(64) + " ;;",
+    " aarch64) target=linux-arm64-glibc; expected=" + "b".repeat(64) + " ;;",
+    "esac",
+    "printf '%s\n' 'sha256sum -c -'",
+    '"$stage/node" "$stage/bootstrap-node.mjs" --archive "$archive" --tag "' +
+      tag + '" --commit "' + commit + '" --sha256 "$expected" --endpoint "' +
+      endpoint + '" "$@" < /dev/tty',
+  ].join("\n") + "\n";
+}
+const mockWorkerResponse=(url,body,status=200)=>({
+  ok:status===200,status,url,headers:new Headers(),
+  text:async()=>body,
+});
+test("rca upgrade discovers only bound Worker immutable pin without executing fetched script",async()=>{
+  let fetched;
+  const pin=await resolveWorkerUpgradePin(ENDPOINT,{request:async(url,opts)=>{
+    fetched={url,opts};
+    return mockWorkerResponse(url,workerInstallFixture());
+  }});
+  assert.deepEqual({...pin},{tag,commit});
+  assert.equal(fetched.url,ENDPOINT+"install.sh");
+  assert.equal(fetched.opts.redirect,"error");
+});
+test("reviewed pin discovery fails closed on wrong endpoint, redirects and ambiguous content",async()=>{
+  const source=workerInstallFixture();
+  const request=async(url)=>mockWorkerResponse(url,source);
+  await assert.rejects(resolveWorkerUpgradePin("http://evil.example/",{request}),/Untrusted/);
+  await assert.rejects(resolveWorkerUpgradePin(ENDPOINT,{request:async(url)=>
+    mockWorkerResponse("https://other.example/install.sh",source)}),/unavailable/);
+  await assert.rejects(resolveWorkerUpgradePin(ENDPOINT,{request:async(url)=>
+    mockWorkerResponse(url,source+source)}),/unambiguous/);
+  await assert.rejects(resolveWorkerUpgradePin(ENDPOINT,{request:async(url)=>
+    mockWorkerResponse(url,source.replace("sha256sum -c -","skip-check"))}),/Unrecognized/);
+  await assert.rejects(resolveWorkerUpgradePin(ENDPOINT,{request:async(url)=>
+    mockWorkerResponse(url,source.replace(ENDPOINT,"https://other.example/"))}),/unambiguous/);
+});
+test("rca upgrade with no tag or commit uses reviewed Worker release, preserving recovery order",async()=>{
+  const calls=[];
+  const state={unit:"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\nEnvironment=REMOTE_CONTROL_V2_ENDPOINT="+ENDPOINT+"\n",
+    root:"old-root",info:{version:"v0.1.2"},ids:{permanent:ID}};
+  const prepared={version:tag,program:"new-root"};
+  const rc=await runInteractiveLocalManager(["upgrade"],{
+    home:"/tmp/rca-zero-arg-test",stdin:{isTTY:true},stdout:{isTTY:true,write:()=>{}},
+    recoverInterruptedUpgrade:async()=>{calls.push("recover");},
+    inventory:()=>{calls.push("inventory");return state;},
+    resolveWorkerPin:async(endpoint)=>{calls.push("pin");assert.equal(endpoint,ENDPOINT);return {tag,commit};},
+    prepareUpgrade:async(_,pin)=>{calls.push("prepare");assert.deepEqual(pin,{tag,commit});return prepared;},
+    activateUpgrade:()=>{calls.push("activate");return prepared;},
+  });
+  assert.equal(rc,0);
+  assert.deepEqual(calls,["recover","inventory","pin","prepare","activate"]);
+});
+
+test("rca upgrade is idempotent if bound Worker already pins installed release",async()=>{
+  const calls=[];
+  let output="";
+  const unit="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n"+
+    "Environment=REMOTE_CONTROL_V2_ENDPOINT="+ENDPOINT+"\n";
+  const result=await runInteractiveLocalManager(["upgrade"],{
+    home:"/tmp/rca-up-to-date-test",stdin:{isTTY:true},
+    stdout:{isTTY:true,write:x=>{output+=x;}},
+    recoverInterruptedUpgrade:async()=>{calls.push("recover");},
+    inventory:()=>({unit,root:"old-root",info:{version:tag},ids:{permanent:ID}}),
+    resolveWorkerPin:async()=>({tag,commit}),
+    prepareUpgrade:async()=>{calls.push("download");throw Error("must not download");},
+    activateUpgrade:()=>{calls.push("activate");throw Error("must not activate");},
+  });
+  assert.equal(result,0);
+  assert.deepEqual(calls,["recover"]);
+  assert.match(output,/Already up to date/);
 });

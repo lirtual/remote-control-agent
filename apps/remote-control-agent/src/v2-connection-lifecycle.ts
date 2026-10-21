@@ -5,10 +5,12 @@
  * Hibernation heartbeat responses do not wake the DO.
  */
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
+import { collectDeviceInfo } from "./device-info.ts";
 import { executeReadTool } from "./read-execution.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
 import { SearchSessions } from "./search.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
+import { startUpgradeControl } from "./upgrade-control.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
 import { parseBrowserArguments } from "./browser-operations.ts";
@@ -358,11 +360,17 @@ export async function maintainAuthenticatedDeviceSession(
     }));
   // One receipt engine for the Agent lifetime, not one per reconnect. The
   // original local receipt store owns idempotency; DO never stores/replays it.
+  if (signal.aborted) return;
   const full = options.capability !== "read-only";
   if (!full && options.browser) throw Error("Read-only Agent cannot attach browser capabilities.");
   const execution = full ? createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory, browser: options.browser,
   }) : undefined;
+  let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
+  if (full && process.platform !== "win32") {
+    try { upgradeControl = await startUpgradeControl(execution!, keyPath); }
+    catch (error) { await execution!.close(); throw error; }
+  }
   let failures = 0;
   try {
   while (!signal.aborted) {
@@ -371,6 +379,8 @@ export async function maintainAuthenticatedDeviceSession(
         baseAddress, keyPath, options.send, options.makeSocket, signal,
       );
       if (signal.aborted) { connection.socket.close(); break; }
+      // Report only after signed authentication; each reconnect refreshes the snapshot.
+      connection.socket.send(JSON.stringify(collectDeviceInfo(full ? "full" : "read-only")));
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
@@ -420,6 +430,7 @@ export async function maintainAuthenticatedDeviceSession(
     await delay(capped, signal);
   }
   } finally {
+    await upgradeControl?.close();
     await execution?.close();
   }
 }

@@ -1,0 +1,164 @@
+name: Publish approved Agent Release
+
+# Only a reviewed, committed release request or an explicit maintainer dispatch.
+# Ordinary main pushes, tags, CI completion and PRs never publish.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/release-requests/v0.1.9.json
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Reviewed immutable release candidate
+        type: choice
+        required: true
+        options: [v0.1.9]
+      approval:
+        description: Type PUBLISH-v0.1.9 to approve public prerelease
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-release-v0.1.9
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.1.9' }}
+      RELEASE_APPROVAL: ${{ github.event_name == 'workflow_dispatch' && inputs.approval || 'PUBLISH-v0.1.9' }}
+      RELEASE_EVENT: ${{ github.event_name }}
+    steps:
+      - name: Checkout reviewed publishing manifest
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check explicit approval and signed-off source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_TAG" != v0.1.9 || "$RELEASE_APPROVAL" != PUBLISH-v0.1.9 ]]; then
+            echo "Release requires exact reviewed tag and explicit human approval" >&2
+            exit 1
+          fi
+          pin=".github/release-pins/$RELEASE_TAG.json"
+          test -f "$pin"
+          jq -e --arg tag "$RELEASE_TAG" '
+            .tag == $tag and
+            (.source_sha | test("^[a-f0-9]{40}$")) and
+            (.candidate_run_id | type == "number") and
+            (.assets | length == 2) and
+            .assets[0].target == "linux-x64-glibc" and
+            .assets[1].target == "linux-arm64-glibc" and
+            ([.assets[].sha256 | test("^[a-f0-9]{64}$")] | all)
+          ' "$pin" >/dev/null
+          sha="$(jq -r .source_sha "$pin")"
+          git merge-base --is-ancestor "$sha" "$GITHUB_SHA"
+          run_id="$(jq -r .candidate_run_id "$pin")"
+          if [[ "$RELEASE_EVENT" == push ]]; then
+            request=".github/release-requests/v0.1.9.json"
+            test -f "$request"
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$sha" --argjson run "$run_id" '
+              .approved == true and .tag == $tag and
+              .source_sha == $sha and .candidate_run_id == $run
+            ' "$request" >/dev/null
+          fi
+          gh api "repos/$GH_REPO/actions/runs/$run_id" |
+            jq -e --arg sha "$sha" '
+              .event == "workflow_dispatch" and
+              .head_branch == "main" and
+              .head_sha == $sha and
+              .status == "completed" and
+              .conclusion == "success"
+            ' >/dev/null
+          if [[ -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")" ]] ||
+             gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Existing release/tag may not be overwritten" >&2
+            exit 1
+          fi
+
+      - name: Fetch and verify only pinned dual-native candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=".github/release-pins/$RELEASE_TAG.json"
+          run_id="$(jq -r .candidate_run_id "$pin")"
+          mkdir -p "$RUNNER_TEMP/publish"
+          for i in 0 1; do
+            target="$(jq -r ".assets[$i].target" "$pin")"
+            artifact="$(jq -r ".assets[$i].artifact" "$pin")"
+            filename="$(jq -r ".assets[$i].name" "$pin")"
+            digest="$(jq -r ".assets[$i].sha256" "$pin")"
+            output="$RUNNER_TEMP/candidates/$target"
+            mkdir -p "$output"
+            gh run download "$run_id" --name "$artifact" --dir "$output"
+            archive="$output/$target/$filename"
+            record="$output/$target/SHA256SUMS.txt"
+            test -f "$archive" && test ! -L "$archive"
+            test -f "$record" && test ! -L "$record"
+            printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --status
+            grep -Fx "$digest  release-candidate/$target/$filename" "$record" >/dev/null
+            tar -xzOf "$archive" bundle.json | jq -e \
+              --arg version "$RELEASE_TAG" --arg target "$target" '
+                .name == "remote-control-agent" and
+                .version == $version and .target == $target and
+                .artifact_schema == 1 and .device_protocol == 2 and
+                .receipt_schema == 1 and .upgrade_profile == "paired-full-v1"
+              ' >/dev/null
+            cp -- "$archive" "$RUNNER_TEMP/publish/$filename"
+          done
+          jq -r '.assets[] | "\(.sha256)  \(.name)"' "$pin" > "$RUNNER_TEMP/publish/SHA256SUMS"
+          ( cd "$RUNNER_TEMP/publish" && sha256sum --check SHA256SUMS )
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 3
+
+      - name: Upload draft, re-download/check assets, publish immutable prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=".github/release-pins/$RELEASE_TAG.json"
+          sha="$(jq -r .source_sha "$pin")"
+          title="$(jq -r .release_title "$pin")"
+          notes="$(jq -r .release_notes "$pin")"
+          test -f "$notes"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1 ||
+             [[ -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")" ]]; then
+            echo "Release/tag appeared during validation; abort" >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" \
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz" \
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz" \
+            "$RUNNER_TEMP/publish/SHA256SUMS" \
+            --target "$sha" --title "$title" \
+            --notes-file "$notes" --prerelease --draft
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease |
+            jq -e '.isDraft == true and .isPrerelease == true' >/dev/null
+          mkdir -p "$RUNNER_TEMP/recheck"
+          gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/recheck" --clobber
+          test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 3
+          ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS )
+          gh release edit "$RELEASE_TAG" --draft=false
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
+            jq -e --arg tag "$RELEASE_TAG" '
+              .tag_name == $tag and .draft == false and
+              .prerelease == true and .immutable == true
+            ' >/dev/null
+          gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" |
+            jq -e --arg sha "$sha" '
+              .object.type == "commit" and .object.sha == $sha
+            ' >/dev/null
+          echo "Immutable GitHub prerelease $RELEASE_TAG published; no Worker deployment."
