@@ -8,6 +8,11 @@ import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
 function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
   const calls: string[] = [];
+  let requestFilter: ((route: {
+    request(): {url(): string};
+    continue(): Promise<void>;
+    abort(reason: string): Promise<void>;
+  }) => Promise<void>) | undefined;
   const page = {
     setDefaultTimeout: (ms: number) => { calls.push("timeout:"+ms); },
     goto: async (url: string) => {
@@ -22,7 +27,15 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
   };
   const context = {
     pages: () => options.restoredUrl ? [{url:()=>options.restoredUrl,close:async()=>{}}] : [],
-    newPage: async () => page,
+    newPage: async () => {
+      assert.ok(requestFilter, "Request filtering must precede page creation.");
+      return page;
+    },
+    route: async (pattern: string, filter: typeof requestFilter) => {
+      assert.equal(pattern, "**/*");
+      requestFilter=filter;
+      calls.push("context-route");
+    },
     close: async () => {calls.push("context-close");},
   };
   const driver = {
@@ -37,7 +50,18 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       return context;
     },
   } as unknown as BrowserType<{}>;
-  return {driver,calls};
+  return {driver,calls,
+    request:async (url:string) => {
+      assert.ok(requestFilter);
+      let outcome="";
+      await requestFilter!({
+        request:()=>({url:()=>url}),
+        continue:async()=>{ outcome="continue"; },
+        abort:async(reason:string)=>{assert.equal(reason,"blockedbyclient");outcome="blocked";},
+      });
+      return outcome;
+    },
+  };
 }
 
 test("one Playwright-only session reuses Agent Profile, provides AI snapshot, and closes owned context",async()=>{
@@ -165,4 +189,37 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
     assert.equal(browser.status(),null);
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
   }finally{release();await rm(tmp,{recursive:true,force:true});}
+});
+
+test("context filters redirect hops and subresources with private/local-looking URLs before browser network fetch",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-p5-request-guard-"));
+  const fake=fakeBrowser();
+  const manager=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
+  try {
+    const session=await manager.start();
+    assert.equal(fake.calls.filter(x=>x==="context-route").length,1);
+    assert.ok(fake.calls.indexOf("context-route")<fake.calls.indexOf("timeout:5000"));
+    // Represent redirected document hops, iframes and HTTP(S) subresources.
+    for (const url of [
+      "http://127.0.0.1:18781/p4/private",
+      "http://10.1.2.3/",
+      "http://192.168.5.10/image.png",
+      "http://169.254.169.254/metadata",
+      "http://[::1]/",
+      "http://2130706433/admin",
+      "http://localhost:18781/",
+      "https://printer.local/file",
+      "https://db.internal/query",
+      "https://intranet/",
+      "file:///C:/Users/owner/secrets",
+    ]) assert.equal(await fake.request(url),"blocked",url);
+    for(const url of [
+      "https://example.com/",
+      "https://cdn.example.net/image.png",
+      "https://example.org/very-long-asset?"+"q".repeat(2400),
+    ]) assert.equal(await fake.request(url),"continue",url);
+    // Context request interception cannot pin DNS resolutions or necessarily
+    // capture WebSocket traffic; these tests do NOT certify an SSRF sandbox.
+    await manager.close(session.session_id);
+  }finally{await rm(tmp,{recursive:true,force:true});}
 });

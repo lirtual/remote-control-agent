@@ -28,8 +28,9 @@ export interface PlaywrightBrowserOptions {
   idleMsForTests?: number;
 }
 
-function checkedUrl(value: string): string {
-  if (typeof value !== "string" || !value || value.length > 2048 ||
+function checkedUrl(value: string, initialNavigation = true): string {
+  if (typeof value !== "string" || !value ||
+      (initialNavigation && value.length > 2048) ||
       /[\x00-\x20\x7f]/.test(value)) throw Error("Invalid navigation URL.");
   let url: URL;
   try { url = new URL(value); } catch { throw Error("Invalid navigation URL."); }
@@ -41,7 +42,8 @@ function checkedUrl(value: string): string {
       url.hostname.startsWith("[") || !url.hostname.includes(".")) {
     throw Error("Navigation target outside first-phase public HTTP(S) scope.");
   }
-  // NOT an SSRF/redirect/subresource firewall; hostile egress remains unverified.
+  // Hostname-only hygiene. DNS rebinding, alternate address resolution,
+  // WebSockets and browser egress are NOT proven isolated by this function.
   return url.toString();
 }
 
@@ -111,6 +113,18 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         acceptDownloads: false, serviceWorkers: "block",
       });
       try {
+        // Apply to the entire dedicated context before allowing any page or
+        // navigation. Playwright invokes this for redirect hops and HTTP(S)
+        // subresources as well as the initial document. No new proxy, DNS
+        // resolver, or privileged network service is introduced.
+        await context.route("**/*", async route => {
+          try { checkedUrl(route.request().url(), false); }
+          catch {
+            await route.abort("blockedbyclient").catch(() => {});
+            return;
+          }
+          await route.continue();
+        });
         if (this.revoked) throw Error("Browser ownership revoked during startup.");
         const pages = context.pages();
         // A persistent Profile may restore tabs. Never operate pre-existing pages.

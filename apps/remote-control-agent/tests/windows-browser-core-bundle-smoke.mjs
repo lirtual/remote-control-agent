@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {createServer} from "node:http";
 import {createHash} from "node:crypto";
 import {mkdtemp,readFile,writeFile,rm} from "node:fs/promises";
 import {spawnSync} from "node:child_process";
@@ -66,6 +67,43 @@ try{
   assert.equal(session.backend,"playwright");
   const snapshot=await ownedBrowser.snapshot(session.session_id);
   assert.ok(snapshot.snapshot_version>0 && typeof snapshot.text==="string");
+  // Verify the ACTUAL packaged BrowserManager context, not just a stub. The
+  // server binds loopback and never communicates with any other internal site.
+  let localHits=0;
+  const localServer=createServer((_request,response)=>{
+    localHits++;
+    response.writeHead(200,{"content-type":"text/plain"});
+    response.end("PRIVATE_ENDPOINT_REACHED");
+  });
+  await new Promise((resolve,reject)=>{
+    localServer.once("error",reject);
+    localServer.listen(0,"127.0.0.1",resolve);
+  });
+  try {
+    const address=localServer.address();
+    assert.ok(address && typeof address!=="string");
+    const privateUrl="http://127.0.0.1:"+address.port+"/private";
+    const context=ownedBrowser.context;
+    assert.ok(context,"Expected the test-owned Chromium Context");
+    const ownedPage=context.pages()[0];
+    assert.ok(ownedPage);
+    await ownedPage.setContent('<img src="'+privateUrl+'/asset">');
+    await ownedPage.waitForTimeout(250);
+    assert.equal(localHits,0,"A local-image subresource must be blocked");
+    // The initial public-looking address is mocked in-process to redirect;
+    // the redirect target is the actual test-only loopback HTTP server.
+    await ownedPage.route("https://p5.example.invalid/start", async route=>{
+      await route.fulfill({status:302,headers:{location:privateUrl}});
+    });
+    await assert.rejects(
+      ownedBrowser.navigate(session.session_id,"https://p5.example.invalid/start"),
+      /ERR_BLOCKED_BY_CLIENT|net::ERR|Navigation|goto/i,
+    );
+    assert.equal(localHits,0,"A redirected local target must not be fetched");
+    console.log("P5_WINDOWS_PACKAGED_CHROME_LOCAL_REDIRECT_AND_SUBRESOURCE_DENIED=PASS");
+  } finally {
+    await new Promise(resolve=>localServer.close(resolve));
+  }
   await ownedBrowser.close(session.session_id);
   assert.equal(ownedBrowser.status(),null);
   console.log("P3_REAL_PACKAGED_AGENT_BROWSER_MANAGER_START_SNAPSHOT_CLOSE=PASS");
