@@ -379,7 +379,7 @@ export async function maintainAuthenticatedDeviceSession(
         baseAddress, keyPath, options.send, options.makeSocket, signal,
       );
       if (signal.aborted) { connection.socket.close(); break; }
-      // Report only after signed authentication; each reconnect refreshes the snapshot.
+      // Report once per authenticated socket, including each reconnect.
       connection.socket.send(JSON.stringify(collectDeviceInfo(full ? "full" : "read-only")));
       const connectedAt = performance.now();
       options.onState?.("connected");
