@@ -189,7 +189,7 @@ test("Node uninstall asks for explicit exact confirmation before any action",asy
   }finally{cleanup(f);}
 });
 
-test("Node manual upgrade requires local TTY and explicit immutable tag + commit",async()=>{
+test("Node explicit upgrade requires local TTY and correctly paired tag + commit arguments",async()=>{
   const f=fixture();
   try{
     const state=localManagerInventory({home:f.home,source:f.manager});
@@ -205,7 +205,7 @@ test("Node manual upgrade requires local TTY and explicit immutable tag + commit
       activateUpgrade:p=>{
         calls.push(["activate",p]);return {version:"v0.1.3"};
       }};
-    await assert.rejects(runInteractiveLocalManager(["upgrade"],options),/Use rca upgrade/);
+    await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3"],options),/Use rca upgrade/);
     await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3",pinned],{
       ...options,stdin:{isTTY:false}
     }),/local terminal/);

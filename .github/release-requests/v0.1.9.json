@@ -1,0 +1,8 @@
+{
+  "approved": true,
+  "tag": "v0.1.9",
+  "source_sha": "a5c875f9d5e4332ca1ba19dcc5ee6a22ca88e2bb",
+  "candidate_run_id": 39347151469,
+  "scope": "GitHub Release only: two audited Linux archives + SHA256SUMS; publish immutable public prerelease. Do not deploy Worker or upgrade devices.",
+  "approval_source": "Explicit user authorization in conversation on 2026-10-20."
+}

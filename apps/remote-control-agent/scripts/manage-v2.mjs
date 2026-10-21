@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { planLocalUninstall, executeLocalUninstall } from "./lifecycle-v2.mjs";
-import { prepareManualUpgrade, activateManualUpgrade } from "./upgrade-v2.mjs";
+import { prepareManualUpgrade, activateManualUpgrade, resolveWorkerUpgradePin } from "./upgrade-v2.mjs";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -144,8 +144,8 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   if(args.length>2)throw Error("Too many rca arguments");
   if(args.length>1&&cmd!=="pair")throw Error("Only documented rca subcommands are accepted");
   if(cmd==="help"||cmd==="--help"||cmd==="-h"){
-    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|upgrade TAG COMMIT|uninstall] — Python-free Draft CLI\n");
-    stdout.write("Manual upgrade: rca upgrade <reviewed-tag> <reviewed-40-char-commit>.\n");
+    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|upgrade|uninstall] — Python-free Draft CLI\n");
+    stdout.write("Upgrade from the approved Worker: rca upgrade.\n");
     return 0;
   }
   if(cmd==="version"||cmd==="--version"){
@@ -214,10 +214,8 @@ export async function runInteractiveLocalManager(args,{
           continue;
         }
         if(choice==="4"){
-          const pin=(await rl.question("Reviewed Release tag and Git commit: ")).trim().split(/\s+/);
-          if(pin.length!==2)throw Error("Manual upgrade needs tag and commit");
           rl.close();
-          return runInteractiveLocalManager(["upgrade",...pin],{
+          return runInteractiveLocalManager(["upgrade"],{
             inventory,home,stdin,stdout,ask,plan,execute,...rest,
           });
         }
@@ -232,7 +230,7 @@ export async function runInteractiveLocalManager(args,{
     }finally{rl.close();}
   }
   if(args[0]==="upgrade"){
-    if(args.length!==3)throw Error("Use rca upgrade <reviewed-tag> <reviewed-40-char-commit>");
+    if(args.length!==1&&args.length!==3)throw Error("Use rca upgrade");
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");
     const upgrade=rest.prepareUpgrade??prepareManualUpgrade;
     const activate=rest.activateUpgrade??activateManualUpgrade;
@@ -240,7 +238,13 @@ export async function runInteractiveLocalManager(args,{
       (await import("./install-v2.mjs")).recoverInterruptedUpgrade;
     await recover({home});
     const state=inventory();
-    const prepared=await upgrade(state,{tag:args[1],commit:args[2]},{home});
+    const pins=args.length===3 ? {tag:args[1],commit:args[2]}
+      : await (rest.resolveWorkerPin??resolveWorkerUpgradePin)(trustedInstalledEndpoint(state.unit));
+    if(pins.tag===state.info.version){
+      stdout.write("Already up to date with the reviewed Worker Release ("+pins.tag+").\n");
+      return 0;
+    }
+    const prepared=await upgrade(state,pins,{home});
     let result;
     try { result=activate(prepared); }
     catch { throw new Error(MANUAL_UPGRADE_ACTIVATION_FAILURE); }

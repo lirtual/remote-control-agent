@@ -187,8 +187,9 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   assert.match(entry, /maintainAuthenticatedDeviceSession/);
   assert.doesNotMatch(entry, /(?:readOnly|writeFile|shell)\s*:/);
   assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
-  assert.match(lifecycle, /const execution = full \? createAgentExecutionEngine\(\) : undefined/);
-  // Linux defaults to full; Windows explicitly opts out of mutable execution.
+  assert.match(lifecycle, /const execution = full \? createAgentExecutionEngine\(\{ receiptDirectory: options\.receiptDirectory \}\) : undefined/);
+  assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
+  // Linux must remain full with an upgrade guard; Windows read-only cannot execute mutations.
   assert.match(lifecycle, /full && execution/);
   assert.match(lifecycle, /const searches = new SearchSessions\(\)/);
   assert.match(lifecycle, /executeV2FileOperation\(execution,/);

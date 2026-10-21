@@ -148,14 +148,15 @@ export function build(args) {
   for (const relative of ["bin/node","apps/remote-control-agent/.build/session-supervisor"]) {
     chmodSync(path.join(work,relative),0o700);
   }
-  // A paired full-tools package is eligible only for a one-way, reviewed
-  // promotion from a read-only installation. Full-to-full upgrade is blocked.
+  // Both full-tools operation routing and the owner-local admission freeze
+  // must be present in a future reviewed Release. No unsafe promotion.
   const entrySource=readFileSync(path.join(source,"v2-main.ts"),"utf8");
   const lifecycleSource=readFileSync(path.join(source,"v2-connection-lifecycle.ts"),"utf8");
   if(!/V2_RUNTIME_PROFILE\s*=\s*"paired-full-v1"/.test(entrySource) ||
      /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
      !/const full = options\.capability !== "read-only"/.test(lifecycleSource) ||
-     !/const execution = full \? createAgentExecutionEngine\(\) : undefined/.test(lifecycleSource) ||
+     !/const execution = full \? createAgentExecutionEngine\(\{ receiptDirectory: options\.receiptDirectory \}\) : undefined/.test(lifecycleSource) ||
+     !/startUpgradeControl\(execution!, keyPath\)/.test(lifecycleSource) ||
      !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
      !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
     throw new Error("Reviewed paired full-tools release profile is not proven.");
