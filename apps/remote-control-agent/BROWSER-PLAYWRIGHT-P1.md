@@ -2,6 +2,44 @@
 
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
+## P13 latest combined acceptance — installed host and signed MCP (2026-10-21)
+
+**Pinned Draft:** Agent PR #20 `9acc214`, Worker PR #143 `251587f`.
+Native Windows, Linux x64 and ARM64 candidate CI passed; no published
+Release or upgrade of the existing owner-installed Agent occurred.
+
+**Real Windows browser and durable receipts: PASS.** The locally compiled,
+SHA-pinned portable Windows candidate ran Playwright with its own separate
+Profile, opened the public TodoMVC fixture, generated a bounded Snapshot
+and closed Chrome. Its real Agent execution engine generated actual SQLite
+operation receipts for start/navigation/close and deduplicated repeated
+operation IDs. The test-owned browser and receipt data were cleaned.
+
+**Real signed device connection and read-only MCP: PASS, separate run.**
+The owner reviewed and approved an independent 24-hour temporary Ed25519
+key. The actual portable candidate opened signed WSS to the existing DO;
+an MCP `stat_file` call returned file metadata from that Windows Agent.
+The test Agent session was stopped, that specific temporary grant revoked,
+and its separate private key/identity store deleted. Production Agent
+identity and login task were unchanged; the vetted portable package alone
+remains staged.
+
+**Signed browser MCP operation: NOT PASSED.** Production Worker's
+`BROWSER_TOOLS_ACCEPTED=false` continues to reject all five browser
+MCP methods. A local Wrangler/SQLite DO test proved a loopback-only
+acceptance path was technically possible without deploying Cloudflare,
+but a later credentialed owner-authentication test call was blocked by
+platform safety review. It was not retried through a substitute route;
+the local service/token/storage was removed. The two separate passed
+proofs above must not be conflated into a signed browser-tools E2E PASS.
+
+The remaining verification must exercise all five browser MCP tool
+methods on a single newly owner-approved disposable identity, via an
+explicitly supported isolated test entry, with exact TodoMVC navigation,
+SQLite receipt/revocation evidence and reliable cleanup. Do not infer
+website-action consent from mere device pairing, and do not alter the
+production gate, installed Agent, or release/deploy state to claim PASS.
+
 ## P9 Windows owner-trusted Goal A scope (2026-10-21)
 
 **Owner-approved risk scope, documentation only:** Native Windows, one owner-paired Agent, existing locally installed Chrome, and a *separate Agent-private Automation Profile*. The owner explicitly accepts residual access by untrusted web pages, redirects, DNS and WebSockets to host loopback/LAN resources. The actual native Windows 302-to-loopback hit (`attempted=1, blocked=0, localHits=1`; [CI #39520350950](https://github.com/lirtual/remote-control-agent/actions/runs/39520350950)) is **NOT SSRF ISOLATED**, but strict zero-egress containment is no longer the prerequisite for this accepted personal-device Goal A. The route/first-hop checks remain best-effort hygiene, not a security guarantee. Strict isolation remains Goal B, unpassed.
