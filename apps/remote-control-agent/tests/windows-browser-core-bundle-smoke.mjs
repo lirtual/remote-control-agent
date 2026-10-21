@@ -95,10 +95,25 @@ try{
     await ownedPage.route("https://p5.example.invalid/start", async route=>{
       await route.fulfill({status:302,headers:{location:privateUrl}});
     });
-    await assert.rejects(
-      ownedBrowser.navigate(session.session_id,"https://p5.example.invalid/start"),
-      /ERR_BLOCKED_BY_CLIENT|net::ERR|Navigation|goto/i,
-    );
+    const redirected=[];
+    const denied=[];
+    context.on("request",request=>{
+      if(request.url().startsWith(privateUrl))redirected.push(request.url());
+    });
+    context.on("requestfailed",request=>{
+      if(request.url().startsWith(privateUrl))denied.push(request.url());
+    });
+    // A route.fulfill(302) may resolve navigation successfully or reject
+    // depending on Chromium/Playwright version. What matters is that the
+    // redirected private request was actually attempted and aborted, with
+    // ZERO requests delivered to the loopback server.
+    await ownedBrowser.navigate(session.session_id,
+      "https://p5.example.invalid/start").catch(()=>{});
+    await ownedPage.waitForTimeout(250);
+    console.log(JSON.stringify({test:"P5_REDIRECT_TRACE",
+      attempted:redirected.length,blocked:denied.length,localHits}));
+    assert.ok(redirected.length>0,"Fixture must genuinely follow the 302 to localhost");
+    assert.ok(denied.length>0,"Redirected local request must be aborted by Context");
     assert.equal(localHits,0,"A redirected local target must not be fetched");
     console.log("P5_WINDOWS_PACKAGED_CHROME_LOCAL_REDIRECT_AND_SUBRESOURCE_DENIED=PASS");
   } finally {
