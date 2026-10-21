@@ -2,6 +2,19 @@
 
 Status: **Draft source-only candidate; neither installed nor enabled.**
 
+## P9 Windows owner-trusted Goal A scope (2026-10-21)
+
+**Owner-approved risk scope, documentation only:** Native Windows, one owner-paired Agent, existing locally installed Chrome, and a *separate Agent-private Automation Profile*. The owner explicitly accepts residual access by untrusted web pages, redirects, DNS and WebSockets to host loopback/LAN resources. The actual native Windows 302-to-loopback hit (`attempted=1, blocked=0, localHits=1`; [CI #39520350950](https://github.com/lirtual/remote-control-agent/actions/runs/39520350950)) is **NOT SSRF ISOLATED**, but strict zero-egress containment is no longer the prerequisite for this accepted personal-device Goal A. The route/first-hop checks remain best-effort hygiene, not a security guarantee. Strict isolation remains Goal B, unpassed.
+
+**Still not approved:** Network-risk acceptance is not an instruction to browse internal admin/metadata endpoints, access the owner's existing Chrome Profile, navigate arbitrary consequential URLs without per-action confirmed intent, expose click/fill/submit/JS/CDP, merge/release/upgrade an installed Agent, or turn on browser MCP tools. Preserve native release provenance/rollback, Portal + signed WSS, single-owner lifecycle, stable Operation IDs and unknown/no-replay SQLite semantics. Browser `start/status/snapshot/close` and controlled disposable test-page navigation are candidates for isolated acceptance only; unrestricted browser navigation and high-impact/ambiguous effects remain gated by a real, exact-operation, single-use user approval proof not currently implemented.
+
+**P9 evidence reuse:** P3 demonstrated a real packaged Windows BrowserManager local launch + semantic snapshot and a *separate* real signed local Worker/DO/WSS `read_file`, not one browser tool traversing that entire chain. P5 proved direct local subresource blocking on Windows but real 302 isolation failure. Reuse without overstating either; no extra browser process, proxy, network firewall, DNS resolver, new approval service or second database is selected. First remaining proof is actual supported ChatGPT client confirmation with execution-boundary verification; then a separately authorized disposable signed browser MCP E2E. No production binary or device mutation in this documentation-only update.
+
+Source of truth: [P9 architecture](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md#p9-acceptance-reconciliation--trusted-windows-goal-a-2026-10-21) and [ADR-0030 amendment](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/adr/0030-browser-conservative-gating-consent-evidence-acceptance.md#p9--owner-approved-goal-a-risk-boundary-2026-10-21).
+
+---
+
+
 ### Latest P3 release acceptance correction (2026-10-21)
 
 **Windows-first P3 remains the selected scope.** The native Windows packaged nine-file Playwright candidate passed its independent CI/installer/upgrade/rollback tests in run #39459661346. Its production Agent entrypoint still does not instantiate BrowserManager and browser MCP tools remain disabled.
