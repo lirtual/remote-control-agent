@@ -99,6 +99,53 @@ try{
   } finally {
     await new Promise(resolve=>localServer.close(resolve));
   }
+  // Exercise the packaged BrowserManager against actual Windows Chrome.
+  // These are rejection-only checks: no public navigation, paired device,
+  // or owner credentials are needed, and a rejected call must not touch the page.
+  const originalStatus=ownedBrowser.status();
+  assert.ok(originalStatus?.tab_id);
+  const originalPage=ownedBrowser.context.pages()[0];
+  const originalUrl=originalPage.url();
+  const attemptedUrl="https://example.com/never-opened-by-this-test";
+  await assert.rejects(ownedBrowser.navigate(
+    session.session_id,attemptedUrl,"tab-999",originalStatus.snapshot_version
+  ),/Stale selected tab/);
+  await assert.rejects(ownedBrowser.navigate(
+    session.session_id,attemptedUrl,originalStatus.tab_id,originalStatus.snapshot_version-1
+  ),/Stale snapshot/);
+  assert.equal(originalPage.url(),originalUrl);
+  assert.equal(ownedBrowser.status()?.snapshot_version,originalStatus.snapshot_version);
+
+  await ownedBrowser.tabs(session.session_id,"new");
+  const switchedStatus=ownedBrowser.status();
+  assert.ok(switchedStatus?.tab_id && switchedStatus.tab_id!==originalStatus.tab_id);
+  await assert.rejects(ownedBrowser.navigate(
+    session.session_id,attemptedUrl,originalStatus.tab_id,switchedStatus.snapshot_version
+  ),/Stale selected tab/);
+  await assert.rejects(ownedBrowser.navigate(
+    session.session_id,attemptedUrl,switchedStatus.tab_id,originalStatus.snapshot_version
+  ),/Stale snapshot/);
+  assert.equal(ownedBrowser.status()?.snapshot_version,switchedStatus.snapshot_version);
+  assert.equal(ownedBrowser.status()?.uncertain,false);
+  const selectedPage=ownedBrowser.context.pages().at(-1);
+  assert.equal(selectedPage?.url(),"about:blank");
+  console.log("WINDOWS_PACKAGED_BROWSER_NAVIGATION_STALE_REJECTION=PASS");
+
+  // Positive path uses a synthetic public URL fulfilled entirely in Chrome;
+  // no external request, user device or signed Owner DO is involved.
+  const fixtureUrl="https://example.com/browser-fixture";
+  await selectedPage.route(fixtureUrl,route=>route.fulfill({
+    status:200,contentType:"text/html",
+    body:'<!doctype html><title>Browser fixture</title><button>Continue</button>',
+  }));
+  const fresh=ownedBrowser.status();
+  await ownedBrowser.navigate(
+    session.session_id,fixtureUrl,fresh.tab_id,fresh.snapshot_version
+  );
+  assert.equal(selectedPage.url(),fixtureUrl);
+  assert.match((await ownedBrowser.snapshot(session.session_id)).text,/Continue/);
+  console.log("WINDOWS_PACKAGED_BROWSER_FRESH_NAVIGATION_OFFLINE=PASS");
+
   await ownedBrowser.close(session.session_id);
   assert.equal(ownedBrowser.status(),null);
   console.log("P3_REAL_PACKAGED_AGENT_BROWSER_MANAGER_START_SNAPSHOT_CLOSE=PASS");
