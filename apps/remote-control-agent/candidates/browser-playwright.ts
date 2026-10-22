@@ -127,6 +127,13 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     const id = `tab-${this.nextTab++}`;
     this.ids.set(page, id);
     this.pages.set(id, page);
+    // Invalidate an AI observation when a human changes the active document
+    // without passing through a browser MCP operation. Never retarget a
+    // previously observed role/name onto the newly navigated page.
+    page.on?.("framenavigated", frame => {
+      if (frame === page.mainFrame() && this.ids.get(page) === id &&
+          this.selectedTabId === id) this.version++;
+    });
     page.on?.("close", () => {
       this.ids.delete(page);
       this.pages.delete(id);
@@ -277,6 +284,8 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         throw Error("Invalid semantic target.");
       const locator = page.getByRole(target.role as Parameters<Page["getByRole"]>[0], { name: target.name, exact: true });
       if (await locator.count() !== 1) throw Error("Semantic target is not unique.");
+      // A human can navigate while Playwright resolves locator.count().
+      this.assertFresh(target.snapshot_version);
       this.uncertain = true;
       this.version++;
       await act(locator);

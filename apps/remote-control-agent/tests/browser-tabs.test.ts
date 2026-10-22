@@ -12,24 +12,31 @@ function fakeContext() {
   let contextHandler: ((x: any) => void) | undefined;
   const pages: Array<ReturnType<typeof makePage>> = [];
   let count = 1;
+  let duringCount: (() => Promise<void>) | undefined;
   function makePage() {
     let closed = false;
     let href = "about:blank";
     let closeHandler: (() => void) | undefined;
+    const primaryFrame = {};
+    let navigated: ((frame: typeof primaryFrame) => void) | undefined;
     return {
-      on: (event: string, handler: () => void) => {if(event==="close")closeHandler=handler;},
+      on: (event: string, handler: (frame: typeof primaryFrame) => void) => {
+        if (event==="close")closeHandler=()=>handler(primaryFrame);
+        if (event==="framenavigated")navigated=handler;
+      },
+      mainFrame: () => primaryFrame,
       isClosed: () => closed,
       url: () => href,
       title: async () => "Sample tab",
       setDefaultTimeout: () => {},
       bringToFront: async () => {calls.push("front:"+href);},
       close: async () => {closed=true;closeHandler?.();calls.push("tab-closed");},
-      goto: async (url: string) => {href=url;calls.push("goto:"+url);},
+      goto: async (url: string) => {href=url;navigated?.(primaryFrame);calls.push("goto:"+url);},
       ariaSnapshot: async () => '- textbox "Search"\n- button "Search"\n- combobox "Size"',
       getByRole: (role:string, options:{name:string}) => {
         calls.push("lookup:"+role+":"+options.name);
         return {
-          count:async()=>count,
+          count:async()=>{if(duringCount)await duringCount();return count;},
           click:async()=>{calls.push("clicked");},
           fill:async(text:string)=>{calls.push("filled:"+text);},
           selectOption:async(value:string)=>{calls.push("selected:"+value);return [];},
@@ -68,7 +75,9 @@ function fakeContext() {
     const page=await context.newPage();
     await page.goto(url);
     return page;
-  },setCount:(value:number)=>{count=value;},closeContext:()=>context.close()};
+  },setCount:(value:number)=>{count=value;},
+    onCount:(fn:()=>Promise<void>)=>{duringCount=fn;},
+    closeContext:()=>context.close()};
 }
 
 test("headed BrowserContext reuses session and exposes manually opened tabs without guessing selection",async()=>{
@@ -128,6 +137,53 @@ test("fresh unique semantic locator is required for click, fill, select and boun
     const fifth=await manager.snapshot(session_id);
     fake.setCount(2);
     await assert.rejects(manager.click(session_id,{role:"button",name:"Search",snapshot_version:fifth.snapshot_version}),/not unique/);
+  }finally{
+    await manager.stopOwnedForRevocation();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test("human navigation invalidates semantic snapshot before a potentially consequential action",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec152-handoff-stale-"));
+  const fake=fakeContext();
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver});
+  try{
+    const {session_id}=await manager.start();
+    const externalPage=await fake.manualOpen("https://example.org/initial");
+    await manager.tabs(session_id,"select","tab-2");
+    const observed=await manager.snapshot(session_id);
+    // User follows a link or navigates the address bar outside the MCP gateway.
+    await externalPage.goto("https://example.org/other-form");
+    await assert.rejects(
+      manager.click(session_id,{role:"button",name:"Search",snapshot_version:observed.snapshot_version}),
+      /Stale snapshot/,
+    );
+    assert.equal(fake.calls.includes("clicked"),false);
+    const fresh=await manager.snapshot(session_id);
+    await manager.click(session_id,{role:"button",name:"Search",snapshot_version:fresh.snapshot_version});
+    assert.equal(fake.calls.includes("clicked"),true);
+  }finally{
+    await manager.stopOwnedForRevocation();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test("human navigation during locator resolution must reject the stale action",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec152-navigation-race-"));
+  const fake=fakeContext();
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver});
+  try{
+    const {session_id}=await manager.start();
+    const page=await fake.manualOpen("https://example.org/one");
+    await manager.tabs(session_id,"select","tab-2");
+    const observed=await manager.snapshot(session_id);
+    // Navigation occurs after the first version check, while locator.count awaits.
+    fake.onCount(async()=>{await page.goto("https://example.org/two");});
+    await assert.rejects(
+      manager.click(session_id,{role:"button",name:"Search",snapshot_version:observed.snapshot_version}),
+      /Stale snapshot/,
+    );
+    assert.equal(fake.calls.includes("clicked"),false);
   }finally{
     await manager.stopOwnedForRevocation();
     await rm(dir,{recursive:true,force:true});
