@@ -83,6 +83,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   private busy = false;
   private revoked = false;
   private version = 0;
+  private closingContext: Promise<void> | null = null;
 
   constructor(options: PlaywrightBrowserOptions) {
     if (!path.isAbsolute(options.agentStore)) throw Error("Agent-private browser path must be absolute.");
@@ -135,10 +136,20 @@ export class PlaywrightBrowserManager implements BrowserBackend {
           this.selectedTabId === id) this.version++;
     });
     page.on?.("close", () => {
+      // A delayed event from an already-forgotten Profile cannot affect a
+      // newer session that may reuse tab IDs.
+      if (this.ids.get(page) !== id) return;
       this.ids.delete(page);
       this.pages.delete(id);
       if (this.selectedTabId === id) this.selectedTabId = null;
       this.version++;
+      if (this.pages.size === 0 && this.context && this.sessionId) {
+        // The last window was closed locally. Do not leave a reusable
+        // session with no tabs even if Chromium has not closed its Context.
+        const owned = this.context;
+        this.reset(owned);
+        void this.closeOwnedContext(owned).catch(() => {});
+      }
     });
     return id;
   }
@@ -153,6 +164,20 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     this.version = 0;
   }
 
+  private closeOwnedContext(context: BrowserContext): Promise<void> {
+    if (this.closingContext) return this.closingContext;
+    // Defer close until the Promise is recorded, so synchronous Page close
+    // callbacks cannot start a second close or race a new Profile launch.
+    const closing = Promise.resolve().then(() => context.close());
+    this.closingContext = closing;
+    // On a failed close, keep the rejected Promise as a fail-closed marker:
+    // do not reopen the same Profile or report successful revocation cleanup.
+    void closing.then(() => {
+      if (this.closingContext === closing) this.closingContext = null;
+    }, () => {});
+    return closing;
+  }
+
   private async exclusive<T>(work: () => Promise<T>): Promise<T> {
     if (this.busy) throw Error("Browser operation already in progress.");
     this.busy = true;
@@ -162,6 +187,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   async start(): Promise<BrowserStatus> {
     return this.exclusive(async () => {
       if (this.revoked) throw Error("Browser ownership revoked; startup denied.");
+      if (this.closingContext) await this.closingContext;
       if (this.context && this.sessionId) return this.status()!;
       const channel = this.channelForTests ??
         (process.platform === "win32" ? defaultWindowsChannel() : "chrome");
@@ -324,10 +350,14 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     this.revoked = true;
     this.uncertain = true;
     const active = this.context;
-    if (!active) return "confirmed";
+    if (!active && !this.closingContext) return "confirmed";
     try {
-      await active.close();
-      this.reset(active);
+      if (active) {
+        await this.closeOwnedContext(active);
+        this.reset(active);
+      } else {
+        await this.closingContext;
+      }
       return "confirmed";
     } catch { return "uncertain"; }
   }
@@ -336,7 +366,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     return this.exclusive(async () => {
       const context = this.requireContext(sessionId);
       this.uncertain = true;
-      await context.close();
+      await this.closeOwnedContext(context);
       this.reset(context);
       this.uncertain = false;
       // Persist the separate Agent-owned Profile; never delete user data.

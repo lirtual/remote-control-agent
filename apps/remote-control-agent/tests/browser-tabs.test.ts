@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { BrowserType } from "playwright-core";
 import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
-function fakeContext() {
+function fakeContext(options: {closeFails?: boolean} = {}) {
   const calls: string[] = [];
   let pageHandler: ((page: unknown) => void) | undefined;
   let contextHandler: ((x: any) => void) | undefined;
@@ -59,6 +59,7 @@ function fakeContext() {
     },
     route:async()=>{},
     close:async()=>{
+      if(options.closeFails)throw Error("Managed context close failed.");
       for(const page of pages.filter(p=>!p.isClosed()))await page.close();
       contextHandler?.(undefined);
     },
@@ -75,6 +76,8 @@ function fakeContext() {
     const page=await context.newPage();
     await page.goto(url);
     return page;
+  },manualCloseAll:async()=>{
+    for(const page of context.pages()) await page.close();
   },setCount:(value:number)=>{count=value;},
     onCount:(fn:()=>Promise<void>)=>{duringCount=fn;},
     closeContext:()=>context.close()};
@@ -118,6 +121,47 @@ test("headed BrowserContext reuses session and exposes manually opened tabs with
     assert.equal(fake.calls.filter(x=>x.startsWith("profile:")).length,2);
   }finally{
     await manager.stopOwnedForRevocation();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test("closing the final window ends the session without racing Profile reuse",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec152-owner-close-"));
+  const fake=fakeContext();
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver});
+  try{
+    const first=await manager.start();
+    await fake.manualOpen("https://example.org/manual");
+    await fake.manualCloseAll();
+    assert.equal(manager.status(),null,"last manually closed tab ends the session");
+    await assert.rejects(manager.snapshot(first.session_id),/Unknown or closed/);
+    // Immediate restart must await the previous Context close, retaining its
+    // Profile without attaching to an orphaned or closed browser window.
+    const next=await manager.start();
+    assert.notEqual(next.session_id,first.session_id);
+    assert.equal(next.tab_id,"tab-1");
+    assert.equal(fake.calls.filter(x=>x.startsWith("profile:")).length,2);
+    assert.equal((await manager.tabs(next.session_id,"list")).tabs.length,1);
+    await manager.close(next.session_id);
+    assert.equal(manager.status(),null);
+  }finally{
+    await manager.stopOwnedForRevocation();
+    await rm(dir,{recursive:true,force:true});
+  }
+});
+
+test("failed final-window shutdown denies Profile reuse and reports uncertain cleanup",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec152-close-failed-"));
+  const fake=fakeContext({closeFails:true});
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver});
+  try{
+    await manager.start();
+    await fake.manualCloseAll();
+    assert.equal(manager.status(),null);
+    await assert.rejects(manager.start(),/Managed context close failed/);
+    assert.equal(await manager.stopOwnedForRevocation(),"uncertain");
+    assert.equal(fake.calls.filter(x=>x.startsWith("profile:")).length,1);
+  }finally{
     await rm(dir,{recursive:true,force:true});
   }
 });

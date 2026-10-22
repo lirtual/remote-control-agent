@@ -168,7 +168,14 @@ try{
   const afterClose=await ownedBrowser.tabs(reopened.session_id,"close",secondTab);
   assert.equal(afterClose.selected_tab_id,firstTab);
   assert.ok(!afterClose.tabs.some(tab=>tab.tab_id===secondTab));
-  await ownedBrowser.close(reopened.session_id);
+  // Closing the final page directly is equivalent to the user closing the
+  // last Chrome window: it must not leave a stale reusable Agent session.
+  const lastPage=ownedBrowser.context.pages()[0];
+  await lastPage.close();
+  assert.equal(ownedBrowser.status(),null);
+  const afterWindowClose=await ownedBrowser.start();
+  assert.notEqual(afterWindowClose.session_id,reopened.session_id);
+  await ownedBrowser.close(afterWindowClose.session_id);
   assert.equal(ownedBrowser.status(),null);
   console.log("WINDOWS_PACKAGED_BROWSER_REOPEN_AND_TABS=PASS");
   console.log("P3_REAL_PACKAGED_AGENT_BROWSER_MANAGER_START_SNAPSHOT_CLOSE=PASS");
