@@ -220,6 +220,17 @@ jobs:
           Compress-Archive -Path (Join-Path $staged '*') -DestinationPath $archive -CompressionLevel Optimal
           $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-extracted'
           Expand-Archive -LiteralPath $archive -DestinationPath $extracted -ErrorAction Stop
+          # Validate the exact extracted Playwright-enabled archive via its own
+          # packaged CLI; never pair a device or use the owner's private store.
+          $portableStatus = & (Join-Path $extracted 'rca.cmd') status | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $portableStatus.platform -cne 'win32' -or
+              $portableStatus.mode -cne 'native-user-agent' -or
+              $portableStatus.identity_present -ne $false -or
+              $null -ne $portableStatus.device_id -or
+              $portableStatus.shell -ne $true -or $portableStatus.write_file -ne $true) {
+            throw 'Isolated Playwright-enabled Windows portable CLI status failed'
+          }
+          Write-Output 'P3_PINNED_WINDOWS_PORTABLE_CLI_STATUS=PASS'
           & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $extracted (Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64')
           if ($LASTEXITCODE -ne 0) { throw 'Installed Chrome and tamper checks failed for pinned Playwright candidate' }
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
