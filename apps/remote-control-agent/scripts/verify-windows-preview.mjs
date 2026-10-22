@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 // Independent audit pinning for the nine-file Windows preview payload.
 // Deliberately not loaded from the mutable preview manifest.
-export const PINNED_WINDOWS_BROWSER_MANAGER_SHA256="b0c3127f40cfff6bc84fa88dcc3f4b182801bd4ab3b8678fbb823c559b4ed605";
+export const PINNED_WINDOWS_BROWSER_MANAGER_SHA256="bd67cfeb8f733a62841dbc674b529c505c49c3c478b42ae0450c8628a1c2de9b";
 const PACKAGED_BROWSER_MANAGER="apps/remote-control-agent/candidates/browser-playwright.js";
 export const PINNED_WINDOWS_PLAYWRIGHT_VERSION="1.64.1";
 export const PINNED_WINDOWS_PLAYWRIGHT_FILES=Object.freeze({

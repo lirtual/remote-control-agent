@@ -43,9 +43,12 @@ export function parseBrowserArguments(tool: string, raw: unknown): Args | null {
       ...(Object.hasOwn(raw, "offset") ? {offset: raw.offset as number} : {})};
   }
   if (tool === "browser_navigate")
-    return session && exact(raw, ["session_id", "url"]) &&
-      typeof raw.url === "string" && raw.url.length > 0 && raw.url.length <= 2048
-      ? {session_id: raw.session_id as string, url: raw.url} : null;
+    return session && exact(raw, ["session_id", "url", "tab_id", "snapshot_version"]) &&
+      typeof raw.url === "string" && raw.url.length > 0 && raw.url.length <= 2048 &&
+      typeof raw.tab_id === "string" && TAB_ID.test(raw.tab_id) &&
+      Number.isSafeInteger(raw.snapshot_version) && (raw.snapshot_version as number) >= 0
+      ? {session_id: raw.session_id as string, url: raw.url, tab_id:raw.tab_id,
+          snapshot_version:raw.snapshot_version as number} : null;
   if (tool === "browser_tabs") {
     if (!session || typeof raw.action !== "string" ||
         !["list", "select", "new", "close"].includes(raw.action)) return null;
@@ -148,7 +151,8 @@ export class BrowserOperationGateway {
               completedSession = (await this.adapter.start()).session_id;
               break;
             case "browser_navigate":
-              await this.adapter.navigate(id!, args.url as string); break;
+              await this.adapter.navigate(id!, args.url as string,
+                args.tab_id as string,args.snapshot_version as number); break;
             case "browser_close":
               await this.adapter.close(id!); break;
             case "browser_tabs":

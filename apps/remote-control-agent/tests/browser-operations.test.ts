@@ -53,9 +53,9 @@ test("browser gateway reuses durable Agent receipts and honors 5s Worker deadlin
     assert.match(JSON.stringify(snap?.body), /Test/);
 
     const navId = "browser-nav-" + randomUUID();
-    const nav = await engine.executeTool({tool:"browser_navigate",arguments:{session_id:sid,url:"https://example.com/"},operation_id:navId},signal);
+    const nav = await engine.executeTool({tool:"browser_navigate",arguments:{session_id:sid,tab_id:"tab-1",snapshot_version:0,url:"https://example.com/"},operation_id:navId},signal);
     assert.equal((nav?.body as any).status, "unknown");
-    const repeat = await engine.executeTool({tool:"browser_navigate",arguments:{session_id:sid,url:"https://example.com/"},operation_id:navId},signal);
+    const repeat = await engine.executeTool({tool:"browser_navigate",arguments:{session_id:sid,tab_id:"tab-1",snapshot_version:0,url:"https://example.com/"},operation_id:navId},signal);
     assert.equal((repeat?.body as any).status, "unknown");
     assert.equal(navigations, 1);
     const conflict = await engine.executeTool({tool:"browser_close",arguments:{session_id:sid},operation_id:navId},signal);
@@ -83,7 +83,15 @@ test("browser parser rejects undocumented arguments and arbitrary executable/pat
     { profile: "/tmp/personal" }, { executable: "node" }, { command: "ls" },
     { session_id: id, arbitrary: true }, null, [],
   ]) assert.equal(parseBrowserArguments("browser_start", input), null);
-  assert.equal(parseBrowserArguments("browser_navigate", {session_id:id,url:"https://example.com/",script:"alert(1)"}), null);
+  assert.equal(parseBrowserArguments("browser_navigate", {session_id:id,tab_id:"tab-1",snapshot_version:0,url:"https://example.com/",script:"alert(1)"}), null);
+  assert.deepEqual(parseBrowserArguments("browser_navigate",{
+    session_id:id,tab_id:"tab-1",snapshot_version:0,url:"https://example.com/",
+  }),{session_id:id,tab_id:"tab-1",snapshot_version:0,url:"https://example.com/"});
+  for(const invalid of [
+    {session_id:id,url:"https://example.com/"},
+    {session_id:id,tab_id:"tab-X",snapshot_version:0,url:"https://example.com/"},
+    {session_id:id,tab_id:"tab-1",snapshot_version:-1,url:"https://example.com/"},
+  ])assert.equal(parseBrowserArguments("browser_navigate",invalid),null);
   assert.equal(parseBrowserArguments("browser_close", {session_id:"bad"}), null);
 });
 

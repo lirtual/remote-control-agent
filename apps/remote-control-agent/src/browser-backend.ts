@@ -25,7 +25,7 @@ export interface BrowserTarget {
 export interface BrowserBackend {
   start(): Promise<BrowserStatus>;
   status(): BrowserStatus | null;
-  navigate(sessionId: string, url: string): Promise<void>;
+  navigate(sessionId: string, url: string, expectedTabId: string, snapshotVersion: number): Promise<void>;
   snapshot(sessionId: string, offset?: number): Promise<{text:string;truncated:boolean;snapshot_version:number;next_offset?:number}>;
   tabs(sessionId: string, action: BrowserTabAction, tabId?: string): Promise<BrowserTabsResult>;
   click(sessionId: string, target: BrowserTarget): Promise<void>;

@@ -76,14 +76,14 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.equal(status.snapshot_version,0);
     assert.match(fake.calls[0] ?? "",/browser-automation-profile-chrome$/);
     assert.equal((await browser.start()).session_id,status.session_id);
-    await assert.rejects(browser.navigate(status.session_id,"http://localhost/"),/outside first-phase/);
+    await assert.rejects(browser.navigate(status.session_id,"http://localhost/",browser.status()!.tab_id!,browser.status()!.snapshot_version),/outside first-phase/);
     for (const url of ["http://localhost./","http://localhost../",
       "https://printer.local./","https://db.internal..","http://127.0.0.1../"]) {
-      await assert.rejects(browser.navigate(status.session_id,url),/outside first-phase/,url);
+      await assert.rejects(browser.navigate(status.session_id,url,browser.status()!.tab_id!,browser.status()!.snapshot_version),/outside first-phase/,url);
     }
-    await browser.navigate(status.session_id,"https://example.com./");
+    await browser.navigate(status.session_id,"https://example.com./",browser.status()!.tab_id!,browser.status()!.snapshot_version);
     assert.ok(fake.calls.includes("goto:https://example.com./"));
-    await browser.navigate(status.session_id,"https://example.com/page");
+    await browser.navigate(status.session_id,"https://example.com/page",browser.status()!.tab_id!,browser.status()!.snapshot_version);
     assert.ok(fake.calls.includes("goto:https://example.com/page"));
     const snap=await browser.snapshot(status.session_id);
     assert.match(snap.text,/\[ref=e2\]/);
@@ -127,9 +127,9 @@ test("uncertain navigation cannot be replayed, but can be inspected then closed"
   const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
   try{
     const {session_id}=await browser.start();
-    await assert.rejects(browser.navigate(session_id,"https://example.com"),/outcome uncertain/);
+    await assert.rejects(browser.navigate(session_id,"https://example.com",browser.status()!.tab_id!,browser.status()!.snapshot_version),/outcome uncertain/);
     assert.equal(browser.status()?.uncertain,true);
-    await assert.rejects(browser.navigate(session_id,"https://example.com"),/Uncertain browser navigation/);
+    await assert.rejects(browser.navigate(session_id,"https://example.com",browser.status()!.tab_id!,browser.status()!.snapshot_version),/Uncertain browser navigation/);
     assert.equal(fake.calls.filter(x=>x.startsWith("goto:")).length,1);
     assert.equal((await browser.snapshot(session_id)).truncated,false);
     await browser.close(session_id);
@@ -175,7 +175,7 @@ test("revocation interrupts active navigation and denies any later reuse",async(
   const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
   try{
     const {session_id}=await browser.start();
-    const navigation=browser.navigate(session_id,"https://example.com/");
+    const navigation=browser.navigate(session_id,"https://example.com/",browser.status()!.tab_id!,browser.status()!.snapshot_version);
     assert.ok(fake.calls.includes("goto:https://example.com/"));
     assert.equal(await browser.stopOwnedForRevocation(),"confirmed");
     assert.equal(browser.status(),null,"revoked session must be forgotten immediately");

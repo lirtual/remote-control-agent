@@ -211,12 +211,16 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     });
   }
 
-  async navigate(sessionId: string, requestedUrl: string): Promise<void> {
+  async navigate(sessionId: string, requestedUrl: string,
+    expectedTabId: string, snapshotVersion: number): Promise<void> {
     const url = checkedUrl(requestedUrl);
     return this.exclusive(async () => {
       const page = this.selected(sessionId);
-      if (this.revoked) throw Error("Browser ownership revoked; navigation denied.");
+      if (expectedTabId !== this.selectedTabId)
+        throw Error("Stale selected tab; observe the browser again before navigating.");
       if (this.uncertain) throw Error("Uncertain browser navigation; no implicit replay.");
+      this.assertFresh(snapshotVersion);
+      if (this.revoked) throw Error("Browser ownership revoked; navigation denied.");
       this.uncertain = true;
       this.version++;
       try {

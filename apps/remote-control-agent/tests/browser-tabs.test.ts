@@ -97,7 +97,14 @@ test("headed BrowserContext reuses session and exposes manually opened tabs with
     assert.deepEqual(list.tabs.map(x=>x.tab_id),["tab-1","tab-2"]);
     assert.equal(list.selected_tab_id,"tab-1","manual new tab must not silently switch the target");
     await manager.tabs(start.session_id,"select","tab-2");
-    await manager.navigate(start.session_id,"https://example.com/new");
+    const versionBefore=manager.status()!.snapshot_version;
+    await assert.rejects(manager.navigate(start.session_id,"https://example.com/should-not-navigate",
+      "tab-1",versionBefore),/Stale selected tab/);
+    await assert.rejects(manager.navigate(start.session_id,"https://example.com/should-not-navigate",
+      "tab-2",versionBefore-1),/Stale snapshot/);
+    assert.ok(!fake.calls.includes("goto:https://example.com/should-not-navigate"),
+      "No side effect may precede exact tab and snapshot check");
+    await manager.navigate(start.session_id,"https://example.com/new","tab-2",versionBefore);
     assert.ok(fake.calls.includes("goto:https://example.com/new"));
     await manager.tabs(start.session_id,"close","tab-2");
     assert.equal(manager.status()?.tab_id,null,"closing selected tab must never select another tab");
