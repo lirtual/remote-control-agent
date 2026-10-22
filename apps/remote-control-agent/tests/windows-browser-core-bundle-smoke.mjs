@@ -148,6 +148,29 @@ try{
 
   await ownedBrowser.close(session.session_id);
   assert.equal(ownedBrowser.status(),null);
+
+  // A normal close must release the private Profile for a fresh headed session.
+  // Reopening may preserve cookies, but must not silently take over a restored
+  // nonblank page; users should be able to reopen after a completed session.
+  const reopened=await ownedBrowser.start();
+  assert.notEqual(reopened.session_id,session.session_id);
+  assert.ok(reopened.tab_id);
+  assert.equal(reopened.uncertain,false);
+  const blankTabs=await ownedBrowser.tabs(reopened.session_id,"list");
+  assert.ok(blankTabs.tabs.length>=1);
+  assert.ok(blankTabs.tabs.every(tab=>tab.url==="about:blank"));
+  const firstTab=reopened.tab_id;
+  const created=await ownedBrowser.tabs(reopened.session_id,"new");
+  const secondTab=created.selected_tab_id;
+  assert.ok(secondTab && secondTab!==firstTab);
+  const selected=await ownedBrowser.tabs(reopened.session_id,"select",firstTab);
+  assert.equal(selected.selected_tab_id,firstTab);
+  const afterClose=await ownedBrowser.tabs(reopened.session_id,"close",secondTab);
+  assert.equal(afterClose.selected_tab_id,firstTab);
+  assert.ok(!afterClose.tabs.some(tab=>tab.tab_id===secondTab));
+  await ownedBrowser.close(reopened.session_id);
+  assert.equal(ownedBrowser.status(),null);
+  console.log("WINDOWS_PACKAGED_BROWSER_REOPEN_AND_TABS=PASS");
   console.log("P3_REAL_PACKAGED_AGENT_BROWSER_MANAGER_START_SNAPSHOT_CLOSE=PASS");
 }finally{
   const session=ownedBrowser?.status();
