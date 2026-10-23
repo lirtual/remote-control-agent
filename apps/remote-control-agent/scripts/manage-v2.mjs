@@ -13,11 +13,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const STORE=".local/share/mcp-workers/remote-control";
-const UNIT="remote-control-v2-agent.service";
-const MARKER="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
+const UNIT="remote-control-agent.service";
+const MARKER="# Managed by Remote Control Agent installer.";
 const VERSION=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc$/;
 const ID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
-const MANUAL_UPGRADE_ACTIVATION_FAILURE = "Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-v2-agent.service` before retrying; do not re-pair or replay operations.";
+const MANUAL_UPGRADE_ACTIVATION_FAILURE = "Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-agent.service` before retrying; do not re-pair or replay operations.";
 const GENERIC_LOCAL_FAILURE = "rca refused unsafe or unsupported local operation.";
 export function safeManagerCliFailure(error) {
   return error instanceof Error && error.message === MANUAL_UPGRADE_ACTIVATION_FAILURE
@@ -129,9 +129,9 @@ export function localManagerStatus(options={},invoke=spawnSync){
 }
 export function trustedInstalledEndpoint(unit){
   if(!unit)return null;
-  const matches=unit.split("\n").filter(s=>s.startsWith("Environment=REMOTE_CONTROL_V2_ENDPOINT="));
+  const matches=unit.split("\n").filter(s=>s.startsWith("Environment=REMOTE_CONTROL_AGENT_ENDPOINT="));
   if(matches.length!==1)throw Error("Ambiguous managed Worker endpoint");
-  const endpoint=matches[0].slice("Environment=REMOTE_CONTROL_V2_ENDPOINT=".length);
+  const endpoint=matches[0].slice("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=".length);
   const uri=new URL(endpoint);
   if(uri.protocol!=="https:"||uri.username||uri.password||uri.search||uri.hash||
     uri.pathname!=="/"||!uri.hostname||uri.port||endpoint!==uri.origin+"/")
