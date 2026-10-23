@@ -16,7 +16,7 @@ env:
   NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
 jobs:
   windows-verified-bundle:
-    name: Build and verify pinned Windows RC
+    name: Build and verify browser-enabled Windows Agent
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -27,8 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.21.0'
-      # This workflow must NOT run until a separately authorized release-marker commit.
-      # Intentionally retain the OLD marker in this Draft branch: no automatic publication.
+      # A one-file release approval is committed only after merged CI succeeds.
       - name: Verify one-file approval for the exact reviewed source
         shell: pwsh
         run: |
