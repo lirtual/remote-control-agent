@@ -413,8 +413,8 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         os.execv(str(binary), command)
 
 
-UNIT = "remote-control-v2-agent.service"
-MARKER = "# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent."
+UNIT = "remote-control-agent.service"
+MARKER = "# Managed by Remote Control Agent installer."
 STORE = pathlib.Path(".local/share/mcp-workers/remote-control")
 
 
