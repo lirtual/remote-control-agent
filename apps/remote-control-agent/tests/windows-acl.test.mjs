@@ -49,7 +49,7 @@ test("Windows native store starts with a protected current-user ACL", { skip:
   const newId = "22222222-2222-4222-8222-222222222222";
   const localId = path.win32.join(root, "v2-identity.pem.device-id");
   const pending = path.win32.join(root, "v2-identity.pem.device-id.pending");
-  writeFileSync(localId, oldId + "\\n", { flag: "wx" });
+  writeFileSync(localId, oldId + "\n", { flag: "wx" });
   try {
     assert.equal(run("Seal", root, "v2-identity.pem.device-id").status, 0);
     await replaceSignedDeviceId(path.win32.join(root, "v2-identity.pem"), oldId, newId, () => {
