@@ -46,7 +46,7 @@ export async function startUpgradeControl(execution: AgentExecutionEngine, keyPa
     socket.setTimeout(2000, () => socket.destroy());
     let buffer = "";
     socket.on("data", chunk => {
-      buffer += chunk.toString("utf8");
+      buffer += Buffer.from(chunk).toString("utf8");
       if (buffer.length > 32) { socket.destroy(); return; }
       if (!buffer.includes("\n")) return;
       if (buffer === "freeze\n") {

@@ -3,8 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 
-export type DeviceCapability = "read" | "file_write" | "shell";
-
 function releaseVersion(): string | undefined {
   // Immutable release bundles contain this version; development checkouts may not.
   try {
@@ -17,7 +15,7 @@ function releaseVersion(): string | undefined {
   return undefined;
 }
 
-export function collectDeviceInfo(capability: "read-only" | "full" = "full") {
+export function collectDeviceInfo() {
   const platform = process.platform;
   const system = platform === "win32" ? "windows" : platform === "darwin" ? "darwin" : "linux";
   const kernel = os.release();
@@ -43,8 +41,5 @@ export function collectDeviceInfo(capability: "read-only" | "full" = "full") {
     arch: clean(process.arch, 16) || "unknown",
     environment,
     ...(version ? { agent_version: version } : {}),
-    capabilities: capability === "read-only"
-      ? ["read"] as DeviceCapability[]
-      : ["read", "file_write", "shell"] as DeviceCapability[],
   };
 }
