@@ -23,6 +23,12 @@ Remote Control MCP → verify online through authenticated MCP**.
 - Windows PowerShell: `irm https://rca.lirtual.dpdns.org/install.ps1 | iex`
 - Linux x64/ARM64, including WSL2: `curl -fsSL https://rca.lirtual.dpdns.org/install.sh | sh`
 
+The Linux one-liner is for interactive installation. POSIX `sh` reports the
+last pipeline command's exit status: if `curl` fails before downloading any
+script, the empty `sh` may still exit 0. Inspect download errors, and never
+treat pipeline success as proof of installation, approval or online status;
+confirm the device through authenticated MCP before declaring success.
+
 **These commands describe the proposed public contract, not a claim of working
 production onboarding.** The new Windows bootstrap requires a reviewed, immutable
 Windows Release that contains the `onboard` CLI, a separately checked source
@@ -39,7 +45,7 @@ is still mandatory. Re-running the installer never silently upgrades or re-keys
 an approved device. Local installation, owner authorization and actual remote
 online state are distinct facts.
 
-The repository's historical root `install.sh` and `install-windows.ps1` are
+Historical root `install.sh` and `install-windows.ps1` have been removed from this branch; they were
 not the canonical public installation URLs. Historical immutable Release tags
 remain unchanged; upgrades are separate explicitly authorized operations.
 

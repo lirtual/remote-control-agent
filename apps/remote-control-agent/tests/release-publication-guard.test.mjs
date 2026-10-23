@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -48,4 +48,12 @@ test('only the main-only unified workflow can publish Releases', () => {
     'no Release may be created or promoted before checking immutable policy');
   assert.equal((workflow.match(/\.enabled == true/g) ?? []).length, 2);
   assert.match(workflow, /\.immutable == true/);
+});
+
+
+test('retired root installer scripts are not advertised distribution files', () => {
+  const root = fileURLToPath(new URL('../../../', import.meta.url));
+  assert.equal(existsSync(path.join(root,'install-windows.ps1')), false);
+  assert.equal(existsSync(path.join(root,'install.sh')), false);
+  assert.equal(existsSync(path.join(root,'install.ps1')), true);
 });

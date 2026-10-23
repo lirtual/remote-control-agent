@@ -89,16 +89,19 @@ and runs the bundled manager. No public Windows Release exists yet.
 
 ## Source-only Windows installation and user-logon task
 
-The repository now contains `install-windows.ps1`. The normal mode requires
-a **published immutable** GitHub Release and its official asset SHA-256
-before downloading/extracting the reviewed Windows ZIP. It refuses unexpected
+The new root entrypoint is `install.ps1`; the old Windows stage-only
+bootstrap is retained solely as an isolated CI test fixture under
+`tests/fixtures/windows-stage-only.ps1`. Public onboarding requires an
+explicitly reviewed immutable GitHub Release and official asset SHA-256
+before extracting the Windows ZIP. It refuses unexpected
 ZIP members, unreviewed files, modified checksums, reparse entries and
 replacing an existing version. The installed runtime bundles Node.js; no
 system Node or Git is needed for installed `rca.cmd`.
 
-**No approved Windows Release has been published**, so this installer is not
-yet a working public one-line installation URL. CI uses an isolated fixture
-and test-only archive input, not a real Release or cloud pairing.
+The new Spec #24 onboarding Release is **not yet published**; the planned
+public one-line installation URL is not yet ready. Older immutable historical
+Windows Releases remain unchanged. CI uses disposable fixture identities and
+test-only archive input, never a real cloud approval.
 
 Once the user has approved the device's one pairing code, the reviewed
 portable candidate supports:

@@ -237,14 +237,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Portable rca launcher failed' }
           # CI-only offline fixture: hash verification, safe extraction, private
           # staging and bundled CLI; no pairing, task creation or cloud access.
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File install-windows.ps1 -Version v0.0.0-ci -OfflineArchive $zip -ExpectedSha256 $hash
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.0-ci -OfflineArchive $zip -ExpectedSha256 $hash
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows offline installer failed' }
           $installed = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control\programs\v0.0.0-ci-windows-x64'
           & (Join-Path $installed 'rca.cmd') status
           if ($LASTEXITCODE -ne 0) { throw 'Installed bundled CLI failed' }
-          $rejectRepeat = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','install-windows.ps1','-Version','v0.0.0-ci','-OfflineArchive',$zip,'-ExpectedSha256',$hash) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-repeat-rejection.txt')
+          $rejectRepeat = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1','-Version','v0.0.0-ci','-OfflineArchive',$zip,'-ExpectedSha256',$hash) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-repeat-rejection.txt')
           if ($rejectRepeat.ExitCode -eq 0) { throw 'Repeat-install unexpectedly succeeded' }
-          $rejectDigest = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','install-windows.ps1','-Version','v0.0.1-ci','-OfflineArchive',$zip,'-ExpectedSha256',('0' * 64)) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-digest-rejection.txt')
+          $rejectDigest = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File','apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1','-Version','v0.0.1-ci','-OfflineArchive',$zip,'-ExpectedSha256',('0' * 64)) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $output 'expected-digest-rejection.txt')
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
@@ -306,6 +306,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Synthetic key ACL seal failed' }
             & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem.device-id'
             if ($LASTEXITCODE -ne 0) { throw 'Synthetic ID ACL seal failed' }
+            # An interrupted first Start persists a *protected* activation
+            # marker. Validate its real PowerShell ACL path in disposable CI.
+            $pending = $key + '.activation-pending'
+            [IO.File]::WriteAllText($pending, ("00000000-0000-4000-8000-000000000001" + [char]10))
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem.activation-pending'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic activation marker seal failed' }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Check -Directory $root -FileName 'v2-identity.pem.activation-pending'
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic activation marker check failed' }
+            [IO.File]::Delete($pending)
+
             # Synthetic ID deliberately has no cloud grant. Exercise the
             # protected Task Scheduler backend directly; NEVER bypass the
             # signed grant check in the public `rca enable` command.
@@ -341,7 +351,7 @@ jobs:
               throw 'Pinned browser upgrade candidate ZIP unavailable'
             }
             $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install-windows.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
             if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
             $newCli = Join-Path $newDir 'rca.cmd'
             $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
@@ -408,15 +418,15 @@ jobs:
           $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
           $sentinel = Join-Path $root 'agent-events.ndjson'
           [IO.File]::WriteAllText($sentinel, '{"utc":"2026-01-01T00:00:00.000Z","event":"stopping"}' + [char]10)
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.1-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.1-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall of inactive upgrade version failed' }
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Safe Windows runtime uninstall failed' }
           $old = Join-Path $root 'programs\v0.0.0-ci-windows-x64'
           if (Test-Path -LiteralPath $old) { throw 'Uninstalled version still exists' }
           if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Windows Agent diagnostics not preserved' }
           if (-not (Test-Path -LiteralPath $root)) { throw 'Private identity directory was deleted' }
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
       - name: Public Windows install.ps1 offline first-install and repeat fail closed without TTY

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, resumePendingWindowsActivation } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -98,4 +98,35 @@ test("Windows user-logon task cannot be enabled for temporary or malformed grant
   assert.throws(() => assertWindowsAutostartMode(undefined), /permanent|unknown/i); // older pair also allowed temporary grants
   assert.throws(() => assertWindowsAutostartMode("temporary"), /permanent/i);
   assert.throws(() => assertWindowsAutostartMode("unknown"), /permanent/i);
+});
+
+
+test("Windows onboarding resumes only a marked incomplete activation", async () => {
+  const calls: string[] = [];
+  const task = (action: "Enable" | "Start") => { calls.push(action); };
+  const cleared = async () => { calls.push("Clear"); };
+  // Enable succeeded, Start failed: the task exists but is not running.
+  await resumePendingWindowsActivation(true, {installed:true, running:false}, task, cleared);
+  assert.deepEqual(calls, ["Start", "Clear"]);
+  calls.length = 0;
+  // Owner stopped a previously completed Agent: no marker, no restart.
+  await resumePendingWindowsActivation(false, {installed:true, running:false}, task, cleared);
+  assert.deepEqual(calls, []);
+  // A terminated first registration may need both operations.
+  await resumePendingWindowsActivation(true, {installed:false, running:false}, task, cleared);
+  assert.deepEqual(calls, ["Enable", "Start", "Clear"]);
+  calls.length = 0;
+  await resumePendingWindowsActivation(true, {installed:true, running:true}, task, cleared);
+  assert.deepEqual(calls, ["Clear"]);
+});
+
+test("Windows onboarding retains pending state on failed task activation", async () => {
+  const calls: string[] = [];
+  await assert.rejects(resumePendingWindowsActivation(true, {installed:true,running:false},
+    () => { throw Error("Task Start failed"); }, async () => {calls.push("Clear");}), /Start failed/);
+  assert.equal(calls.length, 0);
+  await assert.rejects(resumePendingWindowsActivation(true, {installed:false,running:false},
+    (action) => {calls.push(action); if(action==="Start") throw Error("Task Start failed");},
+    async () => {calls.push("Clear");}), /Start failed/);
+  assert.deepEqual(calls, ["Enable","Start"]);
 });

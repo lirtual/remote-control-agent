@@ -5,7 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
@@ -81,7 +81,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.install-mode"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -158,6 +158,20 @@ export function assertWindowsAutostartMode(mode: string | undefined): true {
   if (mode !== "permanent")
     throw Error("Only a recorded permanent Windows grant may enable an autostart task.");
   return true;
+}
+
+/** An activation marker distinguishes interrupted first setup from an owner-stopped task. */
+export async function resumePendingWindowsActivation(
+  pending: boolean, status: {installed: boolean; running: boolean},
+  task: (action: "Enable" | "Start") => void, clear: () => Promise<void>,
+): Promise<void> {
+  if (!pending) return;
+  if (typeof status.installed !== "boolean" || typeof status.running !== "boolean" ||
+      (!status.installed && status.running)) throw Error("Invalid Windows task status.");
+  if (!status.installed) task("Enable");
+  if (!status.running) task("Start");
+  // Do not clear before Start succeeds: a failed Start must remain resumable.
+  await clear();
 }
 
 /** Never use a local device-id file alone to authorize task activation. */
@@ -284,18 +298,24 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       await writeFile(modePath, mode + "\n", { flag: "wx", mode: 0o600 });
       assertPrivateStore("Seal", directory, "v2-identity.pem.install-mode");
     }
+    const activationMarker = keyPath + ".activation-pending";
     if (idExists) {
       const approved = (await readFile(keyPath + ".device-id", "utf8")).trim();
       if (!ID.test(approved)) throw Error("Invalid local device ID.");
       if (mode === "permanent") {
-        const status = JSON.parse(runUserTask("Status")) as {installed?:boolean;running?:boolean};
-        if (!status.installed) {
-          // This is an interrupted first activation. The signed identity was
-          // verified above; never restart an already installed owner task.
-          runUserTask("Enable", options.endpoint);
-          runUserTask("Start");
-          process.stdout.write("Resumed user-logon task for the approved device.\n");
+        const pending = await hasFile(activationMarker);
+        if (pending) {
+          assertPrivateStore("Check", directory, "v2-identity.pem.activation-pending");
+          if ((await readFile(activationMarker, "utf8")).trim() !== approved)
+            throw Error("Activation marker conflicts with signed device identity.");
         }
+        const status = JSON.parse(runUserTask("Status")) as {installed: boolean;running: boolean};
+        await resumePendingWindowsActivation(pending, status,
+          action => { runUserTask(action, options.endpoint); },
+          () => unlink(activationMarker));
+        if (pending) process.stdout.write("Recovered interrupted user-logon activation.\n");
+        else if (!status.installed) process.stdout.write(
+          "Existing device has no user-logon task; public installer will not re-enable it.\n");
       }
       process.stdout.write("Already authorized: " + approved + "; remote online is unconfirmed.\n");
       if (mode === "temporary") {
@@ -340,8 +360,14 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
     process.stdout.write("Owner approved device " + approvedId + "; remote online remains unconfirmed.\n");
     if (mode === "permanent") {
-      process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
-      process.stdout.write(runUserTask("Start") + "\n");
+      // This record is written before first Enable, retained across failures,
+      // and deleted only after successful Start. Its owner-only ACL and ID bind
+      // recovery to the originally approved key, not a stopped healthy task.
+      await writeFile(activationMarker, approvedId + "\n", {flag:"wx",mode:0o600});
+      assertPrivateStore("Seal", directory, "v2-identity.pem.activation-pending");
+      await resumePendingWindowsActivation(true, {installed:false,running:false},
+        action => { runUserTask(action, options.endpoint); },
+        () => unlink(activationMarker));
       process.stdout.write("User-logon task started; verify online status through authenticated MCP.\n");
     } else {
       process.stdout.write("Temporary mode: foreground until terminal closes; server grant expires after 24 hours.\n");
