@@ -284,6 +284,12 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       endpoint: options.endpoint!, keyPath, currentId: originalId,
       name: selectDeviceLabel(options.name ?? os.hostname(), os.hostname()),
       seal: () => assertPrivateStore("Seal", directory, "v2-identity.pem.device-id.pending"),
+      assertStopped: () => {
+        const latest = JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean };
+        if (!latest.installed || latest.running) {
+          throw Error("Windows task changed while awaiting approval; local identity unchanged.");
+        }
+      },
       onPending: (code, fingerprint) => {
         process.stdout.write("Pairing code: " + code + "\n");
         process.stdout.write("Fingerprint: " + fingerprint + "\n");
