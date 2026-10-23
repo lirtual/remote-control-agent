@@ -9,7 +9,8 @@ import { verifyApprovedDeviceId, DeviceSessionRejectedError } from "./v2-session
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export async function replaceSignedDeviceId(
-  keyPath: string, originalId: string, approvedId: string, seal: () => void,
+  keyPath: string, originalId: string, approvedId: string,
+  seal: () => void, assertStopped: () => void = () => {},
 ): Promise<boolean> {
   if (!UUID.test(originalId) || !UUID.test(approvedId)) throw Error("Invalid signed device identity.");
   if ((await readFile(keyPath + ".device-id", "utf8")).trim() !== originalId) {
@@ -31,6 +32,9 @@ export async function replaceSignedDeviceId(
     if ((await readFile(keyPath + ".device-id", "utf8")).trim() !== originalId) {
       throw Error("Device identity changed while staging recovery.");
     }
+    // The owner may start a stopped task while the 10-minute approval is pending.
+    // Fail without switching the ID if it has become active meanwhile.
+    assertStopped();
     // An already sealed file keeps its ACL through an atomic same-volume rename.
     // A failed swap retains the original approved ID.
     await rename(stage, keyPath + ".device-id");
@@ -43,7 +47,8 @@ export async function replaceSignedDeviceId(
 
 export async function repairWindowsIdentity(options: {
   endpoint: string; keyPath: string; currentId: string; name: string;
-  seal: () => void; onPending: (code: string, fingerprint: string) => void;
+  seal: () => void; assertStopped?: () => void;
+  onPending: (code: string, fingerprint: string) => void;
   send?: typeof fetch;
   verify?: (endpoint: string, keyPath: string, send: typeof fetch) => Promise<string>;
   sleep?: (milliseconds: number) => Promise<unknown>;
@@ -89,6 +94,6 @@ export async function repairWindowsIdentity(options: {
   // A signed device ID from the production challenge/recover route always
   // proves the server accepted the SAME local private key.
   if (!UUID.test(approvedId)) throw Error("Invalid signed device approval.");
-  await replaceSignedDeviceId(keyPath, currentId, approvedId, seal);
+  await replaceSignedDeviceId(keyPath, currentId, approvedId, seal, options.assertStopped);
   return approvedId === currentId ? "unchanged" : "restored";
 }
