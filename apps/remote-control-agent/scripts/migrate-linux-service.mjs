@@ -34,6 +34,15 @@ function ownerFile(meta, mode) {
      meta.nlink!==1 || (meta.mode&0o777)!==mode)
     throw Error("Untrusted owner unit or identity");
 }
+function releaseVersion(name){
+  const m=/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-linux-(x64|arm64)-glibc$/.exec(name);
+  if(!m)throw Error("Untrusted Linux Agent release directory");
+  return {parts:m.slice(1,4).map(Number),arch:m[4]};
+}
+function newerRelease(next,previous){
+  for(let i=0;i<3;i++)if(next[i]!==previous[i])return next[i]>previous[i];
+  return false;
+}
 function serviceOrigin(origin) {
   const u=new URL(origin);
   if(u.protocol!=="https:"||u.username||u.password||u.search||u.hash||
@@ -53,8 +62,9 @@ function proveOldWssUnit(unit,home) {
   const working=exactField(unit,"WorkingDirectory");
   const root=path.resolve(working,"../..");
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
+  const release=releaseVersion(path.basename(root));
   if(path.dirname(root)!==programs ||
-     !/^v0\.1\.(?:12|1[3-9]|[2-9][0-9])-linux-(?:x64|arm64)-glibc$/.test(path.basename(root)) ||
+     !newerRelease(release.parts,[0,1,11]) ||
      start!==path.join(root,"bin/node")+" "+path.join(root,APP,"src/v2-main.js"))
     throw Error("Cannot prove reviewed predecessor program");
   const endpoint=serviceOrigin(exactField(unit,"Environment=REMOTE_CONTROL_V2_ENDPOINT"));
@@ -71,7 +81,7 @@ function proveOldWssUnit(unit,home) {
     .replace("REMOTE_CONTROL_AGENT_ENDPOINT","REMOTE_CONTROL_V2_ENDPOINT")
     .replace("REMOTE_CONTROL_AGENT_KEY_PATH","REMOTE_CONTROL_V2_KEY_PATH");
   if(unit!==historical)throw Error("Unexpected signed Agent legacy service directives");
-  return {root,endpoint,key};
+  return {root,endpoint,key,release};
 }
 
 export function planServiceCutover({home,legacyUnit,tunnelUnit,signedUnit,candidateRoot,deviceId}) {
@@ -84,8 +94,10 @@ export function planServiceCutover({home,legacyUnit,tunnelUnit,signedUnit,candid
     throw Error("Unrecognized historical Tunnel executable");
   const old=proveOldWssUnit(signedUnit,home);
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
-  if(path.dirname(candidateRoot)!==programs || !/^v0\.1\.[0-9]+-linux-(?:x64|arm64)-glibc$/.test(path.basename(candidateRoot)) ||
-     candidateRoot===old.root)throw Error("Candidate must be a distinct verified Release");
+  const candidate=releaseVersion(path.basename(candidateRoot));
+  if(path.dirname(candidateRoot)!==programs || candidate.arch!==old.release.arch ||
+     !newerRelease(candidate.parts,old.release.parts))
+    throw Error("Candidate must be a newer verified Release for the same CPU");
   const canonical=renderV2Service({home,repoRoot:candidateRoot,
     node:path.join(candidateRoot,"bin/node"),endpoint:old.endpoint,keyPath:old.key,entryExt:"js"});
   return Object.freeze({home,legacyUnit,tunnelUnit,signedUnit,candidateRoot,
