@@ -26,7 +26,7 @@ async function fixture() {
 test("repeat installer reuses only the exact running program, never silently switches CLI versions",()=>{
   const old="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.1-linux-x64-glibc";
   const next="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.2-linux-x64-glibc";
-  const unit="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n[Service]\n"+
+  const unit="# Managed by Remote Control Agent installer.\n[Service]\n"+
     "ExecStart="+old+"/bin/node "+old+"/apps/remote-control-agent/src/v2-main.js\n";
   assert.equal(assertRepeatInstallSameVersion(unit,old),undefined);
   assert.throws(()=>assertRepeatInstallSameVersion(unit,next),/use reviewed rca upgrade/);
