@@ -163,7 +163,16 @@ function Assert-ArchiveDigest([string]$file, [string]$sha) {
       $item.Length -lt 100000 -or $item.Length -gt 100000000) {
     throw 'Untrusted ZIP asset file'
   }
-  $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+  # Use the built-in .NET hash implementation rather than depending on
+  # automatic PowerShell module discovery in a fresh restricted user profile.
+  $hash = [Security.Cryptography.SHA256]::Create()
+  try {
+    $stream = [IO.File]::Open($file, [IO.FileMode]::Open,
+      [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try { $digest = $hash.ComputeHash($stream) }
+    finally { $stream.Dispose() }
+    $actual = [BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
+  } finally { $hash.Dispose() }
   if ($actual -cne $sha) { throw 'Release asset SHA256 mismatch' }
 }
 function Expand-SafeArchive([string]$file, [string]$folder) {
