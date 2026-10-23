@@ -1,4 +1,4 @@
-# Native Windows x64 bootstrap. Refuses a Release unless published and immutable.
+﻿# Native Windows x64 bootstrap. Refuses a Release unless published and immutable.
 # Verify GitHub Release immutability + official SHA256 BEFORE extracting/executing.
 [CmdletBinding()]
 param(
