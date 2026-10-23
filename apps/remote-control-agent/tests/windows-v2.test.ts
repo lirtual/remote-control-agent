@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -62,4 +62,13 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(windowsAgentStore("C:\\Users\\ray\\AppData\\Local"),
     "C:\\Users\\ray\\AppData\\Local\\mcp-workers\\remote-control");
   assert.throws(() => windowsAgentStore("\\\\server\\data"));
+});
+
+
+test("temporary approved retry resumes only the foreground session, without re-pair or user task", async () => {
+  const actions: string[][] = [];
+  await startApprovedTemporaryAgent("https://rca.example.test/", async args => {
+    actions.push(args);
+  });
+  assert.deepEqual(actions, [["run", "--endpoint", "https://rca.example.test/"]]);
 });

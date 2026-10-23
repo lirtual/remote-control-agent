@@ -151,6 +151,13 @@ export async function createPackagedBrowserForWindows(
   return new candidate.PlaywrightBrowserManager({agentStore});
 }
 
+/** Reconnect an already-approved Temporary Agent without enrolling or scheduling. */
+export async function startApprovedTemporaryAgent(
+  endpoint: string, runner: (args: string[]) => Promise<void> = runWindowsAgent,
+): Promise<void> {
+  await runner(["run", "--endpoint", endpoint]);
+}
+
 export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64" ||
       !/^v24\./.test(process.version)) {
@@ -261,6 +268,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         }
       }
       process.stdout.write("Already authorized: " + approved + "; remote online is unconfirmed.\n");
+      if (mode === "temporary") {
+        process.stdout.write("Temporary mode: reconnecting in foreground; no startup task or new grant.\n");
+        await startApprovedTemporaryAgent(options.endpoint!);
+      }
       return;
     }
     let approvedId: string | undefined;
@@ -304,7 +315,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       process.stdout.write("User-logon task started; verify online status through authenticated MCP.\n");
     } else {
       process.stdout.write("Temporary mode: foreground until terminal closes; server grant expires after 24 hours.\n");
-      await runWindowsAgent(["run", "--endpoint", options.endpoint!]);
+      await startApprovedTemporaryAgent(options.endpoint!);
     }
     return;
   }
