@@ -182,7 +182,10 @@ try {
     if ($alreadyPaired) {
       $storedId = (Get-Content -LiteralPath $idFile -Raw).Trim()
       if ($storedId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'Untrusted stored device ID' }
-      Write-Output ('Already installed and authorized: ' + $storedId)
+      Write-Output ('Existing local device ID: ' + $storedId)
+      # The bundled CLI uses a fresh signed challenge to confirm the grant.
+      & ([IO.Path]::Combine($target,'rca.cmd')) onboard --endpoint 'https://rca.lirtual.dpdns.org/'
+      if ($LASTEXITCODE -ne 0) { throw 'Existing device grant could not be verified; nothing was changed' }
       Write-Output 'Actual remote online status requires authenticated MCP verification.'
       return
     }

@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enrollment.ts";
-import { recoverDeviceId, DeviceSessionRejectedError } from "./v2-session-client.ts";
+import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "./v2-session-client.ts";
 import { promptInstallMode } from "./install-mode.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
@@ -215,6 +215,15 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       throw Error("Onboarding requires the local interactive Windows terminal.");
     }
+    // An ID on disk is only a local claim: verify the key and active grant
+    // with a fresh signed server challenge before announcing authorization or
+    // resuming any interrupted task. This never rotates or writes identity.
+    if (idExists) {
+      const localId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+      if (!ID.test(localId)) throw Error("Invalid local device ID.");
+      const approvedId = await verifyApprovedDeviceId(options.endpoint!, keyPath);
+      if (approvedId !== localId) throw Error("Stored device ID conflicts with signed owner grant.");
+    }
     const modePath = keyPath + ".install-mode";
     const hasMode = await hasFile(modePath);
     if (exists && !hasMode && !idExists) {
@@ -244,9 +253,8 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       if (mode === "permanent") {
         const status = JSON.parse(runUserTask("Status")) as {installed?:boolean;running?:boolean};
         if (!status.installed) {
-          // Resume only an interrupted approved first activation, not a live task.
-          const signedId = await recoverDeviceId(options.endpoint!, keyPath);
-          if (signedId !== approved) throw Error("Saved device ID conflicts with signed owner grant.");
+          // This is an interrupted first activation. The signed identity was
+          // verified above; never restart an already installed owner task.
           runUserTask("Enable", options.endpoint);
           runUserTask("Start");
           process.stdout.write("Resumed user-logon task for the approved device.\n");
