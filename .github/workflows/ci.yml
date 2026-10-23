@@ -427,6 +427,10 @@ jobs:
               if ($process.ExitCode -eq 0) { throw 'Installer enrolled without a real interactive terminal' }
               $diagnostic = (Get-Content -LiteralPath $stderrFile -Raw) + (Get-Content -LiteralPath $stdoutFile -Raw)
               if ($diagnostic -notmatch 'Interactive onboarding incomplete') {
+                # This fixture uses a disposable profile and no credentials;
+                # expose only a bounded native error to diagnose the seam.
+                $bounded = $diagnostic.Substring(0, [Math]::Min(1400, $diagnostic.Length))
+                Write-Output ('CI_PUBLIC_INSTALL_DIAGNOSTIC: ' + $bounded)
                 throw "Unexpected public installer first/repeat failure (attempt $attempt)"
               }
               if (-not (Test-Path -LiteralPath $target)) {
