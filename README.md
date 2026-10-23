@@ -146,7 +146,10 @@ only on an approved trusted personal Windows device.
 1. Review the one-time offline v0.1.11 cutover and future in-process freeze.
 2. Verify safe rejection, exact identity and receipt preservation, rollback,
    and native x64/ARM64 archive tests under existing Agent CI.
-3. Only after source review and release approval, publish the immutable new
-   version and update the existing Worker Release pin. No separate deployer.
+3. After the reviewed three-platform candidate CI succeeds, commit one exact
+   `.github/release-pins/<tag>.json` on `main`. GitHub Actions automatically
+   publishes that pinned Release after verifying source, artifacts and SHA-256.
+   Ordinary source pushes do not publish Releases; existing pins can also be
+   dispatched manually. The Worker Release pins and deployment remain separate.
 
 A source PR and passing CI do not update the installed v0.1.11 Agent.
