@@ -101,7 +101,7 @@ if ($Action -eq 'Seal') {
   Assert-PrivateAcl $file $false
   return
 }
-foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending')) {
+foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.device-id.pending', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending')) {
   $file = [IO.Path]::Combine($expected, $name)
   if ([IO.File]::Exists($file) -or [IO.Directory]::Exists($file)) {
     Assert-PrivateAcl $file $false
