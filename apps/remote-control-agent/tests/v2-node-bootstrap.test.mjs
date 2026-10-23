@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages } from "../scripts/bootstrap-node.mjs";
+import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages, needsCanonicalServiceCutover } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -405,4 +405,23 @@ test("failed installer activation preserves prior local keys and does not report
     assert.ok(readdirSync(path.join(f.home,".local/share/mcp-workers/remote-control/programs"))
       .includes("v0.1.2-"+nativeTarget));
   }finally{f.cleanup();}
+});
+
+test("one-time canonical upgrade detection never treats unrelated unit pairs as eligible",()=>{
+  const home=mkdtempSync(path.join(tmpdir(),"rca-cutover-discovery-"));
+  const unitDir=path.join(home,".config/systemd/user");
+  mkdirSync(unitDir,{recursive:true});
+  const a=path.join(unitDir,"remote-control-agent.service");
+  const b=path.join(unitDir,"remote-control-v2-agent.service");
+  try {
+    assert.equal(needsCanonicalServiceCutover(home),false);
+    writeFileSync(a,"# Installed from docs/remote-control/systemd/remote-control-agent.service.example\n");
+    writeFileSync(b,"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n");
+    assert.equal(needsCanonicalServiceCutover(home),true);
+    writeFileSync(a,"# Managed by Remote Control Agent installer.\n");
+    assert.equal(needsCanonicalServiceCutover(home),false);
+    rmSync(a);
+    symlinkSync("/etc/passwd",a);
+    assert.throws(()=>needsCanonicalServiceCutover(home),/Untrusted/);
+  }finally{rmSync(home,{recursive:true,force:true});}
 });
