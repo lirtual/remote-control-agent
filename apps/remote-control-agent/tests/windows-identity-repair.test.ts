@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { replaceSignedDeviceId, repairWindowsIdentity } from "../src/windows-identity-repair.ts";
@@ -44,7 +45,12 @@ test("different signed approval is recovered without creating duplicate registra
     let sealed = 0;
     const result = await repairWindowsIdentity({
       endpoint: ENDPOINT, keyPath: file, currentId: OLD, name: "WIN-TEST",
-      seal: () => { sealed++; },
+      seal: () => {
+        sealed++;
+        assert.equal(existsSync(file + ".device-id.pending"), true);
+        assert.equal(readFileSync(file + ".device-id", "utf8").trim(), OLD);
+        assert.equal(readFileSync(file + ".device-id.pending", "utf8").trim(), NEW);
+      },
       onPending: () => { throw Error("Unexpected pairing code"); },
       verify: async () => NEW,
       send: async () => { throw Error("Unexpected enrollment"); },
@@ -120,5 +126,28 @@ test("local ID mismatch refuses replacement even with a different signed ID", as
     await assert.rejects(replaceSignedDeviceId(file, OLD, NEW,
       () => { throw Error("must not seal"); }), /changed/);
     assert.equal((await readFile(file + ".device-id", "utf8")).trim(), NEW);
+  });
+});
+
+test("ACL seal rejection retains original device ID and removes staging file", async () => {
+  await fixture(async file => {
+    await assert.rejects(replaceSignedDeviceId(file, OLD, NEW, () => {
+      assert.equal(readFileSync(file + ".device-id", "utf8").trim(), OLD);
+      assert.equal(existsSync(file + ".device-id.pending"), true);
+      throw Error("ACL seal rejected");
+    }), /ACL seal rejected/);
+    assert.equal((await readFile(file + ".device-id", "utf8")).trim(), OLD);
+    assert.equal(existsSync(file + ".device-id.pending"), false);
+  });
+});
+
+test("pre-existing pending file blocks concurrent identity repair without altering either file", async () => {
+  await fixture(async file => {
+    await writeFile(file + ".device-id.pending", NEW + "\n");
+    await assert.rejects(replaceSignedDeviceId(file, OLD, NEW, () => {
+      throw Error("must not seal an existing staged ID");
+    }), /EEXIST/);
+    assert.equal((await readFile(file + ".device-id", "utf8")).trim(), OLD);
+    assert.equal((await readFile(file + ".device-id.pending", "utf8")).trim(), NEW);
   });
 });
