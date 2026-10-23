@@ -745,15 +745,38 @@ export async function installUnit(unitPath, content, previous) {
   }
 }
 
-/**
- * Re-running the reviewed permanent install must complete a SIGKILL that
- * occurred after writing the unit but before systemctl enable --now.
- * It must not rotate identity or restart an already active service.
- */
-export function ensureApprovedPermanentService(invoke = run) {
-  // Healthy repeats are strictly read-only: never reload or touch a live task.
+/** Proof of incomplete *first* activation, never inferred from an inactive unit.
+ * Store only the approved device ID in the existing owner-only identity dir. */
+export async function hasInitialActivation(marker, deviceId) {
+  if (!DEVICE_ID.test(deviceId)) throw Error("Invalid approved device ID for activation.");
+  const meta = await exists(marker);
+  if (!meta) return false;
+  if (!meta.isFile() || meta.isSymbolicLink() || meta.uid !== process.getuid() ||
+      (meta.mode & 0o777) !== 0o600 || meta.nlink !== 1) {
+    throw Error("Unsafe first-activation marker; manual review required.");
+  }
+  if ((await readFile(marker, "utf8")) !== deviceId + "\n") {
+    throw Error("First-activation marker conflicts with approved device identity.");
+  }
+  return true;
+}
+export async function beginInitialActivation(marker, deviceId) {
+  if (await hasInitialActivation(marker, deviceId)) return;
+  const file = await open(marker, "wx", 0o600);
+  try { await file.writeFile(deviceId + "\n"); await file.sync(); }
+  finally { await file.close(); }
+  await syncParent(marker);
+}
+export async function clearInitialActivation(marker) {
+  await rm(marker);
+  await syncParent(marker);
+}
+
+/** Repeated install never revives an owner-stopped unit without the protected marker. */
+export function ensureApprovedPermanentService(invoke = run, pending = false) {
   try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); return true; }
-  catch { /* An interrupted first activation may be recovered. */ }
+  catch { /* Not active; only recover a verifiable first-activation marker. */ }
+  if (!pending) return null;
   invoke("systemctl", ["--user", "daemon-reload"]);
   invoke("systemctl", ["--user", "enable", UNIT]);
   invoke("systemctl", ["--user", "start", UNIT]);
@@ -1371,10 +1394,17 @@ export async function runInstaller(args, {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
           // Never restart v1 or replace this approved local identity.
-          const alreadyActive = ensureApprovedPermanentService();
+          const marker = keyPath + ".activation-pending";
+          const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+          const pending = await hasInitialActivation(marker, deviceId);
+          const alreadyActive = ensureApprovedPermanentService(run, pending);
+          if (pending) await clearInitialActivation(marker);
+          if (alreadyActive === null) {
+            stdout.write("Existing approved service is stopped; repeat install will not restart it.\n");
+            return;
+          }
           if (portable) {
-            // An active authorized service is a genuinely read-only repeat:
-            // do not replace ~/.local/bin/rca or append to ~/.bashrc.
+            // Healthy repeats never overwrite ~/.local/bin/rca or ~/.bashrc.
             const launcher = alreadyActive
               ? path.join(home, ".local", "bin", "rca")
               : await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
@@ -1433,8 +1463,15 @@ export async function runInstaller(args, {
       }
     }
   }
+  const firstActivation = !previous && !options.foreground;
+  const activationMarker = keyPath + ".activation-pending";
+  if (firstActivation) {
+    const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    await beginInitialActivation(activationMarker, deviceId);
+  }
   try {
     await installUnit(unitPath, rendered, previous);
+    if (firstActivation) await clearInitialActivation(activationMarker);
   } finally {
     // When activation fails before service stop, let the old Agent resume.
     // After successful restart the old socket disappears and release is a no-op.
