@@ -51,8 +51,12 @@ jobs:
         shell: pwsh
         run: |
           Set-Location apps/remote-control-agent
-          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Windows test failed' }
+          # Native PowerShell ACL probes spawn several OS processes; isolate
+          # them from the parallel Shell/full-tools tests to avoid runner load races.
+          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows full-tools tests failed' }
+          node --experimental-strip-types --test tests/windows-acl.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows identity ACL checks failed' }
       - name: Compile no-console Windows Agent launcher
         shell: pwsh
         run: |
