@@ -65,6 +65,66 @@ function Ensure-PrivateFolder([string]$folder) {
   [IO.Directory]::SetAccessControl($folder, $acl)
   Assert-PrivateFolder $folder
 }
+function Download-ApprovedAsset([string]$firstUri, [string]$dest) {
+  # Do not let an HTTP redirect select a new release source or an internal URL.
+  Add-Type -AssemblyName System.Net.Http
+  $handler = [Net.Http.HttpClientHandler]::new()
+  $handler.AllowAutoRedirect = $false
+  $client = [Net.Http.HttpClient]::new($handler)
+  $client.Timeout = [TimeSpan]::FromSeconds(120)
+  $uri = [Uri]::new($firstUri)
+  try {
+    for ($redirects = 0; $redirects -le 5; $redirects++) {
+      if ($uri.Scheme -cne 'https' -or $uri.Port -ne 443 -or
+          $uri.UserInfo -or $uri.Fragment -or
+          (($redirects -eq 0 -and
+            ($uri.AbsoluteUri -cne $firstUri -or $uri.Host -cne 'github.com' -or
+             $uri.AbsolutePath -cnotlike '/lirtual/remote-control-agent/releases/download/*')) -or
+           ($redirects -gt 0 -and $uri.Host -cnotin @(
+              'release-assets.githubusercontent.com', 'objects.githubusercontent.com')))) {
+        throw 'Unexpected GitHub Release asset redirect'
+      }
+      $response = $client.GetAsync($uri, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+      try {
+        $status = [int]$response.StatusCode
+        if ($status -in @(301,302,303,307,308)) {
+          if (-not $response.Headers.Location -or $redirects -eq 5) {
+            throw 'GitHub Release asset redirect limit exceeded'
+          }
+          $uri = [Uri]::new($uri, $response.Headers.Location)
+          continue
+        }
+        if ($status -ne 200 -or
+            ($response.Content.Headers.ContentLength -ne $null -and
+             $response.Content.Headers.ContentLength -gt 100000000)) {
+          throw 'Untrusted GitHub Release asset response'
+        }
+        $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+        $outputStream = [IO.File]::Open($dest, [IO.FileMode]::CreateNew,
+                                     [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+          $buffer = [byte[]]::new(65536)
+          [long]$total = 0
+          while (($count = $inputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $total += $count
+            if ($total -gt 100000000) { throw 'Oversized GitHub Release asset' }
+            $outputStream.Write($buffer, 0, $count)
+          }
+          $outputStream.Flush($true)
+        } finally {
+          $outputStream.Dispose()
+          $inputStream.Dispose()
+        }
+        return
+      } finally { $response.Dispose() }
+    }
+    throw 'GitHub Release asset redirect limit exceeded'
+  } finally {
+    $client.Dispose()
+    $handler.Dispose()
+  }
+}
+
 function Download-ImmutableRelease([string]$tag, [string]$dest) {
   $base = 'https://api.github.com/repos/lirtual/remote-control-agent'
   $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'rca-windows-pinned-installer' }
@@ -93,7 +153,7 @@ function Download-ImmutableRelease([string]$tag, [string]$dest) {
       $asset.size -lt 100000 -or $asset.size -gt 100000000) {
     throw 'Untrusted GitHub Release asset digest/URL'
   }
-  Invoke-WebRequest -Uri $expectedUri -OutFile $dest -MaximumRedirection 5 -TimeoutSec 120 -UseBasicParsing
+  Download-ApprovedAsset $expectedUri $dest
   return $asset.digest.Substring(7)
 }
 function Assert-ArchiveDigest([string]$file, [string]$sha) {

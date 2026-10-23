@@ -152,6 +152,26 @@ jobs:
           if ((Get-Content -Raw 'install.ps1') -notmatch 'PinnedReleaseSha256') {
             throw 'Public Windows installer must require a reviewed immutable asset hash'
           }
+          # Invoke only the isolated redirect validator function against
+          # deliberately invalid starting origins. No HTTP request is made.
+          $functionAst = $null
+          $functionAst = ([System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install.ps1').Path, [ref]$tokens, [ref]$parseErrors)).Find({
+            param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Download-ApprovedAsset'
+          }, $true)
+          if (-not $functionAst) { throw 'Pinned redirect checker is missing' }
+          Invoke-Expression $functionAst.Extent.Text
+          foreach ($bad in @('http://github.com/lirtual/remote-control-agent/releases/download/test.zip',
+            'https://127.0.0.1/internal.zip', 'https://evil.example/install.zip',
+            'https://github.com/other/project/releases/download/evil.zip')) {
+            $rejected = $false
+            try { Download-ApprovedAsset $bad (Join-Path $env:RUNNER_TEMP 'blocked-download.zip') }
+            catch { $rejected = $true }
+            if (-not $rejected -or (Test-Path (Join-Path $env:RUNNER_TEMP 'blocked-download.zip'))) {
+              throw ('Untrusted Windows download origin was not blocked: ' + $bad)
+            }
+          }
       - name: User task negative checks (never create a task)
         shell: pwsh
         run: |
