@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, resumePendingWindowsActivation } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, resumePendingWindowsActivation, reconcileWindowsOnboard } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -134,4 +135,76 @@ test("Windows onboarding retains pending state on failed task activation", async
     (action) => {calls.push(action); if(action==="Start") throw Error("Task Start failed");},
     async () => {calls.push("Clear");}), /Start failed/);
   assert.deepEqual(calls, ["Enable","Start"]);
+});
+
+test("one-command repeat install leaves a valid signed device and running task untouched", async () => {
+  const calls: string[] = [];
+  const result = await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => "11111111-1111-4111-8111-111111111111",
+    status: () => { calls.push("status"); return { installed: true, running: true }; },
+    stop: () => { calls.push("stop"); },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); },
+  });
+  assert.equal(result, "unchanged");
+  assert.deepEqual(calls, [], "verified healthy device has no side effects");
+});
+
+test("one-command expired grant continues to owner-approved re-pair and restarts task", async () => {
+  const calls: string[] = [];
+  let running = true;
+  const result = await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => { throw new DeviceSessionRejectedError("missing grant", 404); },
+    status: () => ({installed: true, running}),
+    stop: () => { calls.push("stop"); running = false; },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); running = true; },
+  });
+  assert.equal(result, "restored");
+  assert.deepEqual(calls, ["stop", "re-pair", "start"]);
+  assert.equal(running, true);
+});
+
+test("signed but mismatched old ID is repaired without another cloud grant", async () => {
+  const calls: string[] = [];
+  await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => "22222222-2222-4222-8222-222222222222",
+    status: () => ({ installed: true, running: false }),
+    stop: () => { calls.push("stop"); },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); },
+  });
+  assert.deepEqual(calls, ["re-pair", "start"]);
+});
+
+test("403 and network failure never stop an existing Windows task or create pending authorization", async () => {
+  for (const err of [new DeviceSessionRejectedError("forbidden", 403), new Error("network")]) {
+    const calls: string[] = [];
+    await assert.rejects(reconcileWindowsOnboard({
+      currentId: "11111111-1111-4111-8111-111111111111",
+      verify: async () => { throw err; },
+      status: () => { calls.push("status"); return {installed:true,running:true}; },
+      stop: () => { calls.push("stop"); },
+      rePair: async () => { calls.push("re-pair"); },
+      start: () => { calls.push("start"); },
+    }), e => e === err);
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("failed owner approval never restarts or replaces an existing device", async () => {
+  let running = false;
+  const calls: string[] = [];
+  await assert.rejects(reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => { throw new DeviceSessionRejectedError("missing", 404); },
+    status: () => ({ installed: true, running }),
+    stop: () => { calls.push("stop"); running = false; },
+    rePair: async () => { calls.push("re-pair"); throw Error("MCP approval missing"); },
+    start: () => { calls.push("start"); running = true; },
+  }), /approval missing/);
+  assert.deepEqual(calls, ["re-pair"]);
 });
