@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -71,4 +71,31 @@ test("temporary approved retry resumes only the foreground session, without re-p
     actions.push(args);
   });
   assert.deepEqual(actions, [["run", "--endpoint", "https://rca.example.test/"]]);
+});
+
+
+test("Windows task enable requires the active signed grant, not only a local device-id file", async () => {
+  const id = "cdc1ba24-ed48-4f2e-9191-875ce6be5af0";
+  const checks: string[][] = [];
+  const verifier = async (endpoint: string, keyPath: string) => {
+    checks.push([endpoint, keyPath]);
+    return id;
+  };
+  const url = "https://rca.example.test/";
+  const key = "C:\\Users\\Test\\v2-identity.pem";
+  assert.equal(await assertSignedWindowsGrant(url, key, id, verifier), id);
+  assert.deepEqual(checks, [[url, key]]);
+  await assert.rejects(assertSignedWindowsGrant(url, key,
+    "00000000-0000-0000-0000-000000000000", verifier), /conflict|signed|grant/i);
+  await assert.rejects(assertSignedWindowsGrant(url, key, id,
+    async () => { throw new Error("owner grant revoked"); }), /revoked/);
+  assert.equal(checks.length, 2, "one verifier invocation per local claim");
+});
+
+
+test("Windows user-logon task cannot be enabled for temporary or malformed grant modes", () => {
+  assert.equal(assertWindowsAutostartMode("permanent"), true);
+  assert.equal(assertWindowsAutostartMode(undefined), true); // pre-onboarding legacy permanent
+  assert.throws(() => assertWindowsAutostartMode("temporary"), /permanent/i);
+  assert.throws(() => assertWindowsAutostartMode("unknown"), /permanent/i);
 });

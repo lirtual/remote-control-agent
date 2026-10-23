@@ -151,6 +151,24 @@ export async function createPackagedBrowserForWindows(
   return new candidate.PlaywrightBrowserManager({agentStore});
 }
 
+/** Temporary grants only run in foreground; a missing mode is a legacy permanent install. */
+export function assertWindowsAutostartMode(mode: string | undefined): true {
+  if (mode !== undefined && mode !== "permanent")
+    throw Error("Only permanent Windows grants may enable an autostart task.");
+  return true;
+}
+
+/** Never use a local device-id file alone to authorize task activation. */
+export async function assertSignedWindowsGrant(
+  endpoint: string, keyPath: string, localId: string,
+  verifier: typeof verifyApprovedDeviceId = verifyApprovedDeviceId,
+): Promise<string> {
+  if (!ID.test(localId)) throw Error("Invalid local device ID.");
+  const approvedId = await verifier(endpoint, keyPath);
+  if (approvedId !== localId) throw Error("Stored device ID conflicts with signed owner grant.");
+  return approvedId;
+}
+
 /** Reconnect an already-approved Temporary Agent without enrolling or scheduling. */
 export async function startApprovedTemporaryAgent(
   endpoint: string, runner: (args: string[]) => Promise<void> = runWindowsAgent,
@@ -212,8 +230,18 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
       assertPrivateStore("Check", directory);
     }
+    const modePath = keyPath + ".install-mode";
+    let grantMode: string | undefined;
+    if (await hasFile(modePath)) {
+      assertPrivateStore("Check", directory, "v2-identity.pem.install-mode");
+      grantMode = (await readFile(modePath, "utf8")).trim();
+    }
+    assertWindowsAutostartMode(grantMode);
     const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
-    if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
+    // The recovered-ID branch already verified a signed challenge, and an
+    // existing ID must be checked afresh before enabling an autostart task.
+    if (idExists) await assertSignedWindowsGrant(options.endpoint!, keyPath, deviceId);
+    else if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
     process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
     return;
   }
@@ -227,9 +255,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     // resuming any interrupted task. This never rotates or writes identity.
     if (idExists) {
       const localId = (await readFile(keyPath + ".device-id", "utf8")).trim();
-      if (!ID.test(localId)) throw Error("Invalid local device ID.");
-      const approvedId = await verifyApprovedDeviceId(options.endpoint!, keyPath);
-      if (approvedId !== localId) throw Error("Stored device ID conflicts with signed owner grant.");
+      await assertSignedWindowsGrant(options.endpoint!, keyPath, localId);
     }
     const modePath = keyPath + ".install-mode";
     const hasMode = await hasFile(modePath);
