@@ -273,8 +273,23 @@ try {
       Write-Output ("Existing paired Agent: {0} -> {1}" -f $oldVersion, $Version)
       Write-Output 'Existing identity and grant will be retained. Finish active remote operations before upgrading.'
       Write-Output ("Scheduled task is currently {0}; its running state will be preserved." -f $task.State)
-      $answer = Read-Host 'Upgrade this device using the verified Release? [y/N]'
-      if ($answer -cne 'y' -and $answer -cne 'Y') { throw 'Upgrade cancelled; existing device unchanged' }
+      # Prompt through the PowerShell host UI rather than stdin: the public
+      # one-liner is evaluated by iex while receiving script text from a pipe.
+      # No host support or no affirmative choice must never approve an upgrade.
+      $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
+        [System.Management.Automation.Host.ChoiceDescription]::new('&Yes', 'Approve verified Agent upgrade'),
+        [System.Management.Automation.Host.ChoiceDescription]::new('&No', 'Keep the current device version')
+      )
+      try {
+        $selected = $Host.UI.PromptForChoice('Remote Control Agent upgrade',
+          'Switch this device to the verified version? Choose Y to upgrade.', $choices, 1)
+      } catch {
+        throw 'This terminal could not collect upgrade approval; existing device unchanged'
+      }
+      if ($selected -ne 0) {
+        Write-Output 'Upgrade skipped; existing device unchanged.'
+        return
+      }
       $upgradeExisting = $true
     }
   } elseif ($task) {
