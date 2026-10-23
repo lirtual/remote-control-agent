@@ -267,9 +267,13 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (options.action === "re-pair") {
     if (!exists || !idExists) throw Error("Existing paired identity required.");
     const modePath = keyPath + ".install-mode";
-    if (!await hasFile(modePath)) throw Error("Protected permanent grant mode required.");
     assertPrivateStore("Check", directory);
-    assertWindowsAutostartMode((await readFile(modePath, "utf8")).trim());
+    // Older paired user-logon tasks predate install-mode metadata. The
+    // task must still be validated, and new permanent grant requires fresh
+    // owner approval. Explicit temporary mode can never use this path.
+    if (await hasFile(modePath)) {
+      assertWindowsAutostartMode((await readFile(modePath, "utf8")).trim());
+    }
     const state = JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean };
     if (!state.installed || state.running) {
       throw Error("An installed, stopped user task is required for recovery.");
