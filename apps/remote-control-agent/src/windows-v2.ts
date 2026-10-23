@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,29 +15,32 @@ import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enroll
 import { recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
+import type { BrowserBackend } from "./browser-backend.ts";
 
 const TASK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-user-task.ps1");
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-private-store.ps1");
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string;
+  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
 } {
   const action = argv[0];
   if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
+  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
-    if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version") ||
+    if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version" && key !== "--grant") ||
         (key === "--endpoint" && options.endpoint !== undefined) ||
         (key === "--name" && options.name !== undefined) ||
-        (key === "--version" && options.version !== undefined)) {
+        (key === "--version" && options.version !== undefined) ||
+        (key === "--grant" && (options.grant !== undefined || value !== "temporary"))) {
       throw Error("Unknown, duplicate or missing option.");
     }
     if (key === "--endpoint") options.endpoint = value;
     else if (key === "--name") options.name = value;
+    else if (key === "--grant") options.grant = "temporary";
     else options.version = value;
   }
   if (["status", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
@@ -44,12 +48,12 @@ export function parseWindowsAgentArgs(argv: string[]): {
   } else if (action === "upgrade" || action === "rollback") {
     if (argv.length !== 3 || !options.version ||
         !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(options.version) ||
-        options.endpoint !== undefined || options.name !== undefined) {
+        options.endpoint !== undefined || options.name !== undefined || options.grant !== undefined) {
       throw Error("Use upgrade/rollback --version vX.Y.Z.");
     }
   } else {
     if (options.version !== undefined) throw Error("Unexpected version flag.");
-    if (!options.endpoint || (action !== "pair" && options.name !== undefined)) {
+    if (!options.endpoint || (action !== "pair" && (options.name !== undefined || options.grant !== undefined))) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
     const url = new URL(options.endpoint);
@@ -112,6 +116,37 @@ function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status" 
   ], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
   if (result.error || result.status !== 0) throw Error("Native Windows user task refused.");
   return result.stdout.trim();
+}
+
+/**
+ * Local package selection, not an MCP argument or configurable browser path.
+ * Only the independently verified optional Windows preview artifact can
+ * supply the manager; standard paired Agents cannot launch browsers.
+ */
+export async function createPackagedBrowserForWindows(
+  agentStore: string,
+  entryUrl = import.meta.url,
+): Promise<BrowserBackend | undefined> {
+  if (process.platform !== "win32") throw Error("Native Windows browser required.");
+  const installedRoot = path.resolve(path.dirname(fileURLToPath(entryUrl)), "..", "..", "..");
+  const manifestPath = path.join(installedRoot, "bundle.json");
+  if (!existsSync(manifestPath)) return undefined; // source-only or old standard Agent
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+  if (manifest.browser_runtime === undefined) return undefined; // original package remains browser-free
+  // Verify every installed file, including the independently pinned Playwright
+  // bundle and compiled manager, before any browser can enter the WSS executor.
+  const verifyUrl = new URL("../scripts/verify-windows-preview.mjs", entryUrl);
+  const verifier = await import(verifyUrl.href) as {
+    inspectWindowsPreview(dir: string): unknown;
+  };
+  verifier.inspectWindowsPreview(installedRoot);
+  const candidateUrl = new URL("../candidates/browser-playwright.js", entryUrl);
+  const candidate = await import(candidateUrl.href) as {
+    PlaywrightBrowserManager?: new (options: {agentStore: string}) => BrowserBackend;
+  };
+  if (typeof candidate.PlaywrightBrowserManager !== "function")
+    throw Error("Trusted packaged BrowserManager missing.");
+  return new candidate.PlaywrightBrowserManager({agentStore});
 }
 
 export async function runWindowsAgent(argv: string[]): Promise<void> {
@@ -188,7 +223,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       finally { prompt.close(); }
     }
     const material = newEnrollment(name,
-      exists ? await readFile(keyPath, "utf8") : undefined, "permanent");
+      exists ? await readFile(keyPath, "utf8") : undefined, options.grant ?? "permanent");
     if (!exists) {
       // The private directory already has a protected DACL. Exclusive create
       // prevents concurrent windows from overwriting a device's private key.
@@ -228,8 +263,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   try {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
+    const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       receiptDirectory: path.win32.join(directory, "receipts"),
+      ...(browser ? { browser } : {}),
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({

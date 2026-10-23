@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { createAgentExecutionEngine, defaultAgentShellPath } from "../src/execution.ts";
 import { windowsManagedShellArguments } from "../src/sessions.ts";
 
@@ -43,19 +44,29 @@ test("Windows paired engine supports file effects, receipts and bounded native s
 
     const shellId = "win-" + randomUUID();
     const launched = await invoke("start_process", {
-      command: "Write-Output RCA_WINDOWS_OK", timeout_ms: 4_000,
+      command: "Write-Output RCA_WINDOWS_OK", timeout_ms: 8_000,
     }, shellId);
     assert.equal(launched?.status, 200);
     const receipt = await engine.getReceipt(shellId);
     assert.ok(receipt?.session_id, "An Agent-owned session ID must be persisted");
-    const output = await engine.executeTool({
-      tool: "read_process_output",
-      arguments: { session_id: receipt.session_id, offset: 0, length: 4096 },
-    }, controller.signal);
-    assert.equal(output?.status, 200);
-    const data = (output.body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
-    const page = JSON.parse(data) as { output: string };
-    assert.match(page.output, /RCA_WINDOWS_OK/);
+    // A new native PowerShell session can be running before it has emitted stdout.
+    // Read from offset zero until output arrives, the process exits, or the bounded
+    // deadline expires; never treat one legitimate empty page as lost output.
+    const deadline = Date.now() + 7_000;
+    let page: { output: string; eof: boolean; state: string; exit_code: number | null };
+    do {
+      const output = await engine.executeTool({
+        tool: "read_process_output",
+        arguments: { session_id: receipt.session_id, offset: 0, length: 4096 },
+      }, controller.signal);
+      assert.equal(output?.status, 200);
+      const data = (output.body as { result: { content: Array<{ text: string }> } }).result.content[0]!.text;
+      page = JSON.parse(data) as typeof page;
+      if (/RCA_WINDOWS_OK/.test(page.output) || page.eof) break;
+      await delay(100);
+    } while (Date.now() < deadline);
+    assert.match(page.output, /RCA_WINDOWS_OK/,
+      `PowerShell output missing (state=${page.state}, exit=${page.exit_code}, eof=${page.eof})`);
 
     const sleeper = await invoke("start_process", {
       command: "Start-Sleep -Seconds 60", timeout_ms: 0,

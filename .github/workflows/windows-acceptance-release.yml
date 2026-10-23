@@ -1,38 +1,48 @@
-name: Approved Windows-only acceptance prerelease
+name: Publish approved Windows Agent
+# Only a separately reviewed main-branch marker commit can publish a Release.
+# PR checks and ordinary main pushes cannot trigger publication.
 on:
   push:
-    branches: [feat/windows-full-remote-tools]
-    paths: [.github/windows-acceptance-release-request.txt]
+    branches: [main]
+    paths: [.github/windows-release-approval/v0.1.13-windows.1.json]
 permissions:
   contents: read
 concurrency:
-  group: remote-agent-native-win-full-rc1
+  group: remote-agent-windows-release-v0.1.13
   cancel-in-progress: false
 env:
-  RELEASE_TAG: v0.1.12-windows-rc.1
-  ASSET: remote-control-agent-v0.1.12-windows-rc.1-windows-x64.zip
+  RELEASE_TAG: v0.1.13-windows.1
+  ASSET: remote-control-agent-v0.1.13-windows.1-windows-x64.zip
   NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
 jobs:
   windows-verified-bundle:
-    name: Build and verify pinned Windows RC
+    name: Build and verify browser-enabled Windows Agent
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24.21.0'
-      # This workflow must NOT run until a separately authorized release-marker commit.
-      # Intentionally retain the OLD marker in this Draft branch: no automatic publication.
-      - name: Confirm one-time approved release marker
+      # A one-file release approval is committed only after merged CI succeeds.
+      - name: Verify one-file approval for the exact reviewed source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $actual = (Get-Content '.github/windows-acceptance-release-request.txt' -Raw).Trim()
-          if ($actual -cne 'Authorize one Windows-only full-tools acceptance pre-release: v0.1.12-windows-rc.1') { throw 'Unapproved release request' }
-          if ($env:GITHUB_REF -cne 'refs/heads/feat/windows-full-remote-tools') { throw 'Wrong branch' }
+          $markerFile = '.github/windows-release-approval/v0.1.13-windows.1.json'
+          $source = (git rev-parse HEAD^).Trim()
+          $changed = @(git diff --name-only HEAD^ HEAD)
+          if ($changed.Count -ne 1 -or $changed[0] -cne $markerFile) {
+            throw 'Release approval commit must modify only the marker'
+          }
+          $marker = Get-Content -LiteralPath $markerFile -Raw | ConvertFrom-Json
+          if ($marker.approved -ne $true -or $marker.tag -cne $env:RELEASE_TAG -or
+              $marker.source_sha -cne $source -or $env:GITHUB_REF -cne 'refs/heads/main') {
+            throw 'Release marker does not approve this source'
+          }
       - name: Install locked dependencies without scripts
         run: corepack pnpm install --frozen-lockfile --ignore-scripts
       - name: Windows typecheck
@@ -55,13 +65,20 @@ jobs:
           $node = (Get-Command node.exe).Source
           if ((Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:NODE_SHA256) { throw 'Node checksum mismatch' }
           $dir = Join-Path $env:RUNNER_TEMP 'windows-rc-stage'
-          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $env:RELEASE_TAG --node-bin $node --node-sha256 $env:NODE_SHA256 --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $dir
+          $core = & node -e "console.log(require('node:fs').realpathSync('apps/remote-control-agent/node_modules/playwright-core'))"
+          if ($LASTEXITCODE -ne 0 -or -not $core) { throw 'Pinned Playwright runtime unavailable' }
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $env:RELEASE_TAG --node-bin $node --node-sha256 $env:NODE_SHA256 --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --browser-core-dir $core --out $dir
           if ($LASTEXITCODE -ne 0) { throw 'Bundle build refused' }
           $stage = Join-Path $dir ('remote-control-agent-' + $env:RELEASE_TAG + '-windows-x64')
           $verifier = Join-Path $stage 'apps\remote-control-agent\scripts\verify-windows-preview.mjs'
           $bundleNode = Join-Path $stage 'bin\node.exe'
           & $bundleNode $verifier $stage
           if ($LASTEXITCODE -ne 0) { throw 'Bundle inventory refused' }
+          $env:RCA_EXPECTED_BUNDLE_VERSION = $env:RELEASE_TAG
+          node apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows browser/Chrome smoke failed' }
+          & $bundleNode $verifier $stage
+          if ($LASTEXITCODE -ne 0) { throw 'Bundle inventory changed after smoke' }
           $dist = Join-Path $PWD 'release-candidate-windows'
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
           $zip = Join-Path $dist $env:ASSET
@@ -87,13 +104,17 @@ jobs:
           retention-days: 5
           compression-level: 0
   publish-immutable-rc:
-    name: Publish immutable Windows-only Release (not main)
+    name: Publish immutable Windows-only Agent Release
     needs: windows-verified-bundle
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: verified-windows-rc
@@ -105,7 +126,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = refs/heads/feat/windows-full-remote-tools
+          test "$GITHUB_REF" = refs/heads/main
+          marker=".github/windows-release-approval/v0.1.13-windows.1.json"
+          source="$(git rev-parse HEAD^)"
+          test "$(git diff --name-only HEAD^ HEAD)" = "$marker"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$source" '.approved == true and .tag == $tag and .source_sha == $sha' "$marker" >/dev/null
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 2
           (cd dist && sha256sum -c SHA256SUMS.txt)
           test -s "dist/$ASSET"
@@ -121,12 +146,13 @@ jobs:
         run: |
           set -euo pipefail
           cat > notes.txt <<'NOTES'
-          Windows x64 full-tools acceptance-only prerelease from Draft PR #13 atop Draft PR #7.
+          Windows x64 Agent with pinned Playwright browser control and full-tools support.
           Bundled official Node v24.21.0; normal Windows user only.
-          Native PowerShell managed sessions and file mutation enabled for the approved user device. Signed WSS pairing, local receipts and revocation preserved.
-          No main merge or production Worker/Cloudflare changes. Existing installed Windows Agent is not upgraded by publishing.
+          Existing signed-WSS identity, local receipts, Task Scheduler registration and rollback are preserved during explicit version upgrades.
+          Publishing does not automatically install, pair, activate or change a device.
+          Browser SSRF/HTTP redirect egress isolation is not guaranteed; use only on approved trusted personal devices.
           NOTES
-          gh release create "$RELEASE_TAG" "dist/$ASSET" dist/SHA256SUMS.txt --draft --prerelease --target "$GITHUB_SHA" --title "Native Windows acceptance $RELEASE_TAG" --notes-file notes.txt
+          gh release create "$RELEASE_TAG" "dist/$ASSET" dist/SHA256SUMS.txt --draft --prerelease --target "$(git rev-parse HEAD^)" --title "Windows Remote Control Agent $RELEASE_TAG" --notes-file notes.txt
           gh release edit "$RELEASE_TAG" --draft=false
       - name: Confirm Release immutability, asset digests and source
         shell: bash
@@ -138,5 +164,5 @@ jobs:
           gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > metadata.json
           jq -e --arg tag "$RELEASE_TAG" --arg asset "$ASSET" '.tag_name == $tag and .draft == false and .prerelease == true and .immutable == true and ((.assets | map(.name)) | sort) == ([$asset, "SHA256SUMS.txt"] | sort) and ([.assets[] | select(.name == $asset) | .digest][0] | test("^sha256:[a-f0-9]{64}$"))' metadata.json
           actual=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
-          test "$actual" = "$GITHUB_SHA"
+          test "$actual" = "$(git rev-parse HEAD^)"
           echo "Published immutable Windows acceptance: $RELEASE_TAG"

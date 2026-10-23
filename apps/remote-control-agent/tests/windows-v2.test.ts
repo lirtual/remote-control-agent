@@ -29,10 +29,21 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
   assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
+  const temporaryPair = parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/",
+    "--name", "P13-disposable", "--grant", "temporary"]);
+  assert.equal(temporaryPair.grant, "temporary");
+  assert.equal(temporaryPair.name, "P13-disposable");
+  assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).grant, undefined);
   assert.equal(parseWindowsAgentArgs(["upgrade", "--version", "v0.1.9"]).version, "v0.1.9");
   assert.equal(parseWindowsAgentArgs(["rollback", "--version", "v0.1.8"]).action, "rollback");
   for (const args of [
     ["pair", "--endpoint", "http://example.test/"],
+    ["pair", "--endpoint", "https://example.test/", "--grant", "permanent"],
+    ["pair", "--endpoint", "https://example.test/", "--grant", "temporary", "--grant", "temporary"],
+    ["pair", "--endpoint", "https://example.test/", "--grant", "invalid"],
+    ["run", "--endpoint", "https://example.test/", "--grant", "temporary"],
+    ["enable", "--endpoint", "https://example.test/", "--grant", "temporary"],
+    ["upgrade", "--version", "v0.1.9", "--grant", "temporary"],
     ["run", "--endpoint", "https://example.test/secret"],
     ["run", "--endpoint", "https://example.test/?token=x"],
     ["run", "--endpoint", "https://u:p@example.test/"],
