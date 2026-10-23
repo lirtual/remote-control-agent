@@ -231,14 +231,21 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
 # the complete owner/ACL/task signature validation again before switching.
 function Get-ExistingAgentVersion([string]$programs, [string]$taskExe) {
   if (-not $taskExe) { throw 'Existing Agent task has no executable' }
-  $base = [IO.Path]::GetFullPath($programs).TrimEnd('\\') + '\\'
+  $base = [IO.Path]::GetFullPath($programs).TrimEnd('\') + '\'
   $exe = [IO.Path]::GetFullPath($taskExe)
   if (-not $exe.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Existing Agent task is outside its private program folder'
   }
   $relative = $exe.Substring($base.Length)
   $matched = [regex]::Match($relative,
-    '^(v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[a-z0-9.-]+)?)-windows-x64\\bin\\(?:node\\.exe|rca-background\\.exe)
+    '^(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?)-windows-x64\\bin\\(?:node\.exe|rca-background\.exe)$',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $matched.Success) { throw 'Unrecognized existing Agent task executable' }
+  return $matched.Groups[1].Value
+}
+$temp = $null
+$stage = $null
+$promoted = $false
 try {
   Ensure-PrivateFolder ([IO.Path]::Combine($env:LOCALAPPDATA, 'mcp-workers'))
   Ensure-PrivateFolder $root
