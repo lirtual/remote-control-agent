@@ -351,7 +351,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         start: () => { runUserTask("Start"); },
       });
       if (outcome === "restored") {
-        process.stdout.write("授权恢复完成，已请求启动 Windows Agent。远程在线状态请通过 MCP 验证。\\n");
+        process.stdout.write("授权恢复完成，已请求启动 Windows Agent。远程在线状态请通过 MCP 验证。\n");
         return;
       }
     }
