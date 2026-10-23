@@ -502,7 +502,7 @@ jobs:
                 -RedirectStandardError $stderrFile -NoNewWindow -PassThru -Wait
               if ($process.ExitCode -eq 0) { throw 'Installer enrolled without a real interactive terminal' }
               $diagnostic = (Get-Content -LiteralPath $stderrFile -Raw) + (Get-Content -LiteralPath $stdoutFile -Raw)
-              if ($diagnostic -notmatch 'Interactive onboarding incomplete') {
+              if ($diagnostic -notmatch '设备授权检查或恢复未完成') {
                 # This fixture uses a disposable profile and no credentials;
                 # expose only a bounded native error to diagnose the seam.
                 $bounded = $diagnostic.Substring(0, [Math]::Min(1400, $diagnostic.Length))
