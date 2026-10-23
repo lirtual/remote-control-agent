@@ -95,7 +95,7 @@ test("Windows task enable requires the active signed grant, not only a local dev
 
 test("Windows user-logon task cannot be enabled for temporary or malformed grant modes", () => {
   assert.equal(assertWindowsAutostartMode("permanent"), true);
-  assert.equal(assertWindowsAutostartMode(undefined), true); // pre-onboarding legacy permanent
+  assert.throws(() => assertWindowsAutostartMode(undefined), /permanent|unknown/i); // older pair also allowed temporary grants
   assert.throws(() => assertWindowsAutostartMode("temporary"), /permanent/i);
   assert.throws(() => assertWindowsAutostartMode("unknown"), /permanent/i);
 });

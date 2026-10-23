@@ -151,10 +151,12 @@ export async function createPackagedBrowserForWindows(
   return new candidate.PlaywrightBrowserManager({agentStore});
 }
 
-/** Temporary grants only run in foreground; a missing mode is a legacy permanent install. */
+/** Only an explicitly recorded permanent mode permits a new autostart task.
+ * Legacy `pair --grant temporary` did not persist this mode; missing metadata
+ * is not proof of a permanent grant, even after the key is verified. */
 export function assertWindowsAutostartMode(mode: string | undefined): true {
-  if (mode !== undefined && mode !== "permanent")
-    throw Error("Only permanent Windows grants may enable an autostart task.");
+  if (mode !== "permanent")
+    throw Error("Only a recorded permanent Windows grant may enable an autostart task.");
   return true;
 }
 
