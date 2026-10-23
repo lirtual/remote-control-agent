@@ -37,3 +37,14 @@ test('Escape and Ctrl+C cancel and always restore terminal mode',async()=>{
 test('noninteractive input is rejected before showing an enrollment menu',async()=>{
   await assert.rejects(promptInstallMode(new PassThrough(),new PassThrough()),/interactive|TTY/i);
 });
+
+
+test('unexpected TTY EOF cancels promptly and restores the original raw mode', async()=>{
+  const input=new PassThrough();input.isTTY=true;input.isRaw=false;
+  const changes=[];input.setRawMode=v=>{input.isRaw=v;changes.push(v);};
+  const output=new PassThrough();output.isTTY=true;
+  const selected=promptInstallMode(input,output);
+  input.end();
+  await assert.rejects(selected,/closed|cancel/i);
+  assert.deepEqual(changes,[true,false]);
+});

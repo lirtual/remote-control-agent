@@ -26,8 +26,16 @@ export async function promptInstallMode(
   try {
     draw();
     return await new Promise<'permanent' | 'temporary'>((resolve, reject) => {
+      let settled = false;
+      const closed = () => done(undefined, new Error('Installation cancelled: terminal input closed.'));
+      const failed = () => done(undefined, new Error('Installation cancelled: terminal input failed.'));
       const done = (choice?: 'permanent' | 'temporary', err?: Error) => {
+        if (settled) return;
+        settled = true;
         interactiveInput.off('keypress', keypress);
+        interactiveInput.off('end', closed);
+        interactiveInput.off('close', closed);
+        interactiveInput.off('error', failed);
         if (err) reject(err); else resolve(choice!);
       };
       const keypress = (character: string | undefined, key: { name?: string; ctrl?: boolean }) => {
@@ -43,6 +51,9 @@ export async function promptInstallMode(
         }
       };
       interactiveInput.on('keypress', keypress);
+      interactiveInput.once('end', closed);
+      interactiveInput.once('close', closed);
+      interactiveInput.once('error', failed);
     });
   } finally {
     input.setRawMode(originalRaw);
