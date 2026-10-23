@@ -138,6 +138,31 @@ Browser actions require owner authorization. HTTP redirection and private
 network/SSRF egress isolation are not guaranteed; use the browser capability
 only on an approved trusted personal Windows device.
 
+### Recover a Windows grant that is missing from the production Worker
+
+If a previously paired Windows task exits with `rejected` and the signed
+production challenge no longer recognizes its ID, **do not delete the private
+key or device-ID file**. After installing a reviewed Agent Release containing
+this feature, first stop the existing task, then use the explicit native
+`rca re-pair --endpoint https://rca.lirtual.dpdns.org/` action. This recovery
+reuses the same Ed25519 private key and never approves its own grant.
+
+When a grant already exists for that public key, the command recovers the
+server-signed current device ID without asking for another pairing. Otherwise
+it prints a single pending pairing code and fingerprint. The owner must
+confirm that fingerprint using authenticated MCP `pairing_lookup` and
+`pairing_approve` with the selected permanent grant. The local device ID
+is replaced only after a fresh, signed server recovery and private-file ACL
+verification. The original key is never replaced, and the Windows task is not
+silently restarted. Run `rca start` after recovery and verify live signed WSS
+connectivity with the MCP device list and a harmless file read.
+
+A 401/403 error, a transient network failure, an unapproved pending request
+or any local ACL error must not authorize a device. An interrupted recovery
+may leave a protected pending-ID staging file; inspect that state rather than
+silently deleting identity data. This workflow requires a published, verified
+Release and must not be used from a Draft branch.
+
 ## Platform and trust requirements
 
 - Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features; WSL2 can use the Linux Agent while the distribution is running. Native Windows/macOS, WSL1 and musl are not covered by this release.
