@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="issue69-t09-") as home:
     except ValueError:pass
     assert ver.exists()
     # Simulated owned permanent unit must be matched exactly, no real systemctl.
-    unit=root/".config/systemd/user/remote-control-v2-agent.service"
+    unit=root/".config/systemd/user/remote-control-agent.service"
     unit.parent.mkdir(parents=True)
     unit.write_text(b.MARKER+"\n[Unit]\n[Service]\nWorkingDirectory="+str(ver/"apps/remote-control-agent")+
       "\nExecStart="+str(ver/"bin/node")+" "+str(ver/"apps/remote-control-agent/src/v2-main.js")+"\n")
