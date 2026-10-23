@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.18",
+  "source_sha": "b0951ee64d0c0df0b8f5b28bee46aa41b10b1484",
+  "candidate_run_id": 40006764926,
+  "release_title": "Remote Control Agent v0.1.18 — Safe Windows Same-Key Reauthorization",
+  "release_notes": "docs/releases/v0.1.18.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.18-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.18-ubuntu-24.04",
+      "sha256": "6fb9f1879ea2a4c1285eeb7c7ae7dcb34f9c86b2adf0c492ebb00170132290e6"
+    },
+    {
+      "name": "remote-control-agent-v0.1.18-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.18-ubuntu-24.04-arm",
+      "sha256": "85760e8ed9021306fcd817a0cc1fc2f497cadc4c5a9e9f14b03d6d6fb11a48de"
+    },
+    {
+      "name": "remote-control-agent-v0.1.18-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.18-windows-x64",
+      "sha256": "d7c24aeb583f09ee9c3ac77962d7ce078128556d45c68b247db07e765bdc955f"
+    }
+  ]
+}
