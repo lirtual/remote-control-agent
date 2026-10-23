@@ -105,38 +105,53 @@ The immutable v0.1.11 binary is unchanged by this source PR.
 
 ## Native Windows x64 installation and upgrade
 
-After the immutable `v0.1.14-windows.1` GitHub Release is published, run in
-Windows PowerShell **as the already-paired normal user** and only after
-in-flight operations finish:
+Run the single reviewed public installer in an interactive Windows PowerShell
+terminal (not elevated, as the intended Windows user):
 
 ```powershell
-$installer = Join-Path $env:TEMP 'install-remote-control-agent-v0.1.14.ps1'
-Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.14-windows.1/install-windows.ps1' -OutFile $installer
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer -Version 'v0.1.14-windows.1'
-if ($LASTEXITCODE -ne 0) { throw 'Agent installation failed' }
-$rca = "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.14-windows.1-windows-x64\rca.cmd"
-& $rca status
-& $rca upgrade --version v0.1.14-windows.1
-if ($LASTEXITCODE -ne 0) { throw 'Agent upgrade failed' }
-& $rca task-status
+irm https://rca.lirtual.dpdns.org/install.ps1 | iex
 ```
 
-Specify the `-Version` argument explicitly: the installer bundled in this
-immutable Release still defaults to the previous Windows version. Do not
-execute it through a pipeline without passing the intended version.
+A new device follows one owner-approved pairing. When an existing paired
+Windows Agent is found, the installer shows the old and new versions and asks
+for a single explicit Yes/No choice (No is the safe default). After Yes, it
+verifies the pinned immutable Release source and Windows archive checksums,
+installs alongside older versions, and performs the transactional task switch.
+The original private key, device ID, cloud grant and stopped/running task
+state are preserved. Upgrading a missing or revoked cloud grant **does not**
+silently re-authorize it; follow the explicit recovery steps below.
 
-The installer checks GitHub Release immutability, the asset SHA-256 and the
-extracted signed inventory; it installs side-by-side without changing the
-existing user-logon task. The explicit `upgrade` command switches the existing
-task after local validation, preserving the paired identity and receipts.
-Do not run `pair` again. Confirm signed WSS connectivity separately with
-authenticated MCP; `task-status` alone is insufficient. If the old version
-was active, the version switch restarts the existing task. Stop in-flight work
-before upgrading; never start two Agents against one identity store.
+`rca task-status` reports local task state, not authenticated online status.
+Verify signed WebSocket connectivity separately through authenticated MCP.
 
 Browser actions require owner authorization. HTTP redirection and private
 network/SSRF egress isolation are not guaranteed; use the browser capability
 only on an approved trusted personal Windows device.
+
+### Recover a Windows grant that is missing from the production Worker
+
+If a previously paired Windows task exits with `rejected` and the signed
+production challenge no longer recognizes its ID, **do not delete the private
+key or device-ID file**. After installing a reviewed Agent Release containing
+this feature, first stop the existing task, then use the explicit native
+`rca re-pair --endpoint https://rca.lirtual.dpdns.org/` action. This recovery
+reuses the same Ed25519 private key and never approves its own grant.
+
+When a grant already exists for that public key, the command recovers the
+server-signed current device ID without asking for another pairing. Otherwise
+it prints a single pending pairing code and fingerprint. The owner must
+confirm that fingerprint using authenticated MCP `pairing_lookup` and
+`pairing_approve` with the selected permanent grant. The local device ID
+is replaced only after a fresh, signed server recovery and private-file ACL
+verification. The original key is never replaced, and the Windows task is not
+silently restarted. Run `rca start` after recovery and verify live signed WSS
+connectivity with the MCP device list and a harmless file read.
+
+A 401/403 error, a transient network failure, an unapproved pending request
+or any local ACL error must not authorize a device. An interrupted recovery
+may leave a protected pending-ID staging file; inspect that state rather than
+silently deleting identity data. This workflow requires a published, verified
+Release and must not be used from a Draft branch.
 
 ## Platform and trust requirements
 

@@ -31,6 +31,8 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
   assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
+  assert.equal(parseWindowsAgentArgs(["re-pair", "--endpoint", "https://rca.example.test/"]).action, "re-pair");
+  assert.throws(() => parseWindowsAgentArgs(["re-pair", "--endpoint", "https://rca.example.test/", "--grant", "temporary"]));
   const temporaryPair = parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/",
     "--name", "P13-disposable", "--grant", "temporary"]);
   assert.equal(temporaryPair.grant, "temporary");
@@ -40,6 +42,9 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["rollback", "--version", "v0.1.8"]).action, "rollback");
   for (const args of [
     ["pair", "--endpoint", "http://example.test/"],
+    ["re-pair"],
+    ["re-pair", "--endpoint", "http://example.test/"],
+    ["re-pair", "--endpoint", "https://example.test/", "--version", "v0.1.0"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "permanent"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "temporary", "--grant", "temporary"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "invalid"],

@@ -14,6 +14,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enrollment.ts";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "./v2-session-client.ts";
 import { promptInstallMode } from "./install-mode.ts";
+import { repairWindowsIdentity } from "./windows-identity-repair.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
@@ -24,13 +25,13 @@ const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
+  action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
 } {
   const action = argv[0];
-  if (!["onboard", "pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
+  if (!["onboard", "pair", "re-pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
+  const options: { action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version" && key !== "--grant") ||
@@ -55,7 +56,7 @@ export function parseWindowsAgentArgs(argv: string[]): {
     }
   } else {
     if (options.version !== undefined) throw Error("Unexpected version flag.");
-    if (!options.endpoint || (!["pair", "onboard"].includes(action ?? "") && (options.name !== undefined || options.grant !== undefined)) || (action === "onboard" && options.grant !== undefined)) {
+    if (!options.endpoint || (!["pair", "onboard", "re-pair"].includes(action ?? "") && (options.name !== undefined || options.grant !== undefined)) || (["onboard", "re-pair"].includes(action ?? "") && options.grant !== undefined)) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
     const url = new URL(options.endpoint);
@@ -81,7 +82,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -261,6 +262,44 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     if (idExists) await assertSignedWindowsGrant(options.endpoint!, keyPath, deviceId);
     else if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
     process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
+    return;
+  }
+  if (options.action === "re-pair") {
+    if (!exists || !idExists) throw Error("Existing paired identity required.");
+    const modePath = keyPath + ".install-mode";
+    assertPrivateStore("Check", directory);
+    // Older paired user-logon tasks predate install-mode metadata. The
+    // task must still be validated, and new permanent grant requires fresh
+    // owner approval. Explicit temporary mode can never use this path.
+    if (await hasFile(modePath)) {
+      assertWindowsAutostartMode((await readFile(modePath, "utf8")).trim());
+    }
+    const state = JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean };
+    if (!state.installed || state.running) {
+      throw Error("An installed, stopped user task is required for recovery.");
+    }
+    const originalId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    if (!ID.test(originalId)) throw Error("Invalid stored device ID.");
+    const result = await repairWindowsIdentity({
+      endpoint: options.endpoint!, keyPath, currentId: originalId,
+      name: selectDeviceLabel(options.name ?? os.hostname(), os.hostname()),
+      seal: () => assertPrivateStore("Seal", directory, "v2-identity.pem.device-id.pending"),
+      assertStopped: () => {
+        const latest = JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean };
+        if (!latest.installed || latest.running) {
+          throw Error("Windows task changed while awaiting approval; local identity unchanged.");
+        }
+      },
+      onPending: (code, fingerprint) => {
+        process.stdout.write("Pairing code: " + code + "\n");
+        process.stdout.write("Fingerprint: " + fingerprint + "\n");
+        process.stdout.write("Approve once via authenticated MCP pairing_lookup / pairing_approve.\n");
+      },
+    });
+    assertPrivateStore("Check", directory);
+    process.stdout.write(result === "restored"
+      ? "Signed grant restored with original key; start the task to connect.\n"
+      : "Existing signed grant is valid; no identity change.\n");
     return;
   }
   if (options.action === "onboard") {
