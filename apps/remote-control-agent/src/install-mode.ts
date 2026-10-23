@@ -16,8 +16,8 @@ export async function promptInstallMode(
   let rendered = false;
   const draw = () => {
     if (rendered && ansi) output.write('\x1b[2A\r\x1b[J');
-    output.write((index === 0 ? '❯' : ' ') + ' 1. 永久\n');
-    output.write((index === 1 ? '❯' : ' ') + ' 2. 临时\n');
+    output.write((index === 0 ? ' >' : ' ') + ' 1. Permanent\n');
+    output.write((index === 1 ? ' >' : ' ') + ' 2. Temporary\n');
     rendered = true;
   };
   emitKeypressEvents(interactiveInput);
