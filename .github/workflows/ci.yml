@@ -137,6 +137,21 @@ jobs:
         run: |
           Set-Location apps/remote-control-agent
           node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+      - name: New public PowerShell installer parses under Windows without executing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $parseErrors = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'install.ps1').Path, [ref]$tokens, [ref]$parseErrors)
+          if ($parseErrors.Count -ne 0) {
+            throw ('New public installer has Windows PowerShell syntax errors: ' +
+              ($parseErrors | ForEach-Object { $_.Message } | Out-String))
+          }
+          if ((Get-Content -Raw 'install.ps1') -notmatch 'PinnedReleaseSha256') {
+            throw 'Public Windows installer must require a reviewed immutable asset hash'
+          }
       - name: User task negative checks (never create a task)
         shell: pwsh
         run: |

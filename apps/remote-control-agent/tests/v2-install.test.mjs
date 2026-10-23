@@ -142,9 +142,9 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
   ensureApprovedPermanentService(invoke);
   assert.equal(running,true);
   assert.deepEqual(calls,[
+    "--user is-active --quiet "+UNIT,
     "--user daemon-reload",
     "--user enable "+UNIT,
-    "--user is-active --quiet "+UNIT,
     "--user start "+UNIT,
     "--user is-active --quiet "+UNIT,
   ]);
@@ -153,17 +153,14 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
 test("approved permanent retry preserves an already-active service and fails closed on enable error", () => {
   const calls=[];
   ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));});
-  assert.deepEqual(calls,[
-    "--user daemon-reload",
-    "--user enable "+UNIT,
-    "--user is-active --quiet "+UNIT,
-  ]);
+  assert.deepEqual(calls,["--user is-active --quiet "+UNIT]);
   const failed=[];
   assert.throws(()=>ensureApprovedPermanentService((binary,args)=>{
     failed.push(args.join(" "));
+    if(args[1]==="is-active")throw Error("inactive");
     if(args[1]==="enable")throw Error("cannot enable");
   }),/cannot enable/);
-  assert.deepEqual(failed,["--user daemon-reload","--user enable "+UNIT]);
+  assert.deepEqual(failed,["--user is-active --quiet "+UNIT,"--user daemon-reload","--user enable "+UNIT]);
 });
 
 test("ordinary repeat install rejects changed Worker origin before identity rotation", () => {

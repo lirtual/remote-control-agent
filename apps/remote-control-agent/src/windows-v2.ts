@@ -5,14 +5,16 @@
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { lstat, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enrollment.ts";
-import { recoverDeviceId } from "./v2-session-client.ts";
+import { recoverDeviceId, DeviceSessionRejectedError } from "./v2-session-client.ts";
+import { promptInstallMode } from "./install-mode.ts";
+import { setTimeout as delay } from "node:timers/promises";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -22,13 +24,13 @@ const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
+  action: "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
 } {
   const action = argv[0];
-  if (!["pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
+  if (!["onboard", "pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
+  const options: { action: "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "onboard" | "pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version" && key !== "--grant") ||
@@ -53,7 +55,7 @@ export function parseWindowsAgentArgs(argv: string[]): {
     }
   } else {
     if (options.version !== undefined) throw Error("Unexpected version flag.");
-    if (!options.endpoint || (action !== "pair" && (options.name !== undefined || options.grant !== undefined))) {
+    if (!options.endpoint || (!["pair", "onboard"].includes(action ?? "") && (options.name !== undefined || options.grant !== undefined)) || (action === "onboard" && options.grant !== undefined)) {
       throw Error("An explicit Worker HTTPS endpoint is required.");
     }
     const url = new URL(options.endpoint);
@@ -79,7 +81,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.install-mode"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -206,6 +208,96 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
     if (!ID.test(deviceId)) throw Error("Invalid approved device ID.");
     process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
+    return;
+  }
+  if (options.action === "onboard") {
+    // Keep the installer separate from the authenticated MCP owner approval.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw Error("Onboarding requires the local interactive Windows terminal.");
+    }
+    const modePath = keyPath + ".install-mode";
+    const hasMode = await hasFile(modePath);
+    if (exists && !hasMode && !idExists) {
+      throw Error("Existing identity has no installer mode; use explicit management commands.");
+    }
+    let mode: "permanent" | "temporary";
+    if (hasMode) {
+      assertPrivateStore("Check", directory);
+      const saved = (await readFile(modePath, "utf8")).trim();
+      if (saved !== "permanent" && saved !== "temporary") throw Error("Invalid protected pairing mode.");
+      mode = saved;
+    } else {
+      if (idExists) {
+        const approved = (await readFile(keyPath + ".device-id", "utf8")).trim();
+        if (!ID.test(approved)) throw Error("Invalid local device ID.");
+        process.stdout.write("Existing device " + approved + "; no changes. Verify online via authenticated MCP.\n");
+        return;
+      }
+      mode = await promptInstallMode();
+      // Mode is sealed before generating a key; retry cannot silently change grant type.
+      await writeFile(modePath, mode + "\n", { flag: "wx", mode: 0o600 });
+      assertPrivateStore("Seal", directory, "v2-identity.pem.install-mode");
+    }
+    if (idExists) {
+      const approved = (await readFile(keyPath + ".device-id", "utf8")).trim();
+      if (!ID.test(approved)) throw Error("Invalid local device ID.");
+      if (mode === "permanent") {
+        const status = JSON.parse(runUserTask("Status")) as {installed?:boolean;running?:boolean};
+        if (!status.installed) {
+          // Resume only an interrupted approved first activation, not a live task.
+          const signedId = await recoverDeviceId(options.endpoint!, keyPath);
+          if (signedId !== approved) throw Error("Saved device ID conflicts with signed owner grant.");
+          runUserTask("Enable", options.endpoint);
+          runUserTask("Start");
+          process.stdout.write("Resumed user-logon task for the approved device.\n");
+        }
+      }
+      process.stdout.write("Already authorized: " + approved + "; remote online is unconfirmed.\n");
+      return;
+    }
+    let approvedId: string | undefined;
+    if (exists) {
+      // A previous owner approval may have succeeded before local ID persistence.
+      try { approvedId = await recoverDeviceId(options.endpoint!, keyPath); }
+      catch (err) {
+        if (!(err instanceof DeviceSessionRejectedError) || err.status !== 404) throw err;
+      }
+    }
+    if (!approvedId) {
+      // An interrupted pairing reuses its original private key and stored mode.
+      // The server may reject an active conflicting pending request; never override it.
+      const suggested = os.hostname();
+      let name = options.name;
+      if (name === undefined) {
+        const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+        try { name = selectDeviceLabel(await rl.question(`Device name [${suggested}]: `), suggested); }
+        finally { rl.close(); }
+      }
+      const args = ["pair", "--endpoint", options.endpoint!, "--name", name!];
+      if (mode === "temporary") args.push("--grant", "temporary");
+      await runWindowsAgent(args);
+    }
+    const deadline = Date.now() + 10 * 60_000;
+    while (!approvedId && Date.now() < deadline) {
+      try { approvedId = await recoverDeviceId(options.endpoint!, keyPath); break; }
+      catch (err) {
+        if (!(err instanceof DeviceSessionRejectedError) || err.status !== 404) throw err;
+      }
+      await delay(Math.min(5_000, Math.max(0, deadline - Date.now())));
+    }
+    if (!approvedId || !ID.test(approvedId)) {
+      throw Error("Owner MCP approval not confirmed before deadline; identity retained for explicit retry.");
+    }
+    assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
+    process.stdout.write("Owner approved device " + approvedId + "; remote online remains unconfirmed.\n");
+    if (mode === "permanent") {
+      process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
+      process.stdout.write(runUserTask("Start") + "\n");
+      process.stdout.write("User-logon task started; verify online status through authenticated MCP.\n");
+    } else {
+      process.stdout.write("Temporary mode: foreground until terminal closes; server grant expires after 24 hours.\n");
+      await runWindowsAgent(["run", "--endpoint", options.endpoint!]);
+    }
     return;
   }
   if (options.action === "pair") {

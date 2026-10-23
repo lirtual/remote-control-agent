@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { selectDeviceLabel } from "../src/v2-enrollment.ts";
+import { promptInstallMode } from "../src/install-mode.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
@@ -750,13 +751,13 @@ export async function installUnit(unitPath, content, previous) {
  * It must not rotate identity or restart an already active service.
  */
 export function ensureApprovedPermanentService(invoke = run) {
+  // Healthy repeats are strictly read-only: never reload or touch a live task.
+  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); return; }
+  catch { /* An interrupted first activation may be recovered. */ }
   invoke("systemctl", ["--user", "daemon-reload"]);
   invoke("systemctl", ["--user", "enable", UNIT]);
-  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-  catch {
-    invoke("systemctl", ["--user", "start", UNIT]);
-    invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-  }
+  invoke("systemctl", ["--user", "start", UNIT]);
+  invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
 }
 
 async function launchForeground({ endpoint, keyPath }) {
@@ -1271,22 +1272,26 @@ export async function runInstaller(args, {
     throw new Error("Manual portable upgrade requires a real local terminal.");
   }
   if (portable && options.action === "install") {
+    const existingUnit = await readOwnedUnit(path.join(home, ".config", "systemd", "user", UNIT));
+    const existingId = await exists(keyForInstallMode(home, "permanent") + ".device-id");
+    if (existingUnit && existingId) {
+      // The validated ordinary install path below checks version, key, grant,
+      // endpoint and live service without showing a new-enrollment menu.
+      options.grantType = "permanent";
+      options.foreground = false;
+    } else {
     if (!stdin.isTTY || !stdout.isTTY) {
       throw new Error("Portable pairing requires a real interactive target-terminal TTY.");
     }
-    const prompt = createInterface({input:stdin,output:stdout,terminal:true});
-    try {
-      stdout.write("Remote Control Agent " +
-        (portable ? JSON.parse(readFileSync(manifestPath, "utf8")).version : "v2") + "\n");
-      stdout.write("Suggested device name: " + (options.name ?? os.hostname()) + "\n");
-      stdout.write("1. Permanent (systemd)\n2. Temporary (24h)\n");
-      const choice=(await prompt.question("Choose [1-2]: ")).trim();
-      // Mode choice binds the signed Agent pending request and owner MCP review.
-      Object.assign(options, choosePortableInstallMode(choice, args));
-      if (choice === "2") {
-        stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
-      }
-    } finally {prompt.close();}
+    stdout.write("Remote Control Agent " +
+      JSON.parse(readFileSync(manifestPath, "utf8")).version + "\n");
+    stdout.write("Suggested device name: " + (options.name ?? os.hostname()) + "\n");
+    const mode = await promptInstallMode(stdin,stdout);
+    Object.assign(options, choosePortableInstallMode(mode === "permanent" ? "1" : "2", args));
+    if (mode === "temporary") {
+      stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
+    }
+    }
   }
   const unitPath = path.join(home, ".config", "systemd", "user", UNIT);
   const keyPath = keyForInstallMode(home, options.grantType ?? "permanent");
