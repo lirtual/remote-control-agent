@@ -250,7 +250,6 @@ function Complete-ApprovedOnboarding([string]$launcher) {
   if ($LASTEXITCODE -ne 0) {
     throw 'Authorization incomplete. Identity kept.'
   }
-  Write-Output 'Done. Verify online via MCP.'
 }
 $temp = $null
 $stage = $null
