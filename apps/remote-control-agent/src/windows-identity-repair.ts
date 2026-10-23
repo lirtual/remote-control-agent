@@ -1,6 +1,6 @@
 /** Explicit Windows same-key reauthorization. No local grant is trusted without
  * a fresh, server-signed recovery. Never rotate or delete the private key. */
-import { createHash, createPrivateKey, createPublicKey, randomUUID } from "node:crypto";
+import { createHash, createPrivateKey } from "node:crypto";
 import { open, readFile, rename, unlink } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { newEnrollment } from "./v2-enrollment.ts";
@@ -16,21 +16,25 @@ export async function replaceSignedDeviceId(
     throw Error("Device identity changed during reauthorization; refusing to overwrite.");
   }
   if (originalId === approvedId) return false;
-  const stage = keyPath + ".device-id." + randomUUID();
+  // A fixed, owner-only pending filename is a one-operation lock. The native
+  // ACL helper must seal this pending file BEFORE replacing the approved ID.
+  const stage = keyPath + ".device-id.pending";
   let staged = false;
   try {
     const file = await open(stage, "wx", 0o600);
     staged = true;
     try { await file.writeFile(approvedId + "\n", "utf8"); await file.sync(); }
     finally { await file.close(); }
+    // On Windows, a new file may inherit an unsafe/default ACL despite mode
+    // 0600. Seal and validate the staged file before any identity replacement.
+    seal();
     if ((await readFile(keyPath + ".device-id", "utf8")).trim() !== originalId) {
       throw Error("Device identity changed while staging recovery.");
     }
-    // Same-volume replacement is atomic; the existing ID remains until a
-    // signed owner grant has been verified. The store directory is owner-only.
+    // An already sealed file keeps its ACL through an atomic same-volume rename.
+    // A failed swap retains the original approved ID.
     await rename(stage, keyPath + ".device-id");
     staged = false;
-    seal();
     return true;
   } finally {
     if (staged) await unlink(stage).catch(() => {});
