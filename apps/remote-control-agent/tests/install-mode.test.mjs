@@ -6,13 +6,15 @@ import { promptInstallMode } from '../src/install-mode.ts';
 async function choose(keys) {
   const input = new PassThrough(); input.isTTY = true; input.isRaw = false;
   const modes=[]; input.setRawMode = (v) => { input.isRaw = v; modes.push(v); };
+  let pauses=0; const originalPause=input.pause.bind(input);
+  input.pause=()=>{pauses++;return originalPause();};
   const output = new PassThrough(); output.isTTY = true;
   let text=''; output.on('data', chunk => { text+=chunk.toString(); });
   const promise=promptInstallMode(input,output);
   for (const key of keys) input.write(key);
   let value;
   try { value=await promise; } catch(e) {value=e;}
-  return {value,modes,text};
+  return {value,modes,text,pauses};
 }
 
 test('mode selection begins on permanent but requires Enter, with arrow wrap and numeric shortcuts',async()=>{
@@ -24,6 +26,8 @@ test('mode selection begins on permanent but requires Enter, with arrow wrap and
   assert.match(a.text,/❯ 1\. 永久/);
   assert.doesNotMatch(a.text,/推荐/);
   assert.deepEqual(b.modes,[true,false]);
+  assert.equal(a.pauses,1,'completed prompt must pause TTY to release the Node event loop');
+  assert.equal(d.pauses,1);
 });
 
 test('Escape and Ctrl+C cancel and always restore terminal mode',async()=>{
@@ -31,6 +35,7 @@ test('Escape and Ctrl+C cancel and always restore terminal mode',async()=>{
     const result=await choose([key]);
     assert.match(result.value.message,/cancel/i);
     assert.deepEqual(result.modes,[true,false]);
+    assert.equal(result.pauses,1,'cancelled prompt must pause TTY');
   }
 });
 

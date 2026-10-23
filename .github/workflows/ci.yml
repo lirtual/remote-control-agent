@@ -108,6 +108,11 @@ jobs:
              done
              exec python3 -B /opt/bootstrap/validate-local-archive.py \
                /opt/agent.tar.gz "$2" "$1"' shell "$target" "$candidate_tag"
+          # Real packaged runtime, not just source mocks: this must exit and
+          # restore raw TTY after Enter, arrows, numbers and cancellation.
+          mkdir -p "$temp_dir/pty"
+          tar -xzf "$archive" -C "$temp_dir/pty"
+          python3 apps/remote-control-agent/tests/packaged-install-mode-pty.py "$temp_dir/pty"
           if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
             mkdir -p "release-candidate/$target"
             cp -- "$archive" "release-candidate/$target/"

@@ -3,7 +3,7 @@ import type { ReadStream, WriteStream } from 'node:tty';
 
 /** One explicit local TTY selection; this does not perform owner approval. */
 export async function promptInstallMode(
-  input: Pick<ReadStream, 'isTTY' | 'isRaw' | 'setRawMode' | 'on' | 'off' | 'resume'> = process.stdin,
+  input: Pick<ReadStream, 'isTTY' | 'isRaw' | 'setRawMode' | 'on' | 'off' | 'resume' | 'pause'> = process.stdin,
   output: Pick<WriteStream, 'isTTY' | 'write'> = process.stdout,
 ): Promise<'permanent' | 'temporary'> {
   if (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function') {
@@ -56,6 +56,9 @@ export async function promptInstallMode(
       interactiveInput.once('error', failed);
     });
   } finally {
-    input.setRawMode(originalRaw);
+    // resume() keeps a real process.stdin TTY referenced even after selection.
+    // Without a matching pause() the installer finishes but Node stays alive.
+    try { input.setRawMode(originalRaw); }
+    finally { input.pause(); }
   }
 }
