@@ -4,7 +4,7 @@ Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2
 
 ## Current Linux v2 release
 
-Windows full-tools and optional Playwright integration remain in Draft review; see [Windows preview notes](apps/remote-control-agent/docs/WINDOWS-PREVIEW.md). No Windows production release or browser MCP activation is implied.
+Native Windows x64 full-tools and the pinned Playwright browser runtime are packaged separately from the Linux Agent. Publication requires a reviewed, single-file approval commit on `main` after Agent CI succeeds. Merging source does not install, upgrade or re-pair any device.
 
 
 The published immutable **v0.1.11** Agent enables file reads, file writes,
@@ -60,6 +60,32 @@ Future full-tools v2 releases use the owner-local Unix-socket freeze instead:
 new work is rejected after the freeze begins; active, starting or unknown work
 blocks upgrade. No v1 compatibility layer or additional service is required.
 The immutable v0.1.11 binary is unchanged by this source PR.
+
+## Native Windows x64 installation and upgrade
+
+After the immutable `v0.1.13-windows.1` GitHub Release is published, run in
+Windows PowerShell **as the already-paired normal user**:
+
+```powershell
+irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.13-windows.1/install-windows.ps1 | iex
+$rca = "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.13-windows.1-windows-x64\rca.cmd"
+& $rca status
+& $rca upgrade --version v0.1.13-windows.1
+& $rca task-status
+```
+
+The installer checks GitHub Release immutability, the asset SHA-256 and the
+extracted signed inventory; it installs side-by-side without changing the
+existing user-logon task. The explicit `upgrade` command switches the existing
+task after local validation, preserving the paired identity and receipts.
+Do not run `pair` again. Confirm signed WSS connectivity separately with
+authenticated MCP; `task-status` alone is insufficient. If the old version
+was active, the version switch restarts the existing task. Stop in-flight work
+before upgrading; never start two Agents against one identity store.
+
+Browser actions require owner authorization. HTTP redirection and private
+network/SSRF egress isolation are not guaranteed; use the browser capability
+only on an approved trusted personal Windows device.
 
 ## Platform and trust requirements
 
