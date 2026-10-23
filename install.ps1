@@ -227,6 +227,22 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
     }
   } finally { $zip.Dispose() }
 }
+# Inspect the task target without launching it. The packaged CLI performs
+# the complete owner/ACL/task signature validation again before switching.
+function Get-ExistingAgentVersion([string]$programs, [string]$taskExe) {
+  if (-not $taskExe) { throw 'Existing Agent task has no executable' }
+  $base = [IO.Path]::GetFullPath($programs).TrimEnd('\') + '\'
+  $exe = [IO.Path]::GetFullPath($taskExe)
+  if (-not $exe.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Existing Agent task is outside its private program folder'
+  }
+  $relative = $exe.Substring($base.Length)
+  $matched = [regex]::Match($relative,
+    '^(v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?)-windows-x64\\bin\\(?:node\.exe|rca-background\.exe)$',
+    [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if (-not $matched.Success) { throw 'Unrecognized existing Agent task executable' }
+  return $matched.Groups[1].Value
+}
 $temp = $null
 $stage = $null
 $promoted = $false
@@ -239,8 +255,30 @@ try {
   $identityFile = [IO.Path]::Combine($root, 'v2-identity.pem')
   $idFile = $identityFile + '.device-id'
   $alreadyPaired = Test-Path -LiteralPath $idFile
-  if ($alreadyPaired -and -not (Test-Path -LiteralPath $target)) {
-    throw 'An existing device is authorized on a different Agent version; public installer never upgrades it'
+  $userTaskName = 'RCA-Remote-Control-v2-' + $userSid.Value.Replace('-', '_')
+  $task = Get-ScheduledTask -TaskName $userTaskName -ErrorAction SilentlyContinue
+  $upgradeExisting = $false
+  if ($alreadyPaired) {
+    if (-not (Test-Path -LiteralPath $identityFile -PathType Leaf)) {
+      throw 'Existing device ID has no private key; refusing upgrade'
+    }
+    if (-not $task -or $task.Actions.Count -ne 1) {
+      throw 'Existing device has no user-logon task; use explicit device management'
+    }
+    $oldVersion = Get-ExistingAgentVersion $programs ([string]$task.Actions[0].Execute)
+    if ($oldVersion -cne $Version) {
+      $oldNumber = [version](($oldVersion.Substring(1) -split '-')[0])
+      $newNumber = [version](($Version.Substring(1) -split '-')[0])
+      if ($newNumber -le $oldNumber) { throw 'Automatic downgrade or same-version replacement refused' }
+      Write-Output ("Existing paired Agent: {0} -> {1}" -f $oldVersion, $Version)
+      Write-Output 'Existing identity and grant will be retained. Finish active remote operations before upgrading.'
+      Write-Output ("Scheduled task is currently {0}; its running state will be preserved." -f $task.State)
+      $answer = Read-Host 'Upgrade this device using the verified Release? [y/N]'
+      if ($answer -cne 'y' -and $answer -cne 'Y') { throw 'Upgrade cancelled; existing device unchanged' }
+      $upgradeExisting = $true
+    }
+  } elseif ($task) {
+    throw 'Existing user-logon task without an approved local identity; refusing new pairing'
   }
   if (Test-Path -LiteralPath $target) {
     Assert-PrivateFolder $target
@@ -248,6 +286,12 @@ try {
     $verifyExisting = [IO.Path]::Combine($target,'apps','remote-control-agent','scripts','verify-windows-preview.mjs')
     & $nodeExisting $verifyExisting $target
     if ($LASTEXITCODE -ne 0) { throw 'Existing program manifest failed verification' }
+    if ($upgradeExisting) {
+      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version
+      if ($LASTEXITCODE -ne 0) { throw 'Verified candidate could not switch task; previous task retained or rolled back' }
+      Write-Output 'Agent upgraded with existing identity; verify signed MCP connectivity separately.'
+      return
+    }
     if ($alreadyPaired) {
       $storedId = (Get-Content -LiteralPath $idFile -Raw).Trim()
       if ($storedId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'Untrusted stored device ID' }
@@ -287,6 +331,12 @@ try {
   [IO.Directory]::Move($stage, $target)
   $promoted = $true
   Write-Output "Native Windows Agent verified and installed: $target"
+  if ($upgradeExisting) {
+    & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version
+    if ($LASTEXITCODE -ne 0) { throw 'Verified candidate could not switch task; previous task retained or rolled back' }
+    Write-Output 'Agent upgraded with existing identity; verify signed MCP connectivity separately.'
+    return
+  }
   & ([IO.Path]::Combine($target,'rca.cmd')) onboard --endpoint 'https://rca.lirtual.dpdns.org/'
   if ($LASTEXITCODE -ne 0) { throw 'Interactive onboarding incomplete; protected identity retained' }
   Write-Output 'Verify signed online status and a harmless read via authenticated MCP.'
