@@ -124,7 +124,7 @@ test("v0.1.11 one-time offline cutover requires explicit owner confirmation, sto
   let state="inactive", confirm="OFFLINE-V2-UPGRADE", probes=0;
   const invoke=(binary,args)=>{
     assert.equal(binary,"systemctl");
-    assert.deepEqual(args,["--user","show","remote-control-v2-agent.service",
+    assert.deepEqual(args,["--user","show","remote-control-agent.service",
       "--property=ActiveState,SubState,MainPID","--no-pager"]);
     probes++;
     return {status:0,stdout:state==="inactive"
