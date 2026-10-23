@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.19",
+  "source_sha": "e854db38e6b9525a6e19545be6be5b57ba324d1c",
+  "candidate_run_id": 40013690555,
+  "release_title": "Remote Control Agent v0.1.19 — Concise English One-Line Windows Upgrade",
+  "release_notes": "docs/releases/v0.1.19.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.19-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.19-ubuntu-24.04",
+      "sha256": "0629e358ea95bcc67e2b25968264e9befba27848ba44cf6594f0c85b99efc361"
+    },
+    {
+      "name": "remote-control-agent-v0.1.19-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.19-ubuntu-24.04-arm",
+      "sha256": "9cc45cd844ee136ca25dd8d1077fa477d8f6d1b5a0df274d932dcadc6a6e48a3"
+    },
+    {
+      "name": "remote-control-agent-v0.1.19-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.19-windows-x64",
+      "sha256": "5727e877ab15bc94407f968c41df2ff6c35c5b81131c789c5ce6073988877d3a"
+    }
+  ]
+}
