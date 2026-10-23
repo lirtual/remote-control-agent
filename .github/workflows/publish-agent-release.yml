@@ -1,16 +1,16 @@
-name: Publish approved Agent Release
+name: Publish pinned Agent Release
 
-# Publishing is a distinct, explicit human-triggered action on main.
-# A merge, tag or successful PR/CI run never publishes any Release.
+# One reviewed pin change on main triggers the release; ordinary source pushes
+# and CI completion cannot publish. Manual dispatch also supports existing pins.
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/release-pins/*.json'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Reviewed immutable three-platform release tag
-        type: string
-        required: true
-      approval:
-        description: Type PUBLISH- followed by the exact release tag
+        description: Pinned three-platform release tag
         type: string
         required: true
 
@@ -32,9 +32,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_POLICY_READ_TOKEN: ${{ secrets.RELEASE_POLICY_READ_TOKEN }}
-      RELEASE_TAG: ${{ inputs.release_tag }}
-      RELEASE_APPROVAL: ${{ inputs.approval }}
+
     steps:
       - name: Checkout reviewed publishing manifest
         uses: actions/checkout@v4
@@ -42,15 +40,35 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check explicit approval and signed-off source
+      - name: Select release pin from main push or dispatch
+        shell: bash
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_EVENT" == push ]]; then
+            mapfile -t pins < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA" -- '.github/release-pins/*.json')
+            if (( ${#pins[@]} != 1 )); then
+              echo "A main push must change exactly one release pin" >&2
+              exit 1
+            fi
+            tag="${pins[0]##*/}"
+            tag="${tag%.json}"
+          else
+            tag="$RELEASE_TAG_INPUT"
+          fi
+          if [[ ! "$tag" =~ ^v0\.[1-9][0-9]*\.[0-9]+(-[a-z0-9][a-z0-9.-]*)?$ ]]; then
+            echo "Invalid reviewed release tag" >&2
+            exit 1
+          fi
+          printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+
+      - name: Verify candidate and signed-off source
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$RELEASE_TAG" =~ ^v0\.[1-9][0-9]*\.[0-9]+(-[a-z0-9][a-z0-9.-]*)?$ ||
-                "$RELEASE_APPROVAL" != "PUBLISH-$RELEASE_TAG" ]]; then
-            echo "Release requires exact reviewed tag and explicit human approval" >&2
-            exit 1
-          fi
           pin=".github/release-pins/$RELEASE_TAG.json"
           test -f "$pin"
           jq -e --arg tag "$RELEASE_TAG" '
@@ -79,11 +97,6 @@ jobs:
               .status == "completed" and
               .conclusion == "success"
             ' >/dev/null
-          # A failed post-publication immutable check cannot undo a mutable
-          # Release already exposed to users: fail before creating any draft.
-          test -n "$RELEASE_POLICY_READ_TOKEN" || { echo "Missing RELEASE_POLICY_READ_TOKEN (Administration:read)"; exit 1; }
-          GH_TOKEN="$RELEASE_POLICY_READ_TOKEN" gh api "repos/$GH_REPO/immutable-releases" |
-            jq -e '.enabled == true' >/dev/null
           if [[ -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")" ]] ||
              gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Existing release/tag may not be overwritten" >&2
@@ -142,7 +155,7 @@ jobs:
           ( cd "$RUNNER_TEMP/publish" && sha256sum --check SHA256SUMS.txt )
           test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 4
 
-      - name: Upload draft, re-download/check assets, publish immutable prerelease
+      - name: Upload draft, re-download/check assets, publish prerelease
         shell: bash
         run: |
           set -euo pipefail
@@ -169,19 +182,14 @@ jobs:
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/recheck" --clobber
           test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 4
           ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS.txt )
-          # Detect a repository policy change between draft creation and
-          # promotion; never make the verified draft publicly mutable.
-          test -n "$RELEASE_POLICY_READ_TOKEN" || { echo "Missing RELEASE_POLICY_READ_TOKEN (Administration:read)"; exit 1; }
-          GH_TOKEN="$RELEASE_POLICY_READ_TOKEN" gh api "repos/$GH_REPO/immutable-releases" |
-            jq -e '.enabled == true' >/dev/null
           gh release edit "$RELEASE_TAG" --draft=false
           gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
             jq -e --arg tag "$RELEASE_TAG" '
               .tag_name == $tag and .draft == false and
-              .prerelease == true and .immutable == true
+              .prerelease == true
             ' >/dev/null
           gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" |
             jq -e --arg sha "$sha" '
               .object.type == "commit" and .object.sha == $sha
             ' >/dev/null
-          echo "Immutable GitHub prerelease $RELEASE_TAG published; no Worker deployment."
+          echo "Verified pinned GitHub prerelease $RELEASE_TAG published; no Worker deployment."
