@@ -418,15 +418,15 @@ jobs:
           $root = Join-Path $env:LOCALAPPDATA 'mcp-workers\remote-control'
           $sentinel = Join-Path $root 'agent-events.ndjson'
           [IO.File]::WriteAllText($sentinel, '{"utc":"2026-01-01T00:00:00.000Z","event":"stopping"}' + [char]10)
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.1-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.1-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall of inactive upgrade version failed' }
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.0-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Safe Windows runtime uninstall failed' }
           $old = Join-Path $root 'programs\v0.0.0-ci-windows-x64'
           if (Test-Path -LiteralPath $old) { throw 'Uninstalled version still exists' }
           if (-not (Test-Path -LiteralPath $sentinel)) { throw 'Windows Agent diagnostics not preserved' }
           if (-not (Test-Path -LiteralPath $root)) { throw 'Private identity directory was deleted' }
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File unapps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version v0.0.0-ci
+          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
       - name: Public Windows install.ps1 offline first-install and repeat fail closed without TTY
