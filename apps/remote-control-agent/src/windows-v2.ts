@@ -264,6 +264,34 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     process.stdout.write(runUserTask("Enable", options.endpoint) + "\n");
     return;
   }
+  if (options.action === "re-pair") {
+    if (!exists || !idExists) throw Error("Existing paired identity required.");
+    const modePath = keyPath + ".install-mode";
+    if (!await hasFile(modePath)) throw Error("Protected permanent grant mode required.");
+    assertPrivateStore("Check", directory);
+    assertWindowsAutostartMode((await readFile(modePath, "utf8")).trim());
+    const state = JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean };
+    if (!state.installed || state.running) {
+      throw Error("An installed, stopped user task is required for recovery.");
+    }
+    const originalId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    if (!ID.test(originalId)) throw Error("Invalid stored device ID.");
+    const result = await repairWindowsIdentity({
+      endpoint: options.endpoint!, keyPath, currentId: originalId,
+      name: selectDeviceLabel(options.name ?? os.hostname(), os.hostname()),
+      seal: () => assertPrivateStore("Seal", directory, "v2-identity.pem.device-id.pending"),
+      onPending: (code, fingerprint) => {
+        process.stdout.write("Pairing code: " + code + "\n");
+        process.stdout.write("Fingerprint: " + fingerprint + "\n");
+        process.stdout.write("Approve once via authenticated MCP pairing_lookup / pairing_approve.\n");
+      },
+    });
+    assertPrivateStore("Check", directory);
+    process.stdout.write(result === "restored"
+      ? "Signed grant restored with original key; start the task to connect.\n"
+      : "Existing signed grant is valid; no identity change.\n");
+    return;
+  }
   if (options.action === "onboard") {
     // Keep the installer separate from the authenticated MCP owner approval.
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
