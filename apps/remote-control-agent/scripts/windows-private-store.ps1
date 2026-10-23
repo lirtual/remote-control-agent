@@ -4,7 +4,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
   [Parameter(Mandatory=$true)][string]$Directory,
-  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.install-mode','v2-identity.pem.activation-pending')][string]$FileName
+  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
