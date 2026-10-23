@@ -82,6 +82,10 @@ test("migration requires proof of both old runtimes, exact WSS template and fixe
     assert.throws(()=>planServiceCutover({...base,signedUnit:x.signed.replace(
       "REMOTE_CONTROL_V2_KEY_PATH","FOREIGN_KEY_PATH")}),/Ambiguous/);
     assert.throws(()=>planServiceCutover({...base,deviceId:"not-a-device"}),/device ID/);
+    assert.throws(()=>planServiceCutover({...base,candidateRoot:
+      x.plan.candidateRoot.replace("v0.1.13","v0.1.11")}),/newer/);
+    assert.throws(()=>planServiceCutover({...base,candidateRoot:
+      x.plan.candidateRoot.replace("linux-x64-glibc","linux-arm64-glibc")}),/same CPU/);
     assert.throws(()=>assertOffline(fakeSystemctl({active:true}).invoke),/stopped/);
   } finally {await x.dispose();}
 });
