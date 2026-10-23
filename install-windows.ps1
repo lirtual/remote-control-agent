@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
   [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$')]
-  [string]$Version = 'v0.1.12-windows-rc.1',
+  [string]$Version = 'v0.1.13-windows.1',
   [string]$OfflineArchive,
   [string]$ExpectedSha256
 )
