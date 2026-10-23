@@ -93,7 +93,7 @@ test("#77 reviewed full-tools upgrade requires authoritative in-process freeze",
     await rm(path.dirname(receiptFile), {recursive:true,force:true});
     await assert.doesNotReject(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"));
     await createReceiptDatabase(home, 1);
-    await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by mcp-workers","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
+    await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by Remote Control Agent","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,upgrade_profile:"shell-enabled"}),{mode:0o600});
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/profile|quiescence/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,receipt_schema:2}),{mode:0o600});
