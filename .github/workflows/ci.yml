@@ -146,7 +146,12 @@ jobs:
         shell: pwsh
         run: |
           Set-Location apps/remote-control-agent
-          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/windows-acl.test.mjs
+          # Match the already validated Windows Release gate: native ACL probes
+          # must not contend with concurrently running full-tool Shell tests.
+          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows full-tool tests failed' }
+          node --experimental-strip-types --test tests/windows-acl.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
       - name: New public PowerShell installer parses under Windows without executing
         shell: pwsh
         run: |
