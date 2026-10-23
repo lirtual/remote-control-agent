@@ -333,8 +333,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   }
   if (options.action === "onboard") {
     // Keep the installer separate from the authenticated MCP owner approval.
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw Error("Onboarding requires the local interactive Windows terminal.");
+    // Existing identity recovery needs no local input; new enrollment does.
+    // Owner approval remains mandatory on the authenticated MCP channel.
+    if (!idExists && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      throw Error("Interactive terminal required.");
     }
     // A healthy signed grant is a no-op. A confirmed missing or mismatched
     // public-key grant is repaired inside this same one-line install session,
@@ -491,8 +493,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       .update(Buffer.from(material.request.public_key, "base64")).digest("hex").slice(0, 24);
     process.stdout.write("Pairing code: " + material.code + "\n" +
       "Fingerprint: " + fingerprint + "\n" +
-      "Approve in MCP.\n" +
-      "Await approval.\n");
+      "Approve in MCP.\n");
     return;
   }
   if (!exists) throw Error("Device is not paired. Run pair explicitly.");
