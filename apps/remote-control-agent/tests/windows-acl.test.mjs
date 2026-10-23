@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync, rmSync } from "node:fs";
+import { writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { replaceSignedDeviceId } from "../src/windows-identity-repair.ts";
 
 // Only disposable GitHub-hosted Windows CI: never create/remove an actual user identity.
 test("Windows native store starts with a protected current-user ACL", { skip:
-  process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" }, () => {
+  process.platform !== "win32" || process.env.GITHUB_ACTIONS !== "true" }, async () => {
   const root = path.win32.join(process.env.LOCALAPPDATA, "mcp-workers", "remote-control");
   const script = path.win32.join(path.dirname(fileURLToPath(import.meta.url)),
     "..", "scripts", "windows-private-store.ps1");
@@ -40,5 +41,33 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     assert.notEqual(run("Seal", root, "other.pem").status, 0, "Other files cannot be sealed");
   } finally {
     rmSync(key);
+  }
+
+  // Actual native Windows rename behavior with the same ACL helper that the
+  // interactive re-pair CLI will use. No cloud traffic, identity or task.
+  const oldId = "11111111-1111-4111-8111-111111111111";
+  const newId = "22222222-2222-4222-8222-222222222222";
+  const localId = path.win32.join(root, "v2-identity.pem.device-id");
+  const pending = path.win32.join(root, "v2-identity.pem.device-id.pending");
+  writeFileSync(localId, oldId + "\\n", { flag: "wx" });
+  try {
+    assert.equal(run("Seal", root, "v2-identity.pem.device-id").status, 0);
+    await replaceSignedDeviceId(path.win32.join(root, "v2-identity.pem"), oldId, newId, () => {
+      assert.equal(readFileSync(localId, "utf8").trim(), oldId);
+      assert.equal(existsSync(pending), true);
+      const sealed = run("Seal", root, "v2-identity.pem.device-id.pending");
+      assert.equal(sealed.status, 0,
+        "Staged ID ACL seal failed: " + String(sealed.stderr || "").slice(0, 400));
+    });
+    assert.equal(readFileSync(localId, "utf8").trim(), newId);
+    assert.equal(existsSync(pending), false);
+    assert.equal(run("Check", root).status, 0, "Replaced ID must retain verified private ACL");
+    await assert.rejects(replaceSignedDeviceId(path.win32.join(root, "v2-identity.pem"),
+      newId, oldId, () => { throw Error("simulated seal failure"); }), /simulated seal failure/);
+    assert.equal(readFileSync(localId, "utf8").trim(), newId);
+    assert.equal(existsSync(pending), false);
+  } finally {
+    rmSync(localId, { force: true });
+    rmSync(pending, { force: true });
   }
 });
