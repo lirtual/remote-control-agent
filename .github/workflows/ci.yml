@@ -220,10 +220,10 @@ jobs:
           }
           $source = Get-Content -LiteralPath $path -Raw
           if (-not $source.Contains('$Host.UI.PromptForChoice') -or
-              -not $source.Contains('Choose Y to upgrade.') -or
+              -not $source.Contains('按 Y 确认，默认取消。') -or
               -not $source.Contains('$choices, 1') -or
               -not $source.Contains('if ($selected -ne 0)') -or
-              -not $source.Contains('Upgrade skipped; existing device unchanged.') -or
+              -not $source.Contains('已取消升级，现有设备未更改。') -or
               $source.Contains("Read-Host 'Upgrade this device") -or
               -not $source.Contains("upgrade --version `$Version") -or
               $source.Contains('public installer never upgrades it')) {
