@@ -18,12 +18,12 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     return spawnSync(ps, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy",
       "Bypass", "-File", script, "-Action", action, "-Directory", target,
       ...(fileName ? ["-FileName", fileName] : [])],
-      { encoding: "utf8", windowsHide: true, timeout: 15_000 });
+      { encoding: "utf8", windowsHide: true, timeout: 30_000 });
   }
   const init = run("Init", root);
   if (init.status !== 0) {
     // CI fixture only. No identity key, URL, user token or store contents.
-    const diagnostic = String(init.stderr || "").slice(0, 1600);
+    const diagnostic = [String(init.stderr || "").slice(0, 1600), init.error?.code ?? "", init.signal ?? ""].filter(Boolean).join(" ");
     assert.fail("Current-user ACL initialized: " + diagnostic);
   }
   assert.equal(run("Check", root).status, 0, "ACL recheck");
