@@ -34,7 +34,7 @@ function testFixture({withUnit=true,withLauncher=true,profile="read-only-no-shel
   writeFileSync(identity,DEVICE,{mode:0o600});
   const receipts=path.join(dir(".local/state/mcp-workers/remote-control-agent"),"operation-receipts.sqlite");
   writeFileSync(receipts,"RECEIPTS_UNTOUCHED",{mode:0o600});
-  const unitPath=path.join(dir(".config/systemd/user"),"remote-control-v2-agent.service");
+  const unitPath=path.join(dir(".config/systemd/user"),"remote-control-agent.service");
   const unit=withUnit?renderV2Service({
     node:path.join(program,"bin/node"),home,repoRoot:program,
     endpoint:"https://rc.example.org/",
@@ -59,7 +59,7 @@ test("owner-confirmed uninstall stops only v2 service then keeps keys and SQLite
       }
     });
     assert.deepEqual(calls,[
-      ["systemctl","--user","disable","--now","remote-control-v2-agent.service"],
+      ["systemctl","--user","disable","--now","remote-control-agent.service"],
       ["systemctl","--user","daemon-reload"]
     ]);
     assert.equal(result.cloud_revocation,"NOT_PERFORMED");
@@ -191,7 +191,7 @@ test("#78 reject foreign systemd lifecycle directives BEFORE v2 uninstall stop",
   for(const directive of [
     "ExecStopPost=/usr/bin/touch /tmp/foreign-effect",
     "ExecStartPost=/usr/bin/true",
-    "Environment=REMOTE_CONTROL_V2_KEY_PATH=/tmp/foreign.pem",
+    "Environment=REMOTE_CONTROL_AGENT_KEY_PATH=/tmp/foreign.pem",
   ]){
     const f=testFixture();
     try{
