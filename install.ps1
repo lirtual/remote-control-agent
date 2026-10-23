@@ -243,6 +243,15 @@ function Get-ExistingAgentVersion([string]$programs, [string]$taskExe) {
   if (-not $matched.Success) { throw 'Unrecognized existing Agent task executable' }
   return $matched.Groups[1].Value
 }
+function Complete-ApprovedOnboarding([string]$launcher) {
+  # The local installer is interactive. Missing grants require one remote MCP
+  # owner approval; do not treat a task-start response as proof of WSS online.
+  & $launcher onboard --endpoint 'https://rca.lirtual.dpdns.org/'
+  if ($LASTEXITCODE -ne 0) {
+    throw '设备授权检查或恢复未完成；原私钥和设备身份已保留。'
+  }
+  Write-Output '本机安装和授权流程已完成；远程在线状态请在 ChatGPT 中通过 Remote Control MCP 验证。'
+}
 $temp = $null
 $stage = $null
 $promoted = $false
@@ -270,24 +279,24 @@ try {
       $oldNumber = [version](($oldVersion.Substring(1) -split '-')[0])
       $newNumber = [version](($Version.Substring(1) -split '-')[0])
       if ($newNumber -le $oldNumber) { throw 'Automatic downgrade or same-version replacement refused' }
-      Write-Output ("Existing paired Agent: {0} -> {1}" -f $oldVersion, $Version)
-      Write-Output 'Existing identity and grant will be retained. Finish active remote operations before upgrading.'
-      Write-Output ("Scheduled task is currently {0}; its running state will be preserved." -f $task.State)
+      Write-Output ("发现已配对的设备：{0} → {1}" -f $oldVersion, $Version)
+      Write-Output '将保留原私钥和设备记录。升级前请结束正在进行的远程操作。'
+      Write-Output ("当前计划任务状态：{0}；升级时将保留原有运行状态。" -f $task.State)
       # Prompt through the PowerShell host UI rather than stdin: the public
       # one-liner is evaluated by iex while receiving script text from a pipe.
       # No host support or no affirmative choice must never approve an upgrade.
       $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
-        [System.Management.Automation.Host.ChoiceDescription]::new('&Yes', 'Approve verified Agent upgrade'),
-        [System.Management.Automation.Host.ChoiceDescription]::new('&No', 'Keep the current device version')
+        [System.Management.Automation.Host.ChoiceDescription]::new('&Y 是', '确认升级至已验证的版本'),
+        [System.Management.Automation.Host.ChoiceDescription]::new('&N 否', '保留当前版本')
       )
       try {
-        $selected = $Host.UI.PromptForChoice('Remote Control Agent upgrade',
-          'Switch this device to the verified version? Choose Y to upgrade.', $choices, 1)
+        $selected = $Host.UI.PromptForChoice('Remote Control Agent 升级',
+          '是否升级到已验证的版本？按 Y 确认，默认取消。', $choices, 1)
       } catch {
         throw 'This terminal could not collect upgrade approval; existing device unchanged'
       }
       if ($selected -ne 0) {
-        Write-Output 'Upgrade skipped; existing device unchanged.'
+        Write-Output '已取消升级，现有设备未更改。'
         return
       }
       $upgradeExisting = $true
@@ -302,23 +311,20 @@ try {
     & $nodeExisting $verifyExisting $target
     if ($LASTEXITCODE -ne 0) { throw 'Existing program manifest failed verification' }
     if ($upgradeExisting) {
-      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version
-      if ($LASTEXITCODE -ne 0) { throw 'Verified candidate could not switch task; previous task retained or rolled back' }
-      Write-Output 'Agent upgraded with existing identity; verify signed MCP connectivity separately.'
+      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw '版本切换失败，已保留或尝试恢复原计划任务。' }
+      Write-Output '已完成版本切换，正在检查并按需恢复原有设备授权……'
+      Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
       return
     }
     if ($alreadyPaired) {
       $storedId = (Get-Content -LiteralPath $idFile -Raw).Trim()
       if ($storedId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'Untrusted stored device ID' }
-      Write-Output ('Existing local device ID: ' + $storedId)
-      # The bundled CLI uses a fresh signed challenge to confirm the grant.
-      & ([IO.Path]::Combine($target,'rca.cmd')) onboard --endpoint 'https://rca.lirtual.dpdns.org/'
-      if ($LASTEXITCODE -ne 0) { throw 'Existing device grant could not be verified; nothing was changed' }
-      Write-Output 'Actual remote online status requires authenticated MCP verification.'
+      Write-Output ('已有本地设备 ID：' + $storedId)
+      Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
       return
     }
-    & ([IO.Path]::Combine($target,'rca.cmd')) onboard --endpoint 'https://rca.lirtual.dpdns.org/'
-    if ($LASTEXITCODE -ne 0) { throw 'Interactive onboarding incomplete; protected identity retained' }
+    Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
     return
   }
   $temp = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('rca-' + [guid]::NewGuid().ToString('N') + '.zip'))
@@ -345,16 +351,15 @@ try {
   if ($manifest.version -cne $Version) { throw 'Manifest version mismatch' }
   [IO.Directory]::Move($stage, $target)
   $promoted = $true
-  Write-Output "Native Windows Agent verified and installed: $target"
+  Write-Output "Windows Agent 已验证并安装：$target"
   if ($upgradeExisting) {
-    & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version
-    if ($LASTEXITCODE -ne 0) { throw 'Verified candidate could not switch task; previous task retained or rolled back' }
-    Write-Output 'Agent upgraded with existing identity; verify signed MCP connectivity separately.'
+    & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw '版本切换失败，已保留或尝试恢复原计划任务。' }
+    Write-Output '已完成版本切换，正在检查并按需恢复原有设备授权……'
+    Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
     return
   }
-  & ([IO.Path]::Combine($target,'rca.cmd')) onboard --endpoint 'https://rca.lirtual.dpdns.org/'
-  if ($LASTEXITCODE -ne 0) { throw 'Interactive onboarding incomplete; protected identity retained' }
-  Write-Output 'Verify signed online status and a harmless read via authenticated MCP.'
+  Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
 } finally {
   if ($temp -and (Test-Path -LiteralPath $temp)) { Remove-Item -LiteralPath $temp -Force }
   if (-not $promoted -and $stage -and (Test-Path -LiteralPath $stage)) {
