@@ -34,8 +34,8 @@ export function classifyLinuxKernel(release) {
   return /wsl2/i.test(release) ? "wsl2" : "wsl1";
 }
 
-export const UNIT = "remote-control-v2-agent.service";
-export const MARKER = "# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
+export const UNIT = "remote-control-agent.service";
+export const MARKER = "# Managed by Remote Control Agent installer.";
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const programRoot = path.resolve(packageRoot, "..", "..");
 const manifestPath = path.join(programRoot, "bundle.json");
@@ -137,14 +137,14 @@ export function renderV2Service({ node, home, repoRoot, endpoint, keyPath, entry
   return [
     MARKER,
     "[Unit]",
-    "Description=Remote Control v2 Agent (outbound WSS, independent of v1)",
+    "Description=Remote Control Agent (signed outbound WSS)",
     "StartLimitIntervalSec=0",
     "",
     "[Service]",
     "Type=simple",
     "WorkingDirectory=" + project + "/apps/remote-control-agent",
-    "Environment=REMOTE_CONTROL_V2_ENDPOINT=" + trustedEndpoint(endpoint),
-    "Environment=REMOTE_CONTROL_V2_KEY_PATH=" + identity,
+    "Environment=REMOTE_CONTROL_AGENT_ENDPOINT=" + trustedEndpoint(endpoint),
+    "Environment=REMOTE_CONTROL_AGENT_KEY_PATH=" + identity,
     "UMask=0077",
     "ExecStartPre=/usr/bin/test -r " + identity,
     "ExecStartPre=/usr/bin/test -r " + identity + ".device-id",
@@ -432,7 +432,7 @@ export function assertRepeatInstallSameVersion(unit, root, {home, keyPath} = {})
 
 /** The regular installer never silently retargets an installed v2 service. */
 export function assertExistingServiceEndpoint(unit, endpoint) {
-  const expected = "Environment=REMOTE_CONTROL_V2_ENDPOINT=" + trustedEndpoint(endpoint);
+  const expected = "Environment=REMOTE_CONTROL_AGENT_ENDPOINT=" + trustedEndpoint(endpoint);
   if (!unit.split("\n").includes(expected)) {
     throw new Error("Existing v2 service endpoint differs; manual review required.");
   }
@@ -592,13 +592,13 @@ function assertCanonicalV2UnitTemplate(unit, home) {
   }
   // Require the exact installer-generated service, not merely a matching
   // ExecStart with arbitrary extra systemd directives in a stale backup.
-  const endpoint = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_ENDPOINT="));
-  const keys = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_V2_KEY_PATH="));
+  const endpoint = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_AGENT_ENDPOINT="));
+  const keys = settings.filter(line => line.startsWith("Environment=REMOTE_CONTROL_AGENT_KEY_PATH="));
   if (endpoint.length !== 1 || keys.length !== 1) {
     throw new Error("Interrupted upgrade backup has ambiguous endpoint or identity.");
   }
-  const endpointValue = endpoint[0].slice("Environment=REMOTE_CONTROL_V2_ENDPOINT=".length);
-  const keyValue = keys[0].slice("Environment=REMOTE_CONTROL_V2_KEY_PATH=".length);
+  const endpointValue = endpoint[0].slice("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=".length);
+  const keyValue = keys[0].slice("Environment=REMOTE_CONTROL_AGENT_KEY_PATH=".length);
   let canonical;
   try {
     canonical = renderV2Service({node:path.join(root, "bin", "node"), home,
@@ -687,8 +687,8 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   // identity. Reject drift before touching systemd or deleting the backup.
   const settings = current.split("\n");
   for (const [name, expected] of [
-    ["REMOTE_CONTROL_V2_ENDPOINT", oldUnit.endpoint],
-    ["REMOTE_CONTROL_V2_KEY_PATH", oldUnit.keyPath],
+    ["REMOTE_CONTROL_AGENT_ENDPOINT", oldUnit.endpoint],
+    ["REMOTE_CONTROL_AGENT_KEY_PATH", oldUnit.keyPath],
   ]) {
     const values = settings.filter(line => line.startsWith("Environment=" + name + "="));
     if (values.length !== 1 || values[0] !== "Environment=" + name + "=" + expected) {
@@ -763,8 +763,8 @@ async function launchForeground({ endpoint, keyPath }) {
   // Reuse the exact same signed-WSS Agent entrypoint as the systemd unit.
   // Import keeps SIGINT/SIGTERM handling in v2-main and no extra process,
   // job runner, local port or unattended supervisor is installed.
-  process.env.REMOTE_CONTROL_V2_ENDPOINT = endpoint;
-  process.env.REMOTE_CONTROL_V2_KEY_PATH = keyPath;
+  process.env.REMOTE_CONTROL_AGENT_ENDPOINT = endpoint;
+  process.env.REMOTE_CONTROL_AGENT_KEY_PATH = keyPath;
   await import(portable ? "../src/v2-main.js" : "../src/v2-main.ts");
 }
 
