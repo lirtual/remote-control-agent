@@ -226,6 +226,26 @@ export function stageOrVerifyPinnedProgram(bytes,expected,parent,versionName){
     :stagePinnedProgram(bytes,expected,parent,versionName);
 }
 
+/** Exactly one explicit --upgrade path may invoke the owner-local one-time
+ * cutover. Foreign/mismatched units are never assumed safe to overwrite.
+ */
+export function needsCanonicalServiceCutover(home){
+  const base=join(home,".config/systemd/user");
+  const old=join(base,"remote-control-v2-agent.service");
+  const canonical=join(base,"remote-control-agent.service");
+  let oldSt,canSt;
+  try{oldSt=lstatSync(old);canSt=lstatSync(canonical);}
+  catch(e){if(e.code==="ENOENT")return false;throw e;}
+  if(!oldSt.isFile()||oldSt.isSymbolicLink()||oldSt.uid!==process.getuid()||
+     !canSt.isFile()||canSt.isSymbolicLink()||canSt.uid!==process.getuid())
+    throw Error("Untrusted installed Agent service");
+  // Only the explicitly identified old loopback + signed Agent pair is eligible.
+  const legacy="# Installed from docs/remote-control/systemd/remote-control-agent.service.example\n";
+  const signed="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n";
+  return readFileSync(canonical,"utf8").startsWith(legacy) &&
+    readFileSync(old,"utf8").startsWith(signed);
+}
+
 /** Immutable Worker-origin CLI handoff. Never mutates identity itself. */
 export function parseNodeBootstrapArgs(args){
   const result={locked:false,upgrade:false};
@@ -370,6 +390,19 @@ export function executeNodeBootstrap(options,{
     ],{stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""}});
     if(processResult.error||processResult.signal||processResult.status!==0)
       throw Error("Exclusive v2 installation could not complete");
+    return 0;
+  }
+  // The reviewed new Release must first be staged and digest-checked. Only
+  // this exact pre-existing service collision invokes the one-time converter;
+  // all other installs use the standard fail-closed identity/upgrade path.
+  if(options.upgrade && needsCanonicalServiceCutover(home)){
+    const migrator=join(prepared.root,APP,"scripts/migrate-linux-service.mjs");
+    verifyOwnedPath(migrator);
+    const changed=invoke(prepared.bin,[migrator,"--apply",prepared.root],{
+      stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""},
+    });
+    if(changed.error||changed.signal||changed.status!==0)
+      throw Error("Owner-terminal service cutover incomplete; originals retained");
     return 0;
   }
   // install-v2.mjs handles the existing lifetime selection, owner challenge,
