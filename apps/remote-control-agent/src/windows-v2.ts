@@ -223,6 +223,15 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   }
   if (options.action === "enable") {
     if (!exists) throw Error("Pair a native Windows device before enabling autostart.");
+    const modePath = keyPath + ".install-mode";
+    let grantMode: string | undefined;
+    if (await hasFile(modePath)) {
+      assertPrivateStore("Check", directory, "v2-identity.pem.install-mode");
+      grantMode = (await readFile(modePath, "utf8")).trim();
+    }
+    // Refuse temporary/invalid mode *before* recovering any local ID or
+    // changing the task; explicit rejection must have no local side effects.
+    assertWindowsAutostartMode(grantMode);
     if (!idExists) {
       // Only an already-approved key can recover its original server-signed ID.
       // No second pairing code, key rotation, or cloud grant is created.
@@ -230,13 +239,6 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
       assertPrivateStore("Check", directory);
     }
-    const modePath = keyPath + ".install-mode";
-    let grantMode: string | undefined;
-    if (await hasFile(modePath)) {
-      assertPrivateStore("Check", directory, "v2-identity.pem.install-mode");
-      grantMode = (await readFile(modePath, "utf8")).trim();
-    }
-    assertWindowsAutostartMode(grantMode);
     const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
     // The recovered-ID branch already verified a signed challenge, and an
     // existing ID must be checked afresh before enabling an autostart task.

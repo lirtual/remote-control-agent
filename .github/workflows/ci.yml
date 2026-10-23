@@ -306,8 +306,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Synthetic key ACL seal failed' }
             & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName 'v2-identity.pem.device-id'
             if ($LASTEXITCODE -ne 0) { throw 'Synthetic ID ACL seal failed' }
-            & $program enable --endpoint 'https://rca.example.test/'
-            if ($LASTEXITCODE -ne 0) { throw 'Task registration failed' }
+            # Synthetic ID deliberately has no cloud grant. Exercise the
+            # protected Task Scheduler backend directly; NEVER bypass the
+            # signed grant check in the public `rca enable` command.
+            $installed = Split-Path -Parent $program
+            $node = Join-Path $installed 'bin\node.exe'
+            $entry = Join-Path $installed 'apps\remote-control-agent\src\windows-v2.js'
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `
+              'apps/remote-control-agent/scripts/windows-user-task.ps1' `
+              -Action Enable -Endpoint 'https://rca.example.test/' -Node $node -Entry $entry
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic task registration failed' }
             $created = $true
             # CI-only task fixture: expose safe structural validation errors
             # while the end-user CLI continues redacting local OS details.
