@@ -139,12 +139,12 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
     if(args[1]==="is-active" && !running)throw Error("inactive");
     if(args[1]==="start")running=true;
   };
-  ensureApprovedPermanentService(invoke);
+  assert.equal(ensureApprovedPermanentService(invoke,true),false);
   assert.equal(running,true);
   assert.deepEqual(calls,[
+    "--user is-active --quiet "+UNIT,
     "--user daemon-reload",
     "--user enable "+UNIT,
-    "--user is-active --quiet "+UNIT,
     "--user start "+UNIT,
     "--user is-active --quiet "+UNIT,
   ]);
@@ -152,18 +152,39 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
 
 test("approved permanent retry preserves an already-active service and fails closed on enable error", () => {
   const calls=[];
-  ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));});
-  assert.deepEqual(calls,[
-    "--user daemon-reload",
-    "--user enable "+UNIT,
-    "--user is-active --quiet "+UNIT,
-  ]);
+  assert.equal(ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));}),true);
+  assert.deepEqual(calls,["--user is-active --quiet "+UNIT]);
   const failed=[];
   assert.throws(()=>ensureApprovedPermanentService((binary,args)=>{
     failed.push(args.join(" "));
+    if(args[1]==="is-active")throw Error("inactive");
     if(args[1]==="enable")throw Error("cannot enable");
-  }),/cannot enable/);
-  assert.deepEqual(failed,["--user daemon-reload","--user enable "+UNIT]);
+  },true),/cannot enable/);
+  assert.deepEqual(failed,["--user is-active --quiet "+UNIT,"--user daemon-reload","--user enable "+UNIT]);
+});
+
+test("approved permanent repeat preserves intentionally stopped systemd service", () => {
+  const calls=[];
+  const inactive=(binary,args)=>{calls.push(args.join(" "));if(args[1]==="is-active")throw Error("inactive");};
+  assert.equal(ensureApprovedPermanentService(inactive,false),null);
+  assert.deepEqual(calls,["--user is-active --quiet "+UNIT]);
+});
+
+test("activation marker controls exactly one interrupted systemd recovery", async()=>{
+  const {rm,mkdtemp}=await import("node:fs/promises");
+  const {beginInitialActivation,hasInitialActivation,clearInitialActivation}=await import("../scripts/install-v2.mjs");
+  const home=await mkdtemp(path.join(os.tmpdir(),"rca-activation-test-"));
+  const id="11111111-2222-4333-8444-555555555555";
+  const marker=path.join(home,"private","v2-identity.pem.activation-pending");
+  try {
+    await mkdir(path.dirname(marker),{recursive:true,mode:0o700});
+    assert.equal(await hasInitialActivation(marker,id),false);
+    await beginInitialActivation(marker,id);
+    assert.equal(await hasInitialActivation(marker,id),true);
+    await assert.rejects(hasInitialActivation(marker,"22222222-2222-4333-8444-555555555555"),/conflicts/);
+    await clearInitialActivation(marker);
+    assert.equal(await hasInitialActivation(marker,id),false);
+  } finally {await rm(home,{recursive:true,force:true});}
 });
 
 test("ordinary repeat install rejects changed Worker origin before identity rotation", () => {
@@ -424,7 +445,8 @@ test("one installer command dispatches verified revoke to guarded local challeng
   assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
   assert.match(src, /Ready: v2 service active; existing identity retained/);
-  assert.match(src, /ensureApprovedPermanentService\(\)/);
+  assert.match(src, /ensureApprovedPermanentService\(run, pending\)/);
+  assert.match(src, /if \(pending\) await clearInitialActivation\(marker\)/);
   assert.match(src, /await pairFreshPending\(options, keyPath, stdin, stdout, state === "pending"\)/);
   assert.match(src, /await assertRemoteRevocation\(options.endpoint, keyPath, oldId\)/);
   assert.doesNotMatch(src, /Type RE-PAIR|Explicit re-pair confirmation was not provided/);

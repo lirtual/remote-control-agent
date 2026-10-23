@@ -13,6 +13,42 @@ systemd service and authenticates to the approved Worker over signed outbound
 WSS. There are no per-feature switches and no need to pair again during an
 approved version upgrade.
 
+## New one-command onboarding (Spec #24 · source under review)
+
+The canonical public entry point is intended to be `https://rca.lirtual.dpdns.org/`,
+served by the existing Remote Control Worker. It will display the OS-specific
+commands and the three steps: **install → approve once through authenticated
+Remote Control MCP → verify online through authenticated MCP**.
+
+- Windows PowerShell: `irm https://rca.lirtual.dpdns.org/install.ps1 | iex`
+- Linux x64/ARM64, including WSL2: `curl -fsSL https://rca.lirtual.dpdns.org/install.sh | sh`
+
+The Linux one-liner is for interactive installation. POSIX `sh` reports the
+last pipeline command's exit status: if `curl` fails before downloading any
+script, the empty `sh` may still exit 0. Inspect download errors, and never
+treat pipeline success as proof of installation, approval or online status;
+confirm the device through authenticated MCP before declaring success.
+
+**These commands describe the proposed public contract, not a claim of working
+production onboarding.** The new Windows bootstrap requires a reviewed, immutable
+Windows Release that contains the `onboard` CLI, a separately checked source
+commit, source-script SHA-256 and official ZIP SHA-256. Until those artifacts are
+published and explicitly pinned by the Worker, `/install.ps1` returns HTTP 503.
+The landing page and updated Linux script also require a separately authorized
+Worker deployment. Merely merging an Agent PR does not install, deploy, update,
+or pair anything.
+
+The CLI's two options are **永久** (user-logon task on Windows, systemd user unit
+on Linux) and **临时** (foreground, with existing 24-hour cloud grant). Selection
+requires a real TTY and an explicit key press; one authenticated MCP approval
+is still mandatory. Re-running the installer never silently upgrades or re-keys
+an approved device. Local installation, owner authorization and actual remote
+online state are distinct facts.
+
+Historical root `install.sh` and `install-windows.ps1` have been removed from this branch; they were
+not the canonical public installation URLs. Historical immutable Release tags
+remain unchanged; upgrades are separate explicitly authorized operations.
+
 ## Installation and upgrades
 
 The approved Worker serves a pinned Release installer. Its GitHub assets are

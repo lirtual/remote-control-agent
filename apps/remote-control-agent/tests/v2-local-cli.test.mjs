@@ -233,12 +233,3 @@ test("portable CLI hint prints PATH only when missing in the current terminal",(
   printPortableCliHint(out,launcher,home,"/usr/bin:"+home+"/.local/bin:/bin");
   assert.equal(out.value,"CLI: "+launcher+"\n");
 });
-
-test("short prerelease shell bootstrap syntax and noninteractive fail-closed before GitHub",()=>{
-  const sh=path.join(root,"install.sh");
-  const parsed=spawnSync("sh",["-n",sh],{encoding:"utf8",timeout:3000});
-  assert.equal(parsed.status,0,parsed.stderr);
-  const result=spawnSync("sh",[sh],{encoding:"utf8",input:"",timeout:3000});
-  assert.notEqual(result.status,0);
-  assert.match(result.stderr,/interactive/);
-});

@@ -20,6 +20,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beginDeviceEnrollment, PendingIdentityConflictError } from "../src/pair-device.ts";
 import { selectDeviceLabel } from "../src/v2-enrollment.ts";
+import { promptInstallMode } from "../src/install-mode.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { assertRemoteRevocation } from "../src/v2-repair.ts";
@@ -744,19 +745,43 @@ export async function installUnit(unitPath, content, previous) {
   }
 }
 
-/**
- * Re-running the reviewed permanent install must complete a SIGKILL that
- * occurred after writing the unit but before systemctl enable --now.
- * It must not rotate identity or restart an already active service.
- */
-export function ensureApprovedPermanentService(invoke = run) {
+/** Proof of incomplete *first* activation, never inferred from an inactive unit.
+ * Store only the approved device ID in the existing owner-only identity dir. */
+export async function hasInitialActivation(marker, deviceId) {
+  if (!DEVICE_ID.test(deviceId)) throw Error("Invalid approved device ID for activation.");
+  const meta = await exists(marker);
+  if (!meta) return false;
+  if (!meta.isFile() || meta.isSymbolicLink() || meta.uid !== process.getuid() ||
+      (meta.mode & 0o777) !== 0o600 || meta.nlink !== 1) {
+    throw Error("Unsafe first-activation marker; manual review required.");
+  }
+  if ((await readFile(marker, "utf8")) !== deviceId + "\n") {
+    throw Error("First-activation marker conflicts with approved device identity.");
+  }
+  return true;
+}
+export async function beginInitialActivation(marker, deviceId) {
+  if (await hasInitialActivation(marker, deviceId)) return;
+  const file = await open(marker, "wx", 0o600);
+  try { await file.writeFile(deviceId + "\n"); await file.sync(); }
+  finally { await file.close(); }
+  await syncParent(marker);
+}
+export async function clearInitialActivation(marker) {
+  await rm(marker);
+  await syncParent(marker);
+}
+
+/** Repeated install never revives an owner-stopped unit without the protected marker. */
+export function ensureApprovedPermanentService(invoke = run, pending = false) {
+  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); return true; }
+  catch { /* Not active; only recover a verifiable first-activation marker. */ }
+  if (!pending) return null;
   invoke("systemctl", ["--user", "daemon-reload"]);
   invoke("systemctl", ["--user", "enable", UNIT]);
-  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); }
-  catch {
-    invoke("systemctl", ["--user", "start", UNIT]);
-    invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
-  }
+  invoke("systemctl", ["--user", "start", UNIT]);
+  invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+  return false;
 }
 
 async function launchForeground({ endpoint, keyPath }) {
@@ -1271,22 +1296,26 @@ export async function runInstaller(args, {
     throw new Error("Manual portable upgrade requires a real local terminal.");
   }
   if (portable && options.action === "install") {
+    const existingUnit = await readOwnedUnit(path.join(home, ".config", "systemd", "user", UNIT));
+    const existingId = await exists(keyForInstallMode(home, "permanent") + ".device-id");
+    if (existingUnit && existingId) {
+      // The validated ordinary install path below checks version, key, grant,
+      // endpoint and live service without showing a new-enrollment menu.
+      options.grantType = "permanent";
+      options.foreground = false;
+    } else {
     if (!stdin.isTTY || !stdout.isTTY) {
       throw new Error("Portable pairing requires a real interactive target-terminal TTY.");
     }
-    const prompt = createInterface({input:stdin,output:stdout,terminal:true});
-    try {
-      stdout.write("Remote Control Agent " +
-        (portable ? JSON.parse(readFileSync(manifestPath, "utf8")).version : "v2") + "\n");
-      stdout.write("Suggested device name: " + (options.name ?? os.hostname()) + "\n");
-      stdout.write("1. Permanent (systemd)\n2. Temporary (24h)\n");
-      const choice=(await prompt.question("Choose [1-2]: ")).trim();
-      // Mode choice binds the signed Agent pending request and owner MCP review.
-      Object.assign(options, choosePortableInstallMode(choice, args));
-      if (choice === "2") {
-        stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
-      }
-    } finally {prompt.close();}
+    stdout.write("Remote Control Agent " +
+      JSON.parse(readFileSync(manifestPath, "utf8")).version + "\n");
+    stdout.write("Suggested device name: " + (options.name ?? os.hostname()) + "\n");
+    const mode = await promptInstallMode(stdin,stdout);
+    Object.assign(options, choosePortableInstallMode(mode === "permanent" ? "1" : "2", args));
+    if (mode === "temporary") {
+      stdout.write("Temporary: cloud grant expires in 24h; terminal stop is not a revoke.\n");
+    }
+    }
   }
   const unitPath = path.join(home, ".config", "systemd", "user", UNIT);
   const keyPath = keyForInstallMode(home, options.grantType ?? "permanent");
@@ -1365,9 +1394,20 @@ export async function runInstaller(args, {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
           // Never restart v1 or replace this approved local identity.
-          ensureApprovedPermanentService();
+          const marker = keyPath + ".activation-pending";
+          const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+          const pending = await hasInitialActivation(marker, deviceId);
+          const alreadyActive = ensureApprovedPermanentService(run, pending);
+          if (pending) await clearInitialActivation(marker);
+          if (alreadyActive === null) {
+            stdout.write("Existing approved service is stopped; repeat install will not restart it.\n");
+            return;
+          }
           if (portable) {
-            const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+            // Healthy repeats never overwrite ~/.local/bin/rca or ~/.bashrc.
+            const launcher = alreadyActive
+              ? path.join(home, ".local", "bin", "rca")
+              : await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
             printPortableCliHint(stdout, launcher, home);
           }
           stdout.write("Ready: v2 service active; existing identity retained.\n");
@@ -1423,8 +1463,15 @@ export async function runInstaller(args, {
       }
     }
   }
+  const firstActivation = !previous && !options.foreground;
+  const activationMarker = keyPath + ".activation-pending";
+  if (firstActivation) {
+    const deviceId = (await readFile(keyPath + ".device-id", "utf8")).trim();
+    await beginInitialActivation(activationMarker, deviceId);
+  }
   try {
     await installUnit(unitPath, rendered, previous);
+    if (firstActivation) await clearInitialActivation(activationMarker);
   } finally {
     // When activation fails before service stop, let the old Agent resume.
     // After successful restart the old socket disappears and release is a no-op.
