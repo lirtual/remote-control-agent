@@ -139,7 +139,7 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
     if(args[1]==="is-active" && !running)throw Error("inactive");
     if(args[1]==="start")running=true;
   };
-  ensureApprovedPermanentService(invoke);
+  assert.equal(ensureApprovedPermanentService(invoke),false);
   assert.equal(running,true);
   assert.deepEqual(calls,[
     "--user is-active --quiet "+UNIT,
@@ -152,7 +152,7 @@ test("approved permanent retry enables a unit interrupted before systemctl enabl
 
 test("approved permanent retry preserves an already-active service and fails closed on enable error", () => {
   const calls=[];
-  ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));});
+  assert.equal(ensureApprovedPermanentService((binary,args)=>{calls.push(args.join(" "));}),true);
   assert.deepEqual(calls,["--user is-active --quiet "+UNIT]);
   const failed=[];
   assert.throws(()=>ensureApprovedPermanentService((binary,args)=>{

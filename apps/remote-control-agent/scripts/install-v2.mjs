@@ -752,12 +752,13 @@ export async function installUnit(unitPath, content, previous) {
  */
 export function ensureApprovedPermanentService(invoke = run) {
   // Healthy repeats are strictly read-only: never reload or touch a live task.
-  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); return; }
+  try { invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]); return true; }
   catch { /* An interrupted first activation may be recovered. */ }
   invoke("systemctl", ["--user", "daemon-reload"]);
   invoke("systemctl", ["--user", "enable", UNIT]);
   invoke("systemctl", ["--user", "start", UNIT]);
   invoke("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+  return false;
 }
 
 async function launchForeground({ endpoint, keyPath }) {
@@ -1370,9 +1371,13 @@ export async function runInstaller(args, {
         if (previous && options.grantType !== "temporary") {
           // A repeat install may complete an interrupted owned v2 activation.
           // Never restart v1 or replace this approved local identity.
-          ensureApprovedPermanentService();
+          const alreadyActive = ensureApprovedPermanentService();
           if (portable) {
-            const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
+            // An active authorized service is a genuinely read-only repeat:
+            // do not replace ~/.local/bin/rca or append to ~/.bashrc.
+            const launcher = alreadyActive
+              ? path.join(home, ".local", "bin", "rca")
+              : await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
             printPortableCliHint(stdout, launcher, home);
           }
           stdout.write("Ready: v2 service active; existing identity retained.\n");
