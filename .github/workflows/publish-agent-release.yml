@@ -78,6 +78,10 @@ jobs:
               .status == "completed" and
               .conclusion == "success"
             ' >/dev/null
+          # A failed post-publication immutable check cannot undo a mutable
+          # Release already exposed to users: fail before creating any draft.
+          gh api "repos/$GH_REPO/immutable-releases" |
+            jq -e '.enabled == true' >/dev/null
           if [[ -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")" ]] ||
              gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Existing release/tag may not be overwritten" >&2
@@ -163,6 +167,10 @@ jobs:
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/recheck" --clobber
           test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 4
           ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS.txt )
+          # Detect a repository policy change between draft creation and
+          # promotion; never make the verified draft publicly mutable.
+          gh api "repos/$GH_REPO/immutable-releases" |
+            jq -e '.enabled == true' >/dev/null
           gh release edit "$RELEASE_TAG" --draft=false
           gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
             jq -e --arg tag "$RELEASE_TAG" '
