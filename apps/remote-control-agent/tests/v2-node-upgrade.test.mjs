@@ -37,9 +37,9 @@ function fixture({newSource=FULL_MAIN}={}){
   const receipt=path.join(home,".local/share/mcp-workers/remote-control/receipts.keep");
   writeFileSync(receipt,"PRESERVE_RECEIPT",{mode:0o600});
   const unit=[
-    "# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.",
+    "# Managed by Remote Control Agent installer.",
     "[Service]",
-    "Environment=REMOTE_CONTROL_V2_ENDPOINT="+ENDPOINT,
+    "Environment=REMOTE_CONTROL_AGENT_ENDPOINT="+ENDPOINT,
     "WorkingDirectory="+path.join(oldRoot,APP),
     "ExecStart="+path.join(oldRoot,"bin/node")+" "+path.join(oldRoot,APP,"src/v2-main.js"),
     "",
@@ -224,7 +224,7 @@ test("reviewed pin discovery fails closed on wrong endpoint, redirects and ambig
 });
 test("rca upgrade with no tag or commit uses reviewed Worker release, preserving recovery order",async()=>{
   const calls=[];
-  const state={unit:"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\nEnvironment=REMOTE_CONTROL_V2_ENDPOINT="+ENDPOINT+"\n",
+  const state={unit:"# Managed by Remote Control Agent installer.\nEnvironment=REMOTE_CONTROL_AGENT_ENDPOINT="+ENDPOINT+"\n",
     root:"old-root",info:{version:"v0.1.2"},ids:{permanent:ID}};
   const prepared={version:tag,program:"new-root"};
   const rc=await runInteractiveLocalManager(["upgrade"],{
@@ -242,8 +242,8 @@ test("rca upgrade with no tag or commit uses reviewed Worker release, preserving
 test("rca upgrade is idempotent if bound Worker already pins installed release",async()=>{
   const calls=[];
   let output="";
-  const unit="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n"+
-    "Environment=REMOTE_CONTROL_V2_ENDPOINT="+ENDPOINT+"\n";
+  const unit="# Managed by Remote Control Agent installer.\n"+
+    "Environment=REMOTE_CONTROL_AGENT_ENDPOINT="+ENDPOINT+"\n";
   const result=await runInteractiveLocalManager(["upgrade"],{
     home:"/tmp/rca-up-to-date-test",stdin:{isTTY:true},
     stdout:{isTTY:true,write:x=>{output+=x;}},
