@@ -2,18 +2,21 @@
 
 Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Current Linux v2 release
+## Current Linux release
 
 Native Windows x64 full-tools and the pinned Playwright browser runtime are packaged separately from the Linux Agent. Publication requires a reviewed, single-file approval commit on `main` after Agent CI succeeds. Merging source does not install, upgrade or re-pair any device.
 
 
-The published immutable **v0.1.11** Agent enables file reads, file writes,
+The published immutable **v0.1.12** Linux Agent enables file reads, file writes,
 Shell and managed sessions for approved paired devices. It runs as the user's
 systemd service and authenticates to the approved Worker over signed outbound
 WSS. There are no per-feature switches and no need to pair again during an
 approved version upgrade.
 
 ## Installation and upgrades
+
+**Migration warning (2026-10-23):** The existing WSL2 deployment still uses a legacy service name and an older loopback service occupies the desired canonical name. The [canonical service refactor](https://github.com/lirtual/remote-control-agent/pull/23) is **not** an installed Release or a safe in-place unit rename. Do not manually rename systemd units or delete the old Tunnel. Follow the [reviewed offline cutover conditions](./docs/canonical-linux-agent-cutover.md) before the one-time migration.
+
 
 The approved Worker serves a pinned Release installer. Its GitHub assets are
 SHA-256 verified before any bundled executable runs:
@@ -31,7 +34,7 @@ from the device's already-configured Worker installer, then uses the existing
 GitHub Release verifier, pinned SHA-256 checks, installer, and binary
 activation/rollback. Fetched shell content is never executed by this CLI.
 
-### One-time v0.1.11 -> next v2 version
+### One-time upgrade of an installed v0.1.11 Agent
 
 The published v0.1.11 is already full-tools but has no in-process upgrade
 handshake. **Only after a newer immutable Agent Release has been approved and
@@ -56,10 +59,10 @@ again using `systemctl --user start remote-control-v2-agent.service`.
 An activation failure uses the existing durable systemd rollback to restore
 the previous v2 unit. No operation is replayed by the installer.
 
-Future full-tools v2 releases use the owner-local Unix-socket freeze instead:
+Future Linux Agent releases use the owner-local Unix-socket freeze instead:
 new work is rejected after the freeze begins; active, starting or unknown work
 blocks upgrade. No v1 compatibility layer or additional service is required.
-The immutable v0.1.11 binary is unchanged by this source PR.
+The immutable v0.1.11/v0.1.12 Release archives are unchanged by source-only refactors.
 
 ## Native Windows x64 installation and upgrade
 
