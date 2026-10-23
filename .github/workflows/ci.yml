@@ -574,6 +574,7 @@ jobs:
           $digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           [IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS.txt'),
             ($digest + '  ' + $name + [Environment]::NewLine))
+          Write-Output "Reviewed Windows candidate $tag SHA256: $digest"
           Write-Output "Windows candidate $tag archived and verified without Release publication"
 
       - name: Save unpublished Windows candidate for independent review
