@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { renderV2Service } from "../scripts/install-v2.mjs";
-import { planServiceCutover,applyServiceCutover,assertOffline } from "../scripts/migrate-linux-service.mjs";
+import { planServiceCutover,applyServiceCutover,rollbackServiceCutover,assertOffline } from "../scripts/migrate-linux-service.mjs";
 
 const id="af666663-b30c-4b3d-ad85-c8047dc3516b";
 const marker="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
@@ -122,4 +122,33 @@ test("activation failure restores legacy service and restarts original signed-WS
     assert.ok(system.calls.includes("enable --now remote-control-tunnel.service"));
     assert.equal((await lstat(path.join(x.plan.backupDir,"journal.json"))).mode&0o777,0o600);
   } finally {await x.dispose();}
+});
+
+test("owner-local rollback from inactive canonical unit restores exact previous unit",async()=>{
+  const x=await fixture();
+  try{
+    const sys=fakeSystemctl();
+    await applyServiceCutover(x.plan,{systemctl:sys.invoke});
+    const done=await rollbackServiceCutover({home:x.home,systemctl:sys.invoke});
+    assert.equal(done.status,"legacy_restored");
+    assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),x.legacy);
+    assert.equal((await readFile(x.key+".device-id","utf8")).trim(),id);
+    assert.ok(sys.calls.includes("enable --now remote-control-v2-agent.service"));
+    assert.ok(sys.calls.includes("enable --now remote-control-tunnel.service"));
+  }finally{await x.dispose();}
+});
+
+test("refuse rollback if canonical unit or private identity changed",async()=>{
+  const x=await fixture();
+  try{
+    const sys=fakeSystemctl();
+    await applyServiceCutover(x.plan,{systemctl:sys.invoke});
+    const file=path.join(x.unitDir,"remote-control-agent.service");
+    await writeFile(file,"[Service]\nExecStart=/untrusted\n",{mode:0o600});
+    await assert.rejects(rollbackServiceCutover({home:x.home,systemctl:sys.invoke}),/unreviewed changes/);
+    assert.equal(await readFile(file,"utf8"),"[Service]\nExecStart=/untrusted\n");
+    await writeFile(file,x.plan.canonical,{mode:0o600});
+    await writeFile(x.key,"tampered key",{mode:0o600});
+    await assert.rejects(rollbackServiceCutover({home:x.home,systemctl:sys.invoke}),/identity changed/);
+  }finally{await x.dispose();}
 });
