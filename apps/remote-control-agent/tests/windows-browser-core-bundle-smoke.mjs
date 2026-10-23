@@ -13,7 +13,7 @@ const stage=process.argv[2];
 if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
   throw Error("Native Windows absolute staging directory required");
 const results=inspectWindowsPreview(stage);
-assert.equal(results.version,"v0.0.1-ci");
+assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 assert.ok(results.files<=41 && results.files>=20);
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
