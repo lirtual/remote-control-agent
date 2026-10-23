@@ -7,8 +7,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const APP="apps/remote-control-agent";
-const UNIT="remote-control-v2-agent.service";
-const V2MARKER="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
+const UNIT="remote-control-agent.service";
+const V2MARKER="# Managed by Remote Control Agent installer.";
 const VERSION=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc$/;
 
 function safeStat(p,dir=false) {
@@ -126,7 +126,7 @@ export function assertSafeUninstallUnit(unit,home,versions){
   const working=get("WorkingDirectory");
   const version=versions.find(v=>working===path.join(v,APP));
   if(!version)throw Error("Foreign managed service program");
-  const endpoint=get("Environment=REMOTE_CONTROL_V2_ENDPOINT");
+  const endpoint=get("Environment=REMOTE_CONTROL_AGENT_ENDPOINT");
   let url;
   try{url=new URL(endpoint);}catch{throw Error("Invalid managed endpoint");}
   if(url.protocol!=="https:"||endpoint!==url.origin+"/"||url.username||
@@ -134,12 +134,12 @@ export function assertSafeUninstallUnit(unit,home,versions){
   const key=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
   const expected=[
     V2MARKER,"[Unit]",
-    "Description=Remote Control v2 Agent (outbound WSS, independent of v1)",
+    "Description=Remote Control Agent (signed outbound WSS)",
     "StartLimitIntervalSec=0","",
     "[Service]","Type=simple",
     "WorkingDirectory="+path.join(version,APP),
-    "Environment=REMOTE_CONTROL_V2_ENDPOINT="+endpoint,
-    "Environment=REMOTE_CONTROL_V2_KEY_PATH="+key,
+    "Environment=REMOTE_CONTROL_AGENT_ENDPOINT="+endpoint,
+    "Environment=REMOTE_CONTROL_AGENT_KEY_PATH="+key,
     "UMask=0077",
     "ExecStartPre=/usr/bin/test -r "+key,
     "ExecStartPre=/usr/bin/test -r "+key+".device-id",
