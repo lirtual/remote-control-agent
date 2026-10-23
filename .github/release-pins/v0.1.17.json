@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.17",
+  "source_sha": "9334febebfac246299465f17d1d30d21e36fd913",
+  "candidate_run_id": 39997761408,
+  "release_title": "Remote Control Agent v0.1.17 — Reliable Windows Upgrade Confirmation",
+  "release_notes": "docs/releases/v0.1.17.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.17-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.17-ubuntu-24.04",
+      "sha256": "4368db59bff2e424b738a845c9d36d213aaa8e99c34f9160fa4091b05d3ad967"
+    },
+    {
+      "name": "remote-control-agent-v0.1.17-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.17-ubuntu-24.04-arm",
+      "sha256": "9567ddb48ab56fd561edf90c3c95640af557f517d171b34efdd3675d567c3a8e"
+    },
+    {
+      "name": "remote-control-agent-v0.1.17-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.17-windows-x64",
+      "sha256": "bdab834c9137e67883fc52ddb6ac00455612cf96bbeee694fc04fa8ab378c833"
+    }
+  ]
+}
