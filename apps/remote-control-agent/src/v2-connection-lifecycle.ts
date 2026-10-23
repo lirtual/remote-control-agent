@@ -386,7 +386,8 @@ export async function maintainAuthenticatedDeviceSession(
       );
       if (signal.aborted) { connection.socket.close(); break; }
       // Report once per authenticated socket, including each reconnect.
-      connection.socket.send(JSON.stringify(collectDeviceInfo(full ? "full" : "read-only")));
+      // The runtime's read-only/full execution gate is separate from display metadata.
+      connection.socket.send(JSON.stringify(collectDeviceInfo()));
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.

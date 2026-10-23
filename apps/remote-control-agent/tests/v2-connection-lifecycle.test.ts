@@ -156,9 +156,10 @@ test("reconnect obtains a fresh challenge and stops on abort without executing c
     assert.equal(sockets.length, 2);
     for (const socket of sockets) {
       assert.equal(socket.sent.length, 1, "one metadata report per signed session");
-      const info = JSON.parse(socket.sent[0]!) as { kind: string; capabilities: string[] };
+      const info = JSON.parse(socket.sent[0]!) as { kind: string; os: string };
       assert.equal(info.kind, "device_info");
-      assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
+      assert.ok(["linux", "windows", "darwin"].includes(info.os));
+      assert.equal(Object.hasOwn(info, "capabilities"), false);
     }
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
@@ -761,9 +762,9 @@ test("paired v2 agent exposes reads, writes and Shell without capability flags",
 });
 
 test("minimal runtime metadata never includes device ID or secrets", () => {
-  const info = collectDeviceInfo("full");
+  const info = collectDeviceInfo();
   assert.equal(info.kind, "device_info");
-  assert.deepEqual(info.capabilities, ["read", "file_write", "shell"]);
+  assert.equal(Object.hasOwn(info, "capabilities"), false);
   assert.ok(info.hostname.length > 0 && info.hostname.length <= 64);
   assert.ok(info.os_version.length > 0 && info.os_version.length <= 96);
   assert.ok(["native", "wsl2", "container"].includes(info.environment));
@@ -905,12 +906,10 @@ test("P3 signed lifecycle exposes a local browser only when explicitly injected,
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
-test("metadata reports only bounded non-secret runtime data and honors read-only capability", () => {
-  const readonly = collectDeviceInfo("read-only");
-  const full = collectDeviceInfo("full");
+test("metadata is bounded and independent of execution permissions", () => {
+  const readonly = collectDeviceInfo();
   assert.equal(readonly.kind, "device_info");
-  assert.deepEqual(readonly.capabilities, ["read"]);
-  assert.deepEqual(full.capabilities, ["read", "file_write", "shell"]);
+  assert.equal(Object.hasOwn(readonly, "capabilities"), false);
   assert.ok(readonly.hostname.length > 0 && readonly.hostname.length <= 64);
   assert.ok(readonly.os_version.length > 0 && readonly.os_version.length <= 96);
   assert.ok(["native", "wsl2", "container"].includes(readonly.environment));
