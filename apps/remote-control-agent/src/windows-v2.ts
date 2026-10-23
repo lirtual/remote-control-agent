@@ -211,13 +211,13 @@ export async function reconcileWindowsOnboard(options: {
   }
   if (approvedId === options.currentId) return "unchanged";
   const before = options.status();
-  if (!before.installed) throw Error("恢复授权需要已安装的 Windows 计划任务。");
+  if (!before.installed) throw Error("Task not installed.");
   if (before.running) options.stop();
   const stopped = options.status();
-  if (!stopped.installed || stopped.running) throw Error("无法安全停止旧任务，设备身份未更改。");
+  if (!stopped.installed || stopped.running) throw Error("Could not stop task. Identity unchanged.");
   await options.rePair();
   const after = options.status();
-  if (!after.installed || after.running) throw Error("任务状态在授权恢复期间发生变化，未自动启动。");
+  if (!after.installed || after.running) throw Error("Task changed. Not started.");
   options.start();
   return "restored";
 }
@@ -320,15 +320,15 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         }
       },
       onPending: (code, fingerprint) => {
-        process.stdout.write("配对码：" + code + "\n");
-        process.stdout.write("公钥指纹：" + fingerprint + "\n");
-        process.stdout.write("请在 ChatGPT 中核对公钥指纹，并通过 Remote Control MCP 批准一次。\n");
+        process.stdout.write("Pairing code: " + code + "\n");
+        process.stdout.write("Fingerprint: " + fingerprint + "\n");
+        process.stdout.write("Approve in MCP.\n");
       },
     });
     assertPrivateStore("Check", directory);
     process.stdout.write(result === "restored"
-      ? "已使用原有私钥恢复授权；可启动计划任务连接。\n"
-      : "原设备授权有效，无需重新配对。\n");
+      ? "Authorization restored.\n"
+      : "Authorization valid.\n");
     return;
   }
   if (options.action === "onboard") {
@@ -341,7 +341,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     // with explicit owner MCP approval; never rotate or delete the old key.
     if (idExists) {
       const localId = (await readFile(keyPath + ".device-id", "utf8")).trim();
-      if (!ID.test(localId)) throw Error("本地设备 ID 无效，已停止操作。");
+      if (!ID.test(localId)) throw Error("Invalid device ID.");
       const outcome = await reconcileWindowsOnboard({
         currentId: localId,
         verify: () => verifyApprovedDeviceId(options.endpoint!, keyPath),
@@ -351,7 +351,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         start: () => { runUserTask("Start"); },
       });
       if (outcome === "restored") {
-        process.stdout.write("授权恢复完成，已请求启动 Windows Agent。远程在线状态请通过 MCP 验证。\n");
+        process.stdout.write("Recovery complete. Start requested.\n");
         return;
       }
     }
@@ -370,7 +370,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       if (idExists) {
         const approved = (await readFile(keyPath + ".device-id", "utf8")).trim();
         if (!ID.test(approved)) throw Error("Invalid local device ID.");
-        process.stdout.write("已有设备：" + approved + "；未进行更改，请通过 MCP 检查在线状态。\n");
+        process.stdout.write("Device: " + approved + " (unchanged).\n");
         return;
       }
       mode = await promptInstallMode();
@@ -397,7 +397,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         else if (!status.installed) process.stdout.write(
           "Existing device has no user-logon task; public installer will not re-enable it.\n");
       }
-      process.stdout.write("设备已授权：" + approved + "；远程在线状态尚未确认。\n");
+      process.stdout.write("Authorized: " + approved + " (online unverified).\n");
       if (mode === "temporary") {
         process.stdout.write("Temporary mode: reconnecting in foreground; no startup task or new grant.\n");
         await startApprovedTemporaryAgent(options.endpoint!);
@@ -438,7 +438,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       throw Error("Owner MCP approval not confirmed before deadline; identity retained for explicit retry.");
     }
     assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
-    process.stdout.write("设备已获所有者批准：" + approvedId + "；远程在线状态尚未确认。\n");
+    process.stdout.write("Authorized: " + approvedId + " (online unverified).\n");
     if (mode === "permanent") {
       // This record is written before first Enable, retained across failures,
       // and deleted only after successful Start. Its owner-only ACL and ID bind
@@ -448,7 +448,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       await resumePendingWindowsActivation(true, {installed:false,running:false},
         action => { runUserTask(action, options.endpoint); },
         () => unlink(activationMarker));
-      process.stdout.write("已启动用户登录任务，请通过 MCP 验证远程在线状态。\n");
+      process.stdout.write("Task started. Verify via MCP.\n");
     } else {
       process.stdout.write("Temporary mode: foreground until terminal closes; server grant expires after 24 hours.\n");
       await startApprovedTemporaryAgent(options.endpoint!);
@@ -489,10 +489,10 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     }
     const fingerprint = createHash("sha256")
       .update(Buffer.from(material.request.public_key, "base64")).digest("hex").slice(0, 24);
-    process.stdout.write("配对码：" + material.code + "\n" +
-      "公钥指纹：" + fingerprint + "\n" +
-      "请在 ChatGPT 中核对公钥指纹，并通过 Remote Control MCP 完成一次审批。\n" +
-      "授权完成后，安装器将继续启动并检查本机状态。\n");
+    process.stdout.write("Pairing code: " + material.code + "\n" +
+      "Fingerprint: " + fingerprint + "\n" +
+      "Approve in MCP.\n" +
+      "Await approval.\n");
     return;
   }
   if (!exists) throw Error("Device is not paired. Run pair explicitly.");
