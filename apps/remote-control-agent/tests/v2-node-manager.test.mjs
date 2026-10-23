@@ -30,8 +30,8 @@ function fixture(){
   const ids=directory(rel);
   writeFileSync(path.join(ids,"v2-identity.pem.device-id"),UUID,{mode:0o600});
   const units=directory(".config/systemd/user");
-  const unit=path.join(units,"remote-control-v2-agent.service");
-  writeFileSync(unit,"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n[Service]\nEnvironment=REMOTE_CONTROL_V2_ENDPOINT=https://remote-control-v2-preview.aiyaya.workers.dev/\nWorkingDirectory="+path.join(root,"apps/remote-control-agent")+"\nExecStart="+path.join(root,"bin/node")+" "+path.join(root,"apps/remote-control-agent/src/v2-main.js")+"\n",{mode:0o600});
+  const unit=path.join(units,"remote-control-agent.service");
+  writeFileSync(unit,"# Managed by Remote Control Agent installer.\n[Service]\nEnvironment=REMOTE_CONTROL_AGENT_ENDPOINT=https://remote-control-v2-preview.aiyaya.workers.dev/\nWorkingDirectory="+path.join(root,"apps/remote-control-agent")+"\nExecStart="+path.join(root,"bin/node")+" "+path.join(root,"apps/remote-control-agent/src/v2-main.js")+"\n",{mode:0o600});
   mkdirSync(path.join(root,"bin"),{recursive:true,mode:0o700});
   writeFileSync(path.join(root,"bin/node"),"SYNTHETIC-DUMMY-NODE",{mode:0o700});
   writeFileSync(path.join(scripts,"install-v2.mjs"),"SYNTHETIC-DUMMY-INSTALLER",{mode:0o600});
@@ -238,7 +238,7 @@ test("failed manual upgrade activation reports safe actionable guidance",async()
   const f=fixture();
   try{
     const state=localManagerInventory({home:f.home,source:f.manager});
-    const message="Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-v2-agent.service` before retrying; do not re-pair or replay operations.";
+    const message="Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-agent.service` before retrying; do not re-pair or replay operations.";
     await assert.rejects(runInteractiveLocalManager(["upgrade","v0.1.3","a".repeat(40)],{
       home:f.home,inventory:()=>state,
       stdin:{isTTY:true},stdout:{isTTY:true,write(){}},
