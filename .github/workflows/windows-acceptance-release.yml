@@ -4,15 +4,15 @@ name: Publish approved Windows Agent
 on:
   push:
     branches: [main]
-    paths: [.github/windows-release-approval/v0.1.13-windows.1.json]
+    paths: [.github/windows-release-approval/v0.1.14-windows.1.json]
 permissions:
   contents: read
 concurrency:
-  group: remote-agent-windows-release-v0.1.13
+  group: remote-agent-windows-release-v0.1.14
   cancel-in-progress: false
 env:
-  RELEASE_TAG: v0.1.13-windows.1
-  ASSET: remote-control-agent-v0.1.13-windows.1-windows-x64.zip
+  RELEASE_TAG: v0.1.14-windows.1
+  ASSET: remote-control-agent-v0.1.14-windows.1-windows-x64.zip
   NODE_SHA256: ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32
 jobs:
   windows-verified-bundle:
@@ -32,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $markerFile = '.github/windows-release-approval/v0.1.13-windows.1.json'
+          $markerFile = '.github/windows-release-approval/v0.1.14-windows.1.json'
           $source = (git rev-parse HEAD^).Trim()
           $changed = @(git diff --name-only HEAD^ HEAD)
           if ($changed.Count -ne 1 -or $changed[0] -cne $markerFile) {
@@ -131,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          marker=".github/windows-release-approval/v0.1.13-windows.1.json"
+          marker=".github/windows-release-approval/v0.1.14-windows.1.json"
           source="$(git rev-parse HEAD^)"
           test "$(git diff --name-only HEAD^ HEAD)" = "$marker"
           jq -e --arg tag "$RELEASE_TAG" --arg sha "$source" '.approved == true and .tag == $tag and .source_sha == $sha' "$marker" >/dev/null
@@ -151,6 +151,7 @@ jobs:
           set -euo pipefail
           cat > notes.txt <<'NOTES'
           Windows x64 Agent with pinned Playwright browser control and full-tools support.
+          Removes non-authoritative device capability metadata, preserving runtime access checks.
           Bundled official Node v24.21.0; normal Windows user only.
           Existing signed-WSS identity, local receipts, Task Scheduler registration and rollback are preserved during explicit version upgrades.
           Publishing does not automatically install, pair, activate or change a device.
