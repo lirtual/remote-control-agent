@@ -396,6 +396,68 @@ jobs:
           & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File uninstall-windows.ps1 -Version v0.0.0-ci
           if ($LASTEXITCODE -ne 0) { throw 'Uninstall retry must be idempotent' }
           Remove-Item -LiteralPath $sentinel -Force
+      - name: Public Windows install.ps1 offline first-install and repeat fail closed without TTY
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Offline installer acceptance requires GitHub CI' }
+          $originalProfile = $env:LOCALAPPDATA
+          $profile = Join-Path $env:RUNNER_TEMP 'spec24-public-onboarding-profile'
+          $archive = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
+          if (Test-Path -LiteralPath $profile) { throw 'CI public installer fixture profile already exists' }
+          if (-not (Test-Path -LiteralPath $archive)) { throw 'Isolated reviewed Windows candidate is missing' }
+          $null = New-Item -ItemType Directory -Path $profile
+          $stdinFile = Join-Path $env:RUNNER_TEMP 'spec24-empty-input.txt'
+          [IO.File]::WriteAllText($stdinFile, '')
+          $sha = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          $root = Join-Path $profile 'mcp-workers\remote-control'
+          $target = Join-Path $root 'programs\v0.0.1-ci-windows-x64'
+          $args = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File','install.ps1','-Version','v0.0.1-ci',
+            '-PinnedCommit',('0' * 40),'-PinnedReleaseSha256',('0' * 64),
+            '-OfflineArchive',$archive,'-ExpectedSha256',$sha)
+          $env:LOCALAPPDATA = $profile
+          try {
+            foreach ($attempt in @(1,2)) {
+              $stderrFile = Join-Path $env:RUNNER_TEMP "spec24-onboard-$attempt.err"
+              $stdoutFile = Join-Path $env:RUNNER_TEMP "spec24-onboard-$attempt.out"
+              $process = Start-Process -FilePath powershell.exe -ArgumentList $args `
+                -RedirectStandardInput $stdinFile -RedirectStandardOutput $stdoutFile `
+                -RedirectStandardError $stderrFile -NoNewWindow -PassThru -Wait
+              if ($process.ExitCode -eq 0) { throw 'Installer enrolled without a real interactive terminal' }
+              $diagnostic = (Get-Content -LiteralPath $stderrFile -Raw) + (Get-Content -LiteralPath $stdoutFile -Raw)
+              if ($diagnostic -notmatch 'Interactive onboarding incomplete') {
+                throw "Unexpected public installer first/repeat failure (attempt $attempt)"
+              }
+              if (-not (Test-Path -LiteralPath $target)) {
+                throw 'Verified Windows candidate was not staged before onboarding refusal'
+              }
+              if (Test-Path -LiteralPath (Join-Path $root 'v2-identity.pem')) {
+                throw 'Non-interactive public install created a private key'
+              }
+              if (Test-Path -LiteralPath (Join-Path $root 'v2-identity.pem.device-id')) {
+                throw 'Non-interactive public install created a device identity'
+              }
+              if (Test-Path -LiteralPath (Join-Path $root 'v2-identity.pem.install-mode')) {
+                throw 'Non-interactive public install persisted a grant choice'
+              }
+              if ($attempt -eq 1) {
+                $before = (Get-FileHash -LiteralPath (Join-Path $target 'bundle.json') -Algorithm SHA256).Hash
+                $programBefore = (Get-FileHash -LiteralPath (Join-Path $target 'rca.cmd') -Algorithm SHA256).Hash
+              } else {
+                if ((Get-FileHash -LiteralPath (Join-Path $target 'bundle.json') -Algorithm SHA256).Hash -ne $before -or
+                    (Get-FileHash -LiteralPath (Join-Path $target 'rca.cmd') -Algorithm SHA256).Hash -ne $programBefore) {
+                  throw 'Non-interactive repeat changed verified package files'
+                }
+              }
+            }
+            & (Join-Path $target 'bin\node.exe') (Join-Path $target 'apps\remote-control-agent\scripts\verify-windows-preview.mjs') $target
+            if ($LASTEXITCODE -ne 0) { throw 'Public installer staged package fails its native inventory verifier' }
+            Write-Output 'PUBLIC_WINDOWS_FIRST_AND_REPEAT_NON_TTY=PASS; owner approval untouched'
+          } finally {
+            $env:LOCALAPPDATA = $originalProfile
+            if (Test-Path -LiteralPath $profile) { Remove-Item -LiteralPath $profile -Recurse -Force }
+          }
       - name: Export isolated Windows Playwright candidate for owner-device acceptance
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
