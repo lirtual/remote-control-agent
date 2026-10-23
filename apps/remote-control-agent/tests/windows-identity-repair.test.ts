@@ -183,3 +183,18 @@ test("429 or 503 response to pending registration never changes device ID", asyn
     });
   }
 });
+
+test("task started while owner approval was pending refuses identity replacement", async () => {
+  await fixture(async file => {
+    let sealed = 0, checked = 0;
+    await assert.rejects(replaceSignedDeviceId(file, OLD, NEW,
+      () => { sealed++; }, () => {
+        checked++;
+        throw Error("task resumed during owner approval");
+      }), /task resumed/);
+    assert.equal(sealed, 1);
+    assert.equal(checked, 1);
+    assert.equal((await readFile(file + ".device-id", "utf8")).trim(), OLD);
+    assert.equal(existsSync(file + ".device-id.pending"), false);
+  });
+});
