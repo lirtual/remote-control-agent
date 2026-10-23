@@ -6,19 +6,19 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/linux-release-approval/v0.1.12.txt
+      - .github/linux-release-approval/v0.1.13.txt
 
 permissions:
   contents: read
 
 concurrency:
-  group: remote-agent-linux-v0.1.12
+  group: remote-agent-linux-v0.1.13
   cancel-in-progress: false
 
 env:
-  RELEASE_TAG: v0.1.12
-  SOURCE_SHA: 799c5b7e487df9f4d7c260147b61cc99d15084d6
-  APPROVAL_FILE: .github/linux-release-approval/v0.1.12.txt
+  RELEASE_TAG: v0.1.13
+  SOURCE_SHA: 1171542d2951042cc1e0992c8cb9b97d3284fe03
+  APPROVAL_FILE: .github/linux-release-approval/v0.1.13.txt
 
 jobs:
   native-candidate:
@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.12 from $SOURCE_SHA"
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.13 from $SOURCE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
           git checkout --detach "$SOURCE_SHA"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
@@ -114,7 +114,7 @@ jobs:
           echo "Native candidate $TARGET verified for pinned $SOURCE_SHA"
       - uses: actions/upload-artifact@v4
         with:
-          name: candidate-v0.1.12-${{ matrix.target }}
+          name: candidate-v0.1.13-${{ matrix.target }}
           path: candidate/${{ matrix.target }}/
           retention-days: 3
           compression-level: 0
@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
-          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.12 from $SOURCE_SHA"
+          test "$(cat "$APPROVAL_FILE")" = "Authorize immutable Linux v0.1.13 from $SOURCE_SHA"
           git merge-base --is-ancestor "$SOURCE_SHA" "$GITHUB_SHA"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
              test -n "$(git ls-remote --tags origin "refs/tags/$RELEASE_TAG")"; then
@@ -150,7 +150,7 @@ jobs:
           fi
       - uses: actions/download-artifact@v4
         with:
-          pattern: candidate-v0.1.12-*
+          pattern: candidate-v0.1.13-*
           path: dist
           merge-multiple: false
       - name: Check exact dual-arch archives and their hashes
@@ -159,7 +159,7 @@ jobs:
           set -euo pipefail
           mkdir publish
           for target in linux-x64-glibc linux-arm64-glibc; do
-            dir="dist/candidate-v0.1.12-$target"
+            dir="dist/candidate-v0.1.13-$target"
             name="remote-control-agent-$RELEASE_TAG-$target.tar.gz"
             test "$(find "$dir" -maxdepth 1 -type f | wc -l)" -eq 2
             ( cd "$dir" && sha256sum --check SHA256SUMS.txt )
@@ -178,10 +178,10 @@ jobs:
         run: |
           set -euo pipefail
           cat > notes.txt <<'NOTES'
-          Linux x64/ARM64 immutable v0.1.12 from reviewed Agent source.
-          Adds zero-argument Worker-pinned rca upgrade, fail-closed full-tools
-          quiescence checking, and a one-time explicit offline cutover from
-          already-installed v0.1.11. Preserve existing identity and SQLite.
+          Linux x64/ARM64 immutable v0.1.13 from reviewed Agent source.
+          Removes non-authoritative device capability metadata. The existing
+          signed WSS execution gates, Worker-pinned upgrade, and private
+          device identity/SQLite receipts are preserved.
           The old v0.1.11 Agent has no quiescence socket: the owner must
           finish outstanding work and stop it from the local terminal before
           using the approved Worker /install.sh --upgrade.
@@ -192,7 +192,7 @@ jobs:
             publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz \
             publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz \
             publish/SHA256SUMS \
-            --target "$SOURCE_SHA" --title "Remote Control Agent v0.1.12 — v2 Safe Upgrade" \
+            --target "$SOURCE_SHA" --title "Remote Control Agent v0.1.13 — v2 Safe Upgrade" \
             --notes-file notes.txt --prerelease --draft
           mkdir -p recheck
           gh release download "$RELEASE_TAG" --dir recheck --clobber
