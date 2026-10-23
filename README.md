@@ -63,16 +63,25 @@ The immutable v0.1.11 binary is unchanged by this source PR.
 
 ## Native Windows x64 installation and upgrade
 
-After the immutable `v0.1.13-windows.1` GitHub Release is published, run in
-Windows PowerShell **as the already-paired normal user**:
+After the immutable `v0.1.14-windows.1` GitHub Release is published, run in
+Windows PowerShell **as the already-paired normal user** and only after
+in-flight operations finish:
 
 ```powershell
-irm https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.13-windows.1/install-windows.ps1 | iex
-$rca = "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.13-windows.1-windows-x64\rca.cmd"
+$installer = Join-Path $env:TEMP 'install-remote-control-agent-v0.1.14.ps1'
+Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/lirtual/remote-control-agent/v0.1.14-windows.1/install-windows.ps1' -OutFile $installer
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer -Version 'v0.1.14-windows.1'
+if ($LASTEXITCODE -ne 0) { throw 'Agent installation failed' }
+$rca = "$env:LOCALAPPDATA\mcp-workers\remote-control\programs\v0.1.14-windows.1-windows-x64\rca.cmd"
 & $rca status
-& $rca upgrade --version v0.1.13-windows.1
+& $rca upgrade --version v0.1.14-windows.1
+if ($LASTEXITCODE -ne 0) { throw 'Agent upgrade failed' }
 & $rca task-status
 ```
+
+Specify the `-Version` argument explicitly: the installer bundled in this
+immutable Release still defaults to the previous Windows version. Do not
+execute it through a pipeline without passing the intended version.
 
 The installer checks GitHub Release immutability, the asset SHA-256 and the
 extracted signed inventory; it installs side-by-side without changing the
