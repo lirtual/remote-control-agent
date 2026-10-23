@@ -167,7 +167,7 @@ jobs:
             'https://github.com/other/project/releases/download/evil.zip')) {
             $rejected = $false
             try { Download-ApprovedAsset $bad (Join-Path $env:RUNNER_TEMP 'blocked-download.zip') }
-            catch { $rejected = $true }
+            catch { $rejected = $_.Exception.Message -like '*Unexpected GitHub Release asset redirect*' }
             if (-not $rejected -or (Test-Path (Join-Path $env:RUNNER_TEMP 'blocked-download.zip'))) {
               throw ('Untrusted Windows download origin was not blocked: ' + $bad)
             }
