@@ -92,11 +92,11 @@ test("installer accepts only a clean trusted HTTPS origin without credentials", 
 });
 
 test("separate v2 systemd unit never references v1 credentials, tunnel or write/Shell authorization", () => {
-  assert.equal(UNIT, "remote-control-v2-agent.service");
+  assert.equal(UNIT, "remote-control-agent.service");
   const unit = renderV2Service(example);
   assert.ok(unit.startsWith(MARKER));
   assert.match(unit, /ExecStart=\/opt\/node24\/bin\/node --experimental-strip-types \/home\/agent\/mcp-workers\/apps\/remote-control-agent\/src\/v2-main\.ts/);
-  assert.match(unit, /Environment=REMOTE_CONTROL_V2_ENDPOINT=https:\/\/rc\.example\.org\//);
+  assert.match(unit, /Environment=REMOTE_CONTROL_AGENT_ENDPOINT=https:\/\/rc\.example\.org\//);
   assert.match(unit, /ExecStartPre=\/usr\/bin\/test -r .*v2-identity\.pem\.device-id/);
   assert.match(unit, /ExecStartPre=\/usr\/bin\/test -x .*session-supervisor/);
   assert.match(unit, /Restart=on-failure/);
@@ -174,7 +174,7 @@ test("ordinary repeat install rejects changed Worker origin before identity rota
     "https://rc.example.org:8443/",
   ]) assert.throws(() => assertExistingServiceEndpoint(owned, unexpected),
     /endpoint differs/);
-  const missingBinding = owned.replace("Environment=REMOTE_CONTROL_V2_ENDPOINT=https://rc.example.org/", "");
+  const missingBinding = owned.replace("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=https://rc.example.org/", "");
   assert.throws(() => assertExistingServiceEndpoint(missingBinding, example.endpoint), /endpoint differs/);
   assert.throws(() => assertExistingServiceEndpoint(owned,
     "https://user:password@rc.example.org/"), /trusted HTTPS origin/);
