@@ -117,9 +117,12 @@ Windows Agent is found, the installer shows the old and new versions and asks
 for a single explicit Yes/No choice (No is the safe default). After Yes, it
 verifies the pinned immutable Release source and Windows archive checksums,
 installs alongside older versions, and performs the transactional task switch.
-The original private key, device ID, cloud grant and stopped/running task
-state are preserved. Upgrading a missing or revoked cloud grant **does not**
-silently re-authorize it; follow the explicit recovery steps below.
+For a healthy cloud grant, the original private key, device ID and task
+running state are preserved. The installer also checks the signed cloud grant
+before it exits. If the old grant has disappeared, it continues through the
+existing same-key re-pair protocol and waits for **one explicit authenticated
+MCP owner approval**, then requests the user's Windows task to start. This
+does not implicitly approve a grant or rotate the private key.
 
 `rca task-status` reports local task state, not authenticated online status.
 Verify signed WebSocket connectivity separately through authenticated MCP.
@@ -130,28 +133,25 @@ only on an approved trusted personal Windows device.
 
 ### Recover a Windows grant that is missing from the production Worker
 
-If a previously paired Windows task exits with `rejected` and the signed
-production challenge no longer recognizes its ID, **do not delete the private
-key or device-ID file**. After installing a reviewed Agent Release containing
-this feature, first stop the existing task, then use the explicit native
-`rca re-pair --endpoint https://rca.lirtual.dpdns.org/` action. This recovery
-reuses the same Ed25519 private key and never approves its own grant.
+Use the **same one-line installer** above, including for a safe retry after
+an interrupted owner approval. It verifies a fresh signed public-key grant.
+A matching approved ID is kept unchanged; a different approved ID is
+restored without a second owner approval. Only a confirmed missing grant
+(HTTP 404) initiates pending re-pair with the original Ed25519 private key.
 
-When a grant already exists for that public key, the command recovers the
-server-signed current device ID without asking for another pairing. Otherwise
-it prints a single pending pairing code and fingerprint. The owner must
-confirm that fingerprint using authenticated MCP `pairing_lookup` and
-`pairing_approve` with the selected permanent grant. The local device ID
-is replaced only after a fresh, signed server recovery and private-file ACL
-verification. The original key is never replaced, and the Windows task is not
-silently restarted. Run `rca start` after recovery and verify live signed WSS
-connectivity with the MCP device list and a harmless file read.
+The terminal prints one pairing code and fingerprint for owner confirmation
+through authenticated MCP `pairing_lookup` and `pairing_approve`. After
+approval the Agent verifies the signed response, stages and seals the local
+device ID with its protected Windows ACL, and requests task startup. No
+manual `re-pair`, `start` or `task-status` sequence is needed for normal
+recovery. If the task is explicitly stopped and its grant is still healthy,
+the repeat installer leaves it stopped and does not silently restart it.
 
-A 401/403 error, a transient network failure, an unapproved pending request
-or any local ACL error must not authorize a device. An interrupted recovery
-may leave a protected pending-ID staging file; inspect that state rather than
-silently deleting identity data. This workflow requires a published, verified
-Release and must not be used from a Draft branch.
+On 401/403, transient network failure, approval timeout or ACL conflict,
+recovery fails closed and does not silently approve, rotate or delete an
+identity. Actual online status and a harmless remote read must still be
+confirmed with an authenticated MCP call. The explicit management commands
+remain available for exceptional operator diagnostics.
 
 ## Platform and trust requirements
 

@@ -23,8 +23,8 @@ test('mode selection begins on permanent but requires Enter, with arrow wrap and
   const c=await choose(['\x1b[B','\r']); assert.equal(c.value,'temporary');
   const d=await choose(['2']); assert.equal(d.value,'temporary');
   const e=await choose(['1']); assert.equal(e.value,'permanent');
-  assert.match(a.text,/❯ 1\. 永久/);
-  assert.doesNotMatch(a.text,/推荐/);
+  assert.match(a.text,/> 1\. Permanent/);
+  assert.doesNotMatch(a.text,/Recommended/);
   assert.deepEqual(b.modes,[true,false]);
   assert.equal(a.pauses,1,'completed prompt must pause TTY to release the Node event loop');
   assert.equal(d.pauses,1);

@@ -48,7 +48,7 @@ def verify_refuses_unsafe_onboarding(node, installer, root):
                 if not chunk:
                     break
                 transcript += chunk
-            if "1. 永久".encode() in transcript and "2. 临时".encode() in transcript and not challenged:
+            if "1. Permanent".encode() in transcript and "2. Temporary".encode() in transcript and not challenged:
                 os.write(master, b"\x1b")
                 challenged = True
             if proc.poll() is not None:
@@ -109,7 +109,7 @@ def verify_node_bootstrap_offline(node, bootstrap, archive, tag, work):
                 if not chunk:
                     break
                 transcript += chunk
-            if "1. 永久".encode() in transcript and "2. 临时".encode() in transcript and not rejected:
+            if "1. Permanent".encode() in transcript and "2. Temporary".encode() in transcript and not rejected:
                 os.write(master,b"\x1b")
                 rejected = True
             if proc.poll() is not None:

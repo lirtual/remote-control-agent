@@ -193,6 +193,35 @@ export async function startApprovedTemporaryAgent(
   await runner(["run", "--endpoint", endpoint]);
 }
 
+/** Reconcile only a signed public-key grant mismatch or confirmed missing grant.
+ * The user still must approve a new pending key using authenticated MCP.
+ * No healthy task is stopped and no transient error triggers re-enrollment. */
+export async function reconcileWindowsOnboard(options: {
+  currentId: string;
+  verify: () => Promise<string>;
+  status: () => { installed: boolean; running: boolean };
+  stop: () => void;
+  rePair: () => Promise<void>;
+  start: () => void;
+}): Promise<"unchanged" | "restored"> {
+  let approvedId: string | undefined;
+  try { approvedId = await options.verify(); }
+  catch (error) {
+    if (!(error instanceof DeviceSessionRejectedError) || error.status !== 404) throw error;
+  }
+  if (approvedId === options.currentId) return "unchanged";
+  const before = options.status();
+  if (!before.installed) throw Error("Task not installed.");
+  if (before.running) options.stop();
+  const stopped = options.status();
+  if (!stopped.installed || stopped.running) throw Error("Could not stop task. Identity unchanged.");
+  await options.rePair();
+  const after = options.status();
+  if (!after.installed || after.running) throw Error("Task changed. Not started.");
+  options.start();
+  return "restored";
+}
+
 export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (process.platform !== "win32" || process.arch !== "x64" ||
       !/^v24\./.test(process.version)) {
@@ -293,26 +322,40 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       onPending: (code, fingerprint) => {
         process.stdout.write("Pairing code: " + code + "\n");
         process.stdout.write("Fingerprint: " + fingerprint + "\n");
-        process.stdout.write("Approve once via authenticated MCP pairing_lookup / pairing_approve.\n");
+        process.stdout.write("Approve in MCP.\n");
       },
     });
     assertPrivateStore("Check", directory);
     process.stdout.write(result === "restored"
-      ? "Signed grant restored with original key; start the task to connect.\n"
-      : "Existing signed grant is valid; no identity change.\n");
+      ? "Authorization restored.\n"
+      : "Authorization valid.\n");
     return;
   }
   if (options.action === "onboard") {
     // Keep the installer separate from the authenticated MCP owner approval.
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw Error("Onboarding requires the local interactive Windows terminal.");
+    // Existing identity recovery needs no local input; new enrollment does.
+    // Owner approval remains mandatory on the authenticated MCP channel.
+    if (!idExists && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      throw Error("Interactive terminal required.");
     }
-    // An ID on disk is only a local claim: verify the key and active grant
-    // with a fresh signed server challenge before announcing authorization or
-    // resuming any interrupted task. This never rotates or writes identity.
+    // A healthy signed grant is a no-op. A confirmed missing or mismatched
+    // public-key grant is repaired inside this same one-line install session,
+    // with explicit owner MCP approval; never rotate or delete the old key.
     if (idExists) {
       const localId = (await readFile(keyPath + ".device-id", "utf8")).trim();
-      await assertSignedWindowsGrant(options.endpoint!, keyPath, localId);
+      if (!ID.test(localId)) throw Error("Invalid device ID.");
+      const outcome = await reconcileWindowsOnboard({
+        currentId: localId,
+        verify: () => verifyApprovedDeviceId(options.endpoint!, keyPath),
+        status: () => JSON.parse(runUserTask("Status")) as { installed: boolean; running: boolean },
+        stop: () => { runUserTask("Stop"); },
+        rePair: () => runWindowsAgent(["re-pair", "--endpoint", options.endpoint!]),
+        start: () => { runUserTask("Start"); },
+      });
+      if (outcome === "restored") {
+        process.stdout.write("Recovery complete. Start requested.\n");
+        return;
+      }
     }
     const modePath = keyPath + ".install-mode";
     const hasMode = await hasFile(modePath);
@@ -329,7 +372,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       if (idExists) {
         const approved = (await readFile(keyPath + ".device-id", "utf8")).trim();
         if (!ID.test(approved)) throw Error("Invalid local device ID.");
-        process.stdout.write("Existing device " + approved + "; no changes. Verify online via authenticated MCP.\n");
+        process.stdout.write("Device: " + approved + " (unchanged).\n");
         return;
       }
       mode = await promptInstallMode();
@@ -356,7 +399,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
         else if (!status.installed) process.stdout.write(
           "Existing device has no user-logon task; public installer will not re-enable it.\n");
       }
-      process.stdout.write("Already authorized: " + approved + "; remote online is unconfirmed.\n");
+      process.stdout.write("Authorized: " + approved + " (online unverified).\n");
       if (mode === "temporary") {
         process.stdout.write("Temporary mode: reconnecting in foreground; no startup task or new grant.\n");
         await startApprovedTemporaryAgent(options.endpoint!);
@@ -397,7 +440,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       throw Error("Owner MCP approval not confirmed before deadline; identity retained for explicit retry.");
     }
     assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
-    process.stdout.write("Owner approved device " + approvedId + "; remote online remains unconfirmed.\n");
+    process.stdout.write("Authorized: " + approvedId + " (online unverified).\n");
     if (mode === "permanent") {
       // This record is written before first Enable, retained across failures,
       // and deleted only after successful Start. Its owner-only ACL and ID bind
@@ -407,7 +450,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       await resumePendingWindowsActivation(true, {installed:false,running:false},
         action => { runUserTask(action, options.endpoint); },
         () => unlink(activationMarker));
-      process.stdout.write("User-logon task started; verify online status through authenticated MCP.\n");
+      process.stdout.write("Task started. Verify via MCP.\n");
     } else {
       process.stdout.write("Temporary mode: foreground until terminal closes; server grant expires after 24 hours.\n");
       await startApprovedTemporaryAgent(options.endpoint!);
@@ -450,8 +493,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
       .update(Buffer.from(material.request.public_key, "base64")).digest("hex").slice(0, 24);
     process.stdout.write("Pairing code: " + material.code + "\n" +
       "Fingerprint: " + fingerprint + "\n" +
-      "Approve this pending key using authenticated MCP pairing_lookup / pairing_approve.\n" +
-      "Then start: node --experimental-strip-types src/windows-v2.ts run --endpoint " + options.endpoint + "\n");
+      "Approve in MCP.\n");
     return;
   }
   if (!exists) throw Error("Device is not paired. Run pair explicitly.");
