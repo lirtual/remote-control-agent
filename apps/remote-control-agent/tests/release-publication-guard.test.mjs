@@ -8,7 +8,7 @@ const workflows = fileURLToPath(new URL('../../../.github/workflows/', import.me
 const files = readdirSync(workflows).filter(name => /\.ya?ml$/.test(name));
 const publisherName = 'publish-agent-release.yml';
 
-/** Publication must remain a separate, one-time owner action. */
+/** Only one reviewed, pinned version is automatically published on main. */
 test('only the main-only unified workflow can publish Releases', () => {
   assert.ok(files.includes(publisherName), 'reviewed unified release workflow missing');
   const publishers = files.filter(name => /\bgh release create\b/.test(readFileSync(path.join(workflows, name), 'utf8')));
@@ -19,10 +19,15 @@ test('only the main-only unified workflow can publish Releases', () => {
   const workflow = readFileSync(path.join(workflows, publisherName), 'utf8');
   const triggers = workflow.match(/^on:\n([\s\S]*?)^permissions:/m)?.[1];
   assert.ok(triggers, 'release workflow event gate missing');
+  assert.match(triggers, /^  push:$/m);
+  assert.match(triggers, /^    branches: \[main\]$/m);
+  assert.match(triggers, /^      - '\.github\/release-pins\/\*\.json'$/m);
   assert.match(triggers, /^  workflow_dispatch:$/m);
-  assert.doesNotMatch(triggers, /^  (?:push|pull_request|schedule|workflow_run|workflow_call):/m);
+  assert.doesNotMatch(triggers, /^  (?:pull_request|schedule|workflow_run|workflow_call):/m);
   assert.match(workflow, /if: github\.ref == 'refs\/heads\/main'/);
-  assert.match(workflow, /"\$RELEASE_APPROVAL" != "PUBLISH-\$RELEASE_TAG"/);
+  assert.match(workflow, /A main push must change exactly one release pin/);
+  assert.match(workflow, /git diff --name-only "\$BASE_SHA" "\$GITHUB_SHA"/);
+  assert.match(workflow, /printf 'RELEASE_TAG=%s/);
   assert.match(workflow, /\.head_branch == "main" and/);
   assert.match(workflow, /\.head_sha == \$sha and/);
   assert.match(workflow, /\.status == "completed" and/);
@@ -35,19 +40,13 @@ test('only the main-only unified workflow can publish Releases', () => {
   assert.match(workflow, /gh release create/);
   assert.match(workflow, /gh release download/);
   assert.match(workflow, /sha256sum --check SHA256SUMS\.txt/);
-  // GitHub immutable Releases are a repository-level setting; checking only
-  // after a draft is made public is too late to prevent a mutable publication.
-  const enabledPolicy = 'repos/$GH_REPO/immutable-releases';
-  assert.equal(workflow.split(enabledPolicy).length - 1, 2,
-    'check repository immutability at initial approval and just before promotion');
-  const firstPolicy = workflow.indexOf(enabledPolicy);
-  const create = workflow.indexOf('gh release create');
-  const publish = workflow.indexOf('gh release edit');
-  const secondPolicy = workflow.lastIndexOf(enabledPolicy);
-  assert.ok(firstPolicy < create && create < secondPolicy && secondPolicy < publish,
-    'no Release may be created or promoted before checking immutable policy');
-  assert.equal((workflow.match(/\.enabled == true/g) ?? []).length, 2);
-  assert.match(workflow, /\.immutable == true/);
+  // Existing tags remain protected, artifacts must be checked before promotion.
+  assert.match(workflow, /gh release view "\$RELEASE_TAG"/);
+  assert.match(workflow, /\.tag_name == \$tag and \.draft == false/);
+  assert.match(workflow, /\.object\.sha == \$sha/);
+  assert.doesNotMatch(workflow, /RELEASE_POLICY_READ_TOKEN|immutable-releases|\.immutable == true/);
+  assert.doesNotMatch(workflow, /RELEASE_APPROVAL|PUBLISH-\$RELEASE_TAG/);
+
 });
 
 
