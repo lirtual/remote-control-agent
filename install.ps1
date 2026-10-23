@@ -1,4 +1,4 @@
-﻿# Native Windows x64 bootstrap. Refuses a Release unless published and immutable.
+# Native Windows x64 bootstrap. Refuses a Release unless published and immutable.
 # Verify GitHub Release immutability + official SHA256 BEFORE extracting/executing.
 [CmdletBinding()]
 param(
@@ -248,9 +248,9 @@ function Complete-ApprovedOnboarding([string]$launcher) {
   # owner approval; do not treat a task-start response as proof of WSS online.
   & $launcher onboard --endpoint 'https://rca.lirtual.dpdns.org/'
   if ($LASTEXITCODE -ne 0) {
-    throw '设备授权检查或恢复未完成；原私钥和设备身份已保留。'
+    throw 'Authorization incomplete. Identity kept.'
   }
-  Write-Output '本机安装和授权流程已完成；远程在线状态请在 ChatGPT 中通过 Remote Control MCP 验证。'
+  Write-Output 'Done. Verify online via MCP.'
 }
 $temp = $null
 $stage = $null
@@ -279,24 +279,24 @@ try {
       $oldNumber = [version](($oldVersion.Substring(1) -split '-')[0])
       $newNumber = [version](($Version.Substring(1) -split '-')[0])
       if ($newNumber -le $oldNumber) { throw 'Automatic downgrade or same-version replacement refused' }
-      Write-Output ("发现已配对的设备：{0} → {1}" -f $oldVersion, $Version)
-      Write-Output '将保留原私钥和设备记录。升级前请结束正在进行的远程操作。'
-      Write-Output ("当前计划任务状态：{0}；升级时将保留原有运行状态。" -f $task.State)
+      Write-Output ("Agent: {0} -> {1}" -f $oldVersion, $Version)
+      Write-Output 'Finish active operations before upgrading.'
+      Write-Output ("Task: {0} (state preserved)" -f $task.State)
       # Prompt through the PowerShell host UI rather than stdin: the public
       # one-liner is evaluated by iex while receiving script text from a pipe.
       # No host support or no affirmative choice must never approve an upgrade.
       $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
-        [System.Management.Automation.Host.ChoiceDescription]::new('&Y 是', '确认升级至已验证的版本'),
-        [System.Management.Automation.Host.ChoiceDescription]::new('&N 否', '保留当前版本')
+        [System.Management.Automation.Host.ChoiceDescription]::new('&Yes', 'Upgrade'),
+        [System.Management.Automation.Host.ChoiceDescription]::new('&No', 'Keep current')
       )
       try {
-        $selected = $Host.UI.PromptForChoice('Remote Control Agent 升级',
-          '是否升级到已验证的版本？按 Y 确认，默认取消。', $choices, 1)
+        $selected = $Host.UI.PromptForChoice('Agent update',
+          'Upgrade verified Agent?', $choices, 1)
       } catch {
         throw 'This terminal could not collect upgrade approval; existing device unchanged'
       }
       if ($selected -ne 0) {
-        Write-Output '已取消升级，现有设备未更改。'
+        Write-Output 'Cancelled. No changes.'
         return
       }
       $upgradeExisting = $true
@@ -312,15 +312,15 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Existing program manifest failed verification' }
     if ($upgradeExisting) {
       & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw '版本切换失败，已保留或尝试恢复原计划任务。' }
-      Write-Output '已完成版本切换，正在检查并按需恢复原有设备授权……'
+      if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+      Write-Output 'Upgraded. Checking authorization...'
       Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
       return
     }
     if ($alreadyPaired) {
       $storedId = (Get-Content -LiteralPath $idFile -Raw).Trim()
       if ($storedId -cnotmatch '^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$') { throw 'Untrusted stored device ID' }
-      Write-Output ('已有本地设备 ID：' + $storedId)
+      Write-Output ('Device ID: ' + $storedId)
       Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
       return
     }
@@ -351,11 +351,11 @@ try {
   if ($manifest.version -cne $Version) { throw 'Manifest version mismatch' }
   [IO.Directory]::Move($stage, $target)
   $promoted = $true
-  Write-Output "Windows Agent 已验证并安装：$target"
+  Write-Output "Installed: $Version"
   if ($upgradeExisting) {
     & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw '版本切换失败，已保留或尝试恢复原计划任务。' }
-    Write-Output '已完成版本切换，正在检查并按需恢复原有设备授权……'
+    if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+    Write-Output 'Upgraded. Checking authorization...'
     Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
     return
   }
