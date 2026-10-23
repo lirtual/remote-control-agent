@@ -10,6 +10,7 @@ import { access, chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } fr
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { renderV2Service } from "./install-v2.mjs";
 
 const APP="apps/remote-control-agent";
@@ -124,10 +125,27 @@ async function identityDigest(key,deviceId) {
   if(value!==deviceId)throw Error("Local identity is not the expected approved device");
   return sha(await readFile(key));
 }
+async function verifyReceipts(home){
+  const filename=path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite");
+  let meta;try{meta=await lstat(filename);}catch(e){if(e.code==="ENOENT")return;throw e;}
+  ownerFile(meta,0o600);
+  const db=new DatabaseSync(filename,{readOnly:true,timeout:0});
+  try{
+    if(db.prepare("PRAGMA quick_check").get()?.quick_check!=="ok" ||
+       ![0,1].includes(db.prepare("PRAGMA user_version").get()?.user_version))
+      throw Error("Receipt history is not safe for migration");
+  }finally{db.close();}
+}
 async function exactSnapshot(plan){
+  await verifyReceipts(plan.home);
   for(const [name,data,mode] of [
     [NEW,plan.legacyUnit,0o644],[OLD,plan.signedUnit,0o600],[TUNNEL,plan.tunnelUnit,0o644]
-  ])await exactLocalFile(path.join(plan.unitDir,name),data,mode);
+  ]){
+    const unit=path.join(plan.unitDir,name);
+    await exactLocalFile(unit,data,mode);
+    try{await lstat(unit+".d");throw Error("Unit has unreviewed systemd drop-ins");}
+    catch(e){if(e.code!=="ENOENT")throw e;}
+  }
   const root=await lstat(plan.candidateRoot);
   if(!root.isDirectory()||root.isSymbolicLink()||root.uid!==process.getuid()||
      (root.mode&0o077)!==0)throw Error("New immutable program directory is not owner-private");
@@ -159,6 +177,7 @@ export async function applyServiceCutover(plan,{systemctl=defaultSystemctl}={}){
   }
   const journal={phase:"prepared",device_id:plan.deviceId,
     old_hash:sha(plan.signedUnit),new_hash:sha(plan.canonical),
+    loopback_hash:sha(plan.legacyUnit),tunnel_hash:sha(plan.tunnelUnit),
     identity_sha256:idHash};
   await secureSave(path.join(plan.backupDir,"journal.json"),JSON.stringify(journal)+"\n");
   await syncDir(plan.backupDir);
@@ -203,6 +222,57 @@ export async function applyServiceCutover(plan,{systemctl=defaultSystemctl}={}){
   }
 }
 
+
+/** Local-terminal recovery after a crash or an operator-requested rollback.
+ * The new service must be stopped first. Unknown unit and identity changes
+ * refuse restoration rather than overwriting another user's service.
+ */
+export async function rollbackServiceCutover({home=os.homedir(),systemctl=defaultSystemctl}={}){
+  if(process.getuid()===0)throw Error("Root cannot roll back user Agents");
+  const unitDir=path.join(home,".config/systemd/user");
+  const backup=path.join(home,".local/share/mcp-workers/remote-control/cutover-backup");
+  const b=await lstat(backup);
+  if(!b.isDirectory()||b.isSymbolicLink()||b.uid!==process.getuid()||
+     (b.mode&0o777)!==0o700)throw Error("Untrusted private migration journal");
+  const readBackup=async file=>{
+    const p=path.join(backup,file);ownerFile(await lstat(p),0o600);
+    return readFile(p,"utf8");
+  };
+  const journal=JSON.parse(await readBackup("journal.json"));
+  if(journal.phase!=="prepared"||!UUID.test(journal.device_id))
+    throw Error("Invalid migration journal");
+  const [loopback,signed,tunnel]=await Promise.all(
+    [NEW,OLD,TUNNEL].map(readBackup));
+  if(sha(loopback)!==journal.loopback_hash||
+     sha(signed)!==journal.old_hash||
+     sha(tunnel)!==journal.tunnel_hash)
+    throw Error("Migration backup differs from recorded hashes");
+  const key=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
+  if(await identityDigest(key,journal.device_id)!==journal.identity_sha256)
+    throw Error("Migration identity changed; manual recovery required");
+  assertOffline(systemctl);
+  const current=path.join(unitDir,NEW);
+  const st=await lstat(current);
+  ownerFile(st,(await readFile(current,"utf8"))===loopback?0o644:0o600);
+  const currentText=await readFile(current,"utf8");
+  if(![journal.new_hash,journal.loopback_hash].includes(sha(currentText)))
+    throw Error("Canonical unit has unreviewed changes");
+  for(const [file,expected,mode] of [[OLD,signed,0o600],[TUNNEL,tunnel,0o644]])
+    await exactLocalFile(path.join(unitDir,file),expected,mode);
+  const stage=path.join(unitDir,".remote-control-agent.rollback.tmp");
+  await secureSave(stage,loopback);
+  await chmod(stage,0o644);
+  // The canonical unit is inactive; this disables autostart before restoring
+  // the exact old owner unit and restarting only the previous local services.
+  systemctl(["disable",NEW]);
+  await rename(stage,current);
+  await syncDir(unitDir);
+  systemctl(["daemon-reload"]);
+  systemctl(["enable","--now",OLD]);
+  systemctl(["enable","--now",TUNNEL]);
+  return {status:"legacy_restored",device_id:journal.device_id,backup_retained:true};
+}
+
 export async function inspectServiceCutover({home=os.homedir(),candidateRoot,systemctl=defaultSystemctl}={}){
   const unitDir=path.join(home,".config/systemd/user");
   const read=async name=>readFile(path.join(unitDir,name),"utf8");
@@ -217,10 +287,19 @@ export async function inspectServiceCutover({home=os.homedir(),candidateRoot,sys
 
 if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   (async()=>{
-    if(process.argv.length!==4||process.argv[2]!=="--apply")
-      throw Error("Usage: <bundled-node> migrate-linux-service.mjs --apply <owner-installed-new-version-dir>");
     if(!process.stdin.isTTY||!process.stdout.isTTY)
       throw Error("Migration requires the physical owner terminal");
+    if(process.argv.length===3&&process.argv[2]==="--rollback"){
+      const {createInterface}=await import("node:readline/promises");
+      const cli=createInterface({input:process.stdin,output:process.stdout,terminal:true});
+      let answer;try{answer=await cli.question("Type ROLLBACK-REMOTE-CONTROL (all services must be stopped): ");}
+      finally{cli.close();}
+      if(answer!=="ROLLBACK-REMOTE-CONTROL")throw Error("Rollback not confirmed");
+      process.stdout.write(JSON.stringify(await rollbackServiceCutover())+"\n");
+      return;
+    }
+    if(process.argv.length!==4||process.argv[2]!=="--apply")
+      throw Error("Usage: migrate-linux-service.mjs --apply <new-root> or --rollback");
     const candidateRoot=path.resolve(process.argv[3]);
     const plan=await inspectServiceCutover({candidateRoot});
     process.stdout.write("Offline service cutover: "+OLD+" -> "+NEW+"\n");
