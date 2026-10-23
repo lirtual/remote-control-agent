@@ -151,3 +151,35 @@ test("pre-existing pending file blocks concurrent identity repair without alteri
     assert.equal((await readFile(file + ".device-id.pending", "utf8")).trim(), NEW);
   });
 });
+
+test("pending approval timeout never overwrites existing device ID", async () => {
+  await fixture(async file => {
+    let pending = 0;
+    await assert.rejects(repairWindowsIdentity({
+      endpoint: ENDPOINT, keyPath: file, currentId: OLD, name: "WIN-TEST",
+      seal: () => { throw Error("no approved ID to seal"); },
+      onPending: () => { pending++; },
+      verify: async () => { throw new DeviceSessionRejectedError("not found", 404); },
+      send: async () => new Response(null, { status: 202 }),
+      timeoutMs: 0,
+    }), /approval not confirmed/);
+    assert.equal(pending, 1);
+    assert.equal((await readFile(file + ".device-id", "utf8")).trim(), OLD);
+    assert.equal(existsSync(file + ".device-id.pending"), false);
+  });
+});
+
+test("429 or 503 response to pending registration never changes device ID", async () => {
+  for (const status of [429, 503]) {
+    await fixture(async file => {
+      await assert.rejects(repairWindowsIdentity({
+        endpoint: ENDPOINT, keyPath: file, currentId: OLD, name: "WIN-TEST",
+        seal: () => { throw Error("must not seal"); },
+        onPending: () => { throw Error("must not announce approval"); },
+        verify: async () => { throw new DeviceSessionRejectedError("not found", 404); },
+        send: async () => new Response(null, { status }),
+      }), /not accepted/);
+      assert.equal((await readFile(file + ".device-id", "utf8")).trim(), OLD);
+    });
+  }
+});
