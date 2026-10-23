@@ -220,10 +220,10 @@ jobs:
           }
           $source = Get-Content -LiteralPath $path -Raw
           if (-not $source.Contains('$Host.UI.PromptForChoice') -or
-              -not $source.Contains('按 Y 确认，默认取消。') -or
+              -not $source.Contains('Upgrade verified Agent?') -or
               -not $source.Contains('$choices, 1') -or
               -not $source.Contains('if ($selected -ne 0)') -or
-              -not $source.Contains('已取消升级，现有设备未更改。') -or
+              -not $source.Contains('Cancelled. No changes.') -or
               $source.Contains("Read-Host 'Upgrade this device") -or
               -not $source.Contains("upgrade --version `$Version") -or
               $source.Contains('public installer never upgrades it')) {
@@ -502,7 +502,7 @@ jobs:
                 -RedirectStandardError $stderrFile -NoNewWindow -PassThru -Wait
               if ($process.ExitCode -eq 0) { throw 'Installer enrolled without a real interactive terminal' }
               $diagnostic = (Get-Content -LiteralPath $stderrFile -Raw) + (Get-Content -LiteralPath $stdoutFile -Raw)
-              if ($diagnostic -notmatch '设备授权检查或恢复未完成') {
+              if ($diagnostic -notmatch 'Authorization incomplete. Identity kept.') {
                 # This fixture uses a disposable profile and no credentials;
                 # expose only a bounded native error to diagnose the seam.
                 $bounded = $diagnostic.Substring(0, [Math]::Min(1400, $diagnostic.Length))
