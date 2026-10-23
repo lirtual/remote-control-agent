@@ -219,10 +219,15 @@ jobs:
             if (-not $rejected) { throw 'Untrusted legacy task path was accepted' }
           }
           $source = Get-Content -LiteralPath $path -Raw
-          if (-not $source.Contains("Read-Host 'Upgrade this device using the verified Release? [y/N]'") -or
+          if (-not $source.Contains('$Host.UI.PromptForChoice') -or
+              -not $source.Contains('Choose Y to upgrade.') -or
+              -not $source.Contains('$choices, 1') -or
+              -not $source.Contains('if ($selected -ne 0)') -or
+              -not $source.Contains('Upgrade skipped; existing device unchanged.') -or
+              $source.Contains("Read-Host 'Upgrade this device") -or
               -not $source.Contains("upgrade --version `$Version") -or
               $source.Contains('public installer never upgrades it')) {
-            throw 'Existing paired device requires one explicit confirmation and signed CLI upgrade'
+            throw 'Existing paired device requires host-mediated opt-in confirmation and signed CLI upgrade'
           }
 
       - name: User task negative checks (never create a task)
