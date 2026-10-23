@@ -41,9 +41,15 @@ or pair anything.
 The CLI's two options are **永久** (user-logon task on Windows, systemd user unit
 on Linux) and **临时** (foreground, with existing 24-hour cloud grant). Selection
 requires a real TTY and an explicit key press; one authenticated MCP approval
-is still mandatory. Re-running the installer never silently upgrades or re-keys
-an approved device. Local installation, owner authorization and actual remote
-online state are distinct facts.
+is still mandatory. Running the public installer on a paired Windows device checks the existing
+user-logon task and target version. If an upgrade is available, it asks for one
+explicit confirmation, installs the SHA-256 verified new Release side by side,
+and reuses the existing transactional `rca upgrade` switch. It never re-keys or
+re-pairs the approved identity. A previously stopped Windows task remains
+stopped; an active task is restarted only as part of the confirmed switch.
+A cancelled or rejected upgrade leaves the old device untouched. A successful
+local switch still requires an authenticated MCP online check. Local
+installation, owner authorization and remote online state remain distinct.
 
 Historical root `install.sh` and `install-windows.ps1` have been removed from this branch; they were
 not the canonical public installation URLs. Historical immutable Release tags
