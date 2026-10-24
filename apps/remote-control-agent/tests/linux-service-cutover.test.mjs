@@ -8,12 +8,41 @@ import { planServiceCutover,applyServiceCutover,rollbackServiceCutover,assertOff
 
 const id="af666663-b30c-4b3d-ad85-c8047dc3516b";
 const marker="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
-const legacy="# Installed from docs/remote-control/systemd/remote-control-agent.service.example\n"+
-  "[Unit]\nDescription=Remote Control native Agent (loopback, user service)\n"+
-  "[Service]\nExecStart=/home/fixture/bin/node src/main.ts\n";
-const tunnel="# Installed from docs/remote-control/systemd/remote-control-tunnel.service.example\n"+
-  "[Unit]\nDescription=Remote Control Cloudflare Tunnel (user service)\n"+
-  "[Service]\nExecStart=/home/fixture/bin/cloudflared tunnel run\n";
+const revision="d24ddda4051af58c2397229d6a047358dd1c6283";
+function historicalLoopback(home){
+  const root=path.join(home,".local/share/mcp-workers/remote-control-agent",revision);
+  return [
+    "# Installed from docs/remote-control/systemd/remote-control-agent.service.example",
+    "# at "+revision+". Placeholders substituted on host.",
+    "# Runtime pin: Node v24.21.0 and agent tree "+revision.slice(0,7)+". The live process is left running.",
+    "[Unit]","Description=Remote Control native Agent (loopback, user service)",
+    "StartLimitIntervalSec=0","",
+    "[Service]","Type=simple",
+    "WorkingDirectory="+path.join(root,"apps/remote-control-agent"),
+    "Environment=REMOTE_CONTROL_AGENT_HOST=127.0.0.1",
+    "Environment=REMOTE_CONTROL_AGENT_PORT=9477",
+    "EnvironmentFile=%h/.config/mcp-workers/remote-control-agent.env",
+    "UMask=0077",
+    "ExecStartPre=/usr/bin/test -x "+path.join(root,"apps/remote-control-agent/.build/session-supervisor"),
+    "ExecStart="+path.join(home,".local/share/mcp-workers/node/v24.21.0/bin/node")+" --experimental-strip-types src/main.ts",
+    "Restart=always","RestartSec=15s","",
+    "[Install]","WantedBy=default.target","",
+  ].join("\n");
+}
+function historicalTunnel(home){
+  return [
+    "# Installed from docs/remote-control/systemd/remote-control-tunnel.service.example",
+    "# at "+revision+". Placeholders substituted on host.",
+    "[Unit]","Description=Remote Control Cloudflare Tunnel (user service)",
+    "Wants=remote-control-agent.service","After=remote-control-agent.service",
+    "StartLimitIntervalSec=0","",
+    "[Service]","Type=simple","UMask=0077",
+    "ExecStart="+path.join(home,".local/bin/cloudflared")+" tunnel --protocol http2 run --token-file "+
+      path.join(home,".local/share/remote-control-t02/token"),
+    "Restart=always","RestartSec=15s","",
+    "[Install]","WantedBy=default.target","",
+  ].join("\n");
+}
 
 async function fixture(){
   const home=await mkdtemp(path.join(os.tmpdir(),"rc-service-cutover-"));
@@ -44,9 +73,13 @@ async function fixture(){
       "Description=Remote Control v2 Agent (outbound WSS, independent of v1)")
     .replace("REMOTE_CONTROL_AGENT_ENDPOINT","REMOTE_CONTROL_V2_ENDPOINT")
     .replace("REMOTE_CONTROL_AGENT_KEY_PATH","REMOTE_CONTROL_V2_KEY_PATH");
+  const legacy=historicalLoopback(home);
+  const tunnel=historicalTunnel(home);
   await writeFile(path.join(unitDir,"remote-control-agent.service"),legacy,{mode:0o644});
+  await chmod(path.join(unitDir,"remote-control-agent.service"),0o644);
   await writeFile(path.join(unitDir,"remote-control-v2-agent.service"),signed,{mode:0o600});
   await writeFile(path.join(unitDir,"remote-control-tunnel.service"),tunnel,{mode:0o644});
+  await chmod(path.join(unitDir,"remote-control-tunnel.service"),0o644);
   const plan=planServiceCutover({home,candidateRoot,legacyUnit:legacy,tunnelUnit:tunnel,
     signedUnit:signed,deviceId:id});
   return {home,key,plan,unitDir,legacy,signed,tunnel,
@@ -76,9 +109,13 @@ test("migration requires proof of both old runtimes, exact WSS template and fixe
     const base={home:x.home,candidateRoot:x.plan.candidateRoot,legacyUnit:x.legacy,
       signedUnit:x.signed,tunnelUnit:x.tunnel,deviceId:id};
     assert.throws(()=>planServiceCutover({...base,legacyUnit:x.legacy.replace(
-      "loopback, user service","unexpected")}),/historical/);
+      "loopback, user service","unexpected")}),/historical|Historical/);
     assert.throws(()=>planServiceCutover({...base,tunnelUnit:x.tunnel.replace(
       "/cloudflared ","/untrusted ")}),/Tunnel/);
+    assert.throws(()=>planServiceCutover({...base,legacyUnit:x.legacy.replace(
+      "RestartSec=15s","RestartSec=15s\nExecStartPost=/bin/true")}),/template/);
+    assert.throws(()=>planServiceCutover({...base,tunnelUnit:x.tunnel.replace(
+      "RestartSec=15s","RestartSec=15s\nExecStop=/bin/true")}),/template/);
     assert.throws(()=>planServiceCutover({...base,signedUnit:x.signed.replace(
       "REMOTE_CONTROL_V2_KEY_PATH","FOREIGN_KEY_PATH")}),/Ambiguous/);
     assert.throws(()=>planServiceCutover({...base,deviceId:"not-a-device"}),/device ID/);
@@ -122,6 +159,7 @@ test("activation failure restores legacy service and restarts original signed-WS
     assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),
       x.legacy);
     assert.equal((await readFile(x.key+".device-id","utf8")).trim(),id);
+    assert.ok(system.calls.includes("start remote-control-agent.service"));
     assert.ok(system.calls.includes("enable --now remote-control-v2-agent.service"));
     assert.ok(system.calls.includes("enable --now remote-control-tunnel.service"));
     assert.equal((await lstat(path.join(x.plan.backupDir,"journal.json"))).mode&0o777,0o600);
@@ -137,6 +175,8 @@ test("owner-local rollback from inactive canonical unit restores exact previous 
     assert.equal(done.status,"legacy_restored");
     assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),x.legacy);
     assert.equal((await readFile(x.key+".device-id","utf8")).trim(),id);
+    assert.ok(sys.calls.includes("start remote-control-agent.service"));
+    assert.ok(!sys.calls.includes("enable remote-control-agent.service"));
     assert.ok(sys.calls.includes("enable --now remote-control-v2-agent.service"));
     assert.ok(sys.calls.includes("enable --now remote-control-tunnel.service"));
   }finally{await x.dispose();}
@@ -154,5 +194,43 @@ test("refuse rollback if canonical unit or private identity changed",async()=>{
     await writeFile(file,x.plan.canonical,{mode:0o600});
     await writeFile(x.key,"tampered key",{mode:0o600});
     await assert.rejects(rollbackServiceCutover({home:x.home,systemctl:sys.invoke}),/identity changed/);
+  }finally{await x.dispose();}
+});
+
+
+test("interrupted partial backup preparation is safely retried before modifying units",async()=>{
+  const x=await fixture();
+  try{
+    const pending=x.plan.backupDir+".preparing";
+    await mkdir(pending,{mode:0o700});
+    await chmod(pending,0o700);
+    await writeFile(path.join(pending,"remote-control-agent.service"),
+      x.legacy.slice(0,50),{mode:0o600});
+    await chmod(path.join(pending,"remote-control-agent.service"),0o600);
+    const system=fakeSystemctl();
+    const result=await applyServiceCutover(x.plan,{systemctl:system.invoke});
+    assert.equal(result.status,"locally_activated");
+    await assert.rejects(lstat(pending),{code:"ENOENT"});
+    assert.equal(await readFile(path.join(x.plan.backupDir,"remote-control-agent.service"),"utf8"),
+      x.legacy);
+  }finally{await x.dispose();}
+});
+
+test("foreign partial backup is never deleted or treated as a trusted snapshot",async()=>{
+  const x=await fixture();
+  try{
+    const pending=x.plan.backupDir+".preparing";
+    await mkdir(pending,{mode:0o700});
+    await chmod(pending,0o700);
+    const unknown=path.join(pending,"remote-control-agent.service");
+    await writeFile(unknown,"UNTRUSTED",{mode:0o600});
+    await chmod(unknown,0o600);
+    const system=fakeSystemctl();
+    await assert.rejects(applyServiceCutover(x.plan,{systemctl:system.invoke}),
+      /Interrupted backup differs/);
+    assert.equal(await readFile(unknown,"utf8"),"UNTRUSTED");
+    assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),
+      x.legacy);
+    assert.equal(system.calls.some(x=>x.startsWith("disable ")),false);
   }finally{await x.dispose();}
 });

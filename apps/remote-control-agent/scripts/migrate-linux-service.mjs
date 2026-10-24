@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, rmdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,12 +49,58 @@ function serviceOrigin(origin) {
      u.port||origin!==u.origin+"/")throw Error("Invalid signed Worker origin");
   return origin;
 }
-function standaloneUnit(unit,marker,description) {
-  if(!unit.startsWith(marker+"\n") ||
-     exactField(unit,"Description")!==description ||
-     unit.split("\n").some(line=>/^(?:ExecStartPre|ExecStartPost|ExecStop|ExecStopPost|OnFailure|LoadCredential|RootDirectory)=/.test(line)))
-    throw Error("Unknown historical user unit; cannot retire safely");
-  exactField(unit,"ExecStart");
+/** This migration retires exactly the observed historical user units, not
+ * arbitrary services carrying the same comment or Description. */
+function proveHistoricalUnits(legacyUnit,tunnelUnit,home) {
+  const origin=/^# Installed from docs\/remote-control\/systemd\/remote-control-agent\.service\.example\n# at ([a-f0-9]{40})\. Placeholders substituted on host\.\n/;
+  const match=origin.exec(legacyUnit);
+  if(!match)throw Error("Unknown historical loopback unit");
+  const revision=match[1];
+  const root=path.join(home,".local/share/mcp-workers/remote-control-agent",revision);
+  const node=path.join(home,".local/share/mcp-workers/node/v24.21.0/bin/node");
+  const legacy=[
+    LEGACY_MARKER,
+    "# at "+revision+". Placeholders substituted on host.",
+    "# Runtime pin: Node v24.21.0 and agent tree "+revision.slice(0,7)+". The live process is left running.",
+    "[Unit]",
+    "Description=Remote Control native Agent (loopback, user service)",
+    "StartLimitIntervalSec=0","",
+    "[Service]","Type=simple",
+    "WorkingDirectory="+path.join(root,APP),
+    "Environment=REMOTE_CONTROL_AGENT_HOST=127.0.0.1",
+    "Environment=REMOTE_CONTROL_AGENT_PORT=9477",
+    "EnvironmentFile=%h/.config/mcp-workers/remote-control-agent.env",
+    "UMask=0077",
+    "ExecStartPre=/usr/bin/test -x "+path.join(root,APP,".build/session-supervisor"),
+    "ExecStart="+node+" --experimental-strip-types src/main.ts",
+    "Restart=always","RestartSec=15s","",
+    "[Install]","WantedBy=default.target","",
+  ].join("\n");
+  const start=exactField(tunnelUnit,"ExecStart");
+  const matchTunnel=/^(.+) tunnel --protocol http2 run --token-file (\/[^ \n]+)$/.exec(start);
+  if(!matchTunnel ||
+     matchTunnel[1]!==path.join(home,".local/bin/cloudflared"))
+    throw Error("Unknown historical Tunnel executable");
+  const token=matchTunnel[2];
+  const tokenRoot=path.join(home,".local/share/remote-control-t02");
+  if(path.dirname(token)!==tokenRoot || path.normalize(token)!==token ||
+     token.includes(".."))
+    throw Error("Unknown historical Tunnel token path");
+  const tunnel=[
+    TUNNEL_MARKER,
+    "# at "+revision+". Placeholders substituted on host.",
+    "[Unit]",
+    "Description=Remote Control Cloudflare Tunnel (user service)",
+    "Wants=remote-control-agent.service",
+    "After=remote-control-agent.service",
+    "StartLimitIntervalSec=0","",
+    "[Service]","Type=simple","UMask=0077",
+    "ExecStart="+path.join(home,".local/bin/cloudflared")+" tunnel --protocol http2 run --token-file "+token,
+    "Restart=always","RestartSec=15s","",
+    "[Install]","WantedBy=default.target","",
+  ].join("\n");
+  if(legacyUnit!==legacy || tunnelUnit!==tunnel)
+    throw Error("Historical loopback or Tunnel unit differs from reviewed template");
 }
 function proveOldWssUnit(unit,home) {
   if(!unit.startsWith(OLD_MARKER+"\n"))throw Error("Signed Agent legacy unit ownership mismatch");
@@ -88,10 +134,7 @@ export function planServiceCutover({home,legacyUnit,tunnelUnit,signedUnit,candid
   if(process.getuid()===0)throw Error("Root cannot migrate user Agents");
   if(!path.isAbsolute(home)||home!==path.normalize(home))throw Error("Unsafe home");
   if(!UUID.test(deviceId))throw Error("Invalid exact paired device ID");
-  standaloneUnit(legacyUnit,LEGACY_MARKER,"Remote Control native Agent (loopback, user service)");
-  standaloneUnit(tunnelUnit,TUNNEL_MARKER,"Remote Control Cloudflare Tunnel (user service)");
-  if(!exactField(tunnelUnit,"ExecStart").includes("/cloudflared "))
-    throw Error("Unrecognized historical Tunnel executable");
+  proveHistoricalUnits(legacyUnit,tunnelUnit,home);
   const old=proveOldWssUnit(signedUnit,home);
   const programs=path.join(home,".local/share/mcp-workers/remote-control/programs");
   const candidate=releaseVersion(path.basename(candidateRoot));
@@ -171,6 +214,32 @@ async function exactSnapshot(plan){
   return identityDigest(plan.identity,plan.deviceId);
 }
 
+/** A crash during backup preparation leaves no installed unit changed.
+ * Only remove a private, known partial snapshot after the exact original
+ * services and identity have independently passed preflight again. */
+async function discardPartialPreparation(pending,expected) {
+  let dir;
+  try{dir=await lstat(pending);}
+  catch(e){if(e.code==="ENOENT")return;throw e;}
+  if(!dir.isDirectory()||dir.isSymbolicLink()||
+     dir.uid!==process.getuid()||(dir.mode&0o777)!==0o700)
+    throw Error("Untrusted interrupted backup preparation");
+  for(const name of await readdir(pending)){
+    if(!Object.hasOwn(expected,name))
+      throw Error("Unexpected interrupted backup member");
+    const member=path.join(pending,name);
+    ownerFile(await lstat(member),0o600);
+    const observed=await readFile(member);
+    const expectedBytes=Buffer.from(expected[name]);
+    if(observed.length>expectedBytes.length||
+       !expectedBytes.subarray(0,observed.length).equals(observed))
+      throw Error("Interrupted backup differs from reviewed originals");
+  }
+  for(const name of await readdir(pending))await rm(path.join(pending,name));
+  await rmdir(pending);
+  await syncDir(path.dirname(pending));
+}
+
 /** Only runs after all three services were explicitly stopped locally.
  * Saves owner-only exact backups before replacing the canonical unit name.
  * On activation failure restores old units; power-loss recovery is --rollback.
@@ -178,21 +247,30 @@ async function exactSnapshot(plan){
 export async function applyServiceCutover(plan,{systemctl=defaultSystemctl}={}){
   assertOffline(systemctl);
   const idHash=await exactSnapshot(plan);
-  await mkdir(plan.backupDir,{mode:0o700});
-  const d=await lstat(plan.backupDir);
-  if(!d.isDirectory()||d.isSymbolicLink()||d.uid!==process.getuid()||
-     (d.mode&0o777)!==0o700)throw Error("Unsafe cutover backup directory");
-  // Existing backup or journal means an interrupted migration; never overwrite.
-  for(const [name,data] of [[NEW,plan.legacyUnit],[OLD,plan.signedUnit],
-     [TUNNEL,plan.tunnelUnit]]){
-    await secureSave(path.join(plan.backupDir,name),data);
-  }
   const journal={phase:"prepared",device_id:plan.deviceId,
     old_hash:sha(plan.signedUnit),new_hash:sha(plan.canonical),
     loopback_hash:sha(plan.legacyUnit),tunnel_hash:sha(plan.tunnelUnit),
     identity_sha256:idHash};
-  await secureSave(path.join(plan.backupDir,"journal.json"),JSON.stringify(journal)+"\n");
-  await syncDir(plan.backupDir);
+  const expected={
+    [NEW]:plan.legacyUnit,[OLD]:plan.signedUnit,
+    [TUNNEL]:plan.tunnelUnit,
+    "journal.json":JSON.stringify(journal)+"\n",
+  };
+  const pending=plan.backupDir+".preparing";
+  // A committed journal must never be overwritten or replayed.
+  try{await lstat(plan.backupDir);throw Error("Existing migration backup; manual recovery required");}
+  catch(e){if(e.code!=="ENOENT")throw e;}
+  await discardPartialPreparation(pending,expected);
+  await mkdir(pending,{mode:0o700});
+  const dir=await lstat(pending);
+  if(!dir.isDirectory()||dir.isSymbolicLink()||dir.uid!==process.getuid()||
+     (dir.mode&0o777)!==0o700)throw Error("Unsafe migration preparation directory");
+  for(const [name,data] of Object.entries(expected))
+    await secureSave(path.join(pending,name),data);
+  await syncDir(pending);
+  // Commit the complete private snapshot atomically before changing any unit.
+  await rename(pending,plan.backupDir);
+  await syncDir(path.dirname(plan.backupDir));
   let modified=false;
   try{
     assertOffline(systemctl);
@@ -224,6 +302,7 @@ export async function applyServiceCutover(plan,{systemctl=defaultSystemctl}={}){
         await chmod(path.join(plan.unitDir,NEW),0o644);
         await syncDir(plan.unitDir);
         systemctl(["daemon-reload"]);
+        systemctl(["start",NEW]);
         systemctl(["enable","--now",OLD]);
         systemctl(["enable","--now",TUNNEL]);
       }catch{
@@ -280,6 +359,7 @@ export async function rollbackServiceCutover({home=os.homedir(),systemctl=defaul
   await rename(stage,current);
   await syncDir(unitDir);
   systemctl(["daemon-reload"]);
+  systemctl(["start",NEW]);
   systemctl(["enable","--now",OLD]);
   systemctl(["enable","--now",TUNNEL]);
   return {status:"legacy_restored",device_id:journal.device_id,backup_retained:true};
