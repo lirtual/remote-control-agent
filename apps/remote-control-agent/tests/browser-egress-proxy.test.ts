@@ -114,3 +114,60 @@ test("malformed browser proxy socket and peer reset never kill the local server"
     await proxy.close();
   }
 });
+
+test("HTTP 302 destination gets a fresh private-DNS check before any next-hop dial", async () => {
+  // This is a test-only transport shim: it routes the *already approved*
+  // synthetic public numeric IP to a disposable local origin. The proxy's
+  // production dialer remains unchanged and never gets a test-only bypass.
+  let publicHits = 0;
+  const source = http.createServer((_req, res) => {
+    publicHits++;
+    res.writeHead(302, { location: "http://private.example.com/secret" });
+    res.end();
+  });
+  await new Promise<void>((resolve, reject) => {
+    source.once("error", reject);
+    source.listen(0, "127.0.0.1", resolve);
+  });
+  const sourcePort = (source.address() as import("node:net").AddressInfo).port;
+  const queried: string[] = [], outgoing: string[] = [];
+  const proxy = await startCandidateBrowserEgressProxy(async host => {
+    queried.push(host);
+    return host === "public.example.com"
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "127.0.0.1", family: 4 }];
+  });
+  const endpoint = new URL(proxy.server);
+  const requestBefore = http.request;
+  (http as any).request = (opts: any, ...rest: any[]) => {
+    if (opts?.hostname === "93.184.216.34") {
+      outgoing.push(opts.hostname);
+      return (requestBefore as any).call(http,
+        { ...opts, hostname: "127.0.0.1", port: sourcePort }, ...rest);
+    }
+    if (opts?.hostname === "127.0.0.1" && opts?.port === 80) {
+      throw Error("Unapproved private destination reached dialer.");
+    }
+    return (requestBefore as any).call(http, opts, ...rest);
+  };
+  const viaProxy = (url: string) => new Promise<number>((resolve, reject) => {
+    const req = http.request({
+      hostname: endpoint.hostname, port: Number(endpoint.port),
+      path: url, method: "GET",
+    }, res => { res.resume(); res.once("end", () => resolve(res.statusCode!)); });
+    req.once("error", reject);
+    req.end();
+  });
+  try {
+    assert.equal(await viaProxy("http://public.example.com/start"), 302);
+    assert.equal(await viaProxy("http://private.example.com/secret"), 403);
+    assert.deepEqual(queried, ["public.example.com", "private.example.com"]);
+    assert.deepEqual(outgoing, ["93.184.216.34"],
+      "Private redirected DNS address must never enter the real dialer.");
+    assert.equal(publicHits, 1);
+  } finally {
+    (http as any).request = requestBefore;
+    await proxy.close();
+    await new Promise<void>(resolve => source.close(() => resolve()));
+  }
+});
