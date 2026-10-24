@@ -504,7 +504,7 @@ test("post-restart full installed tree equals independently re-fetched immutable
   const f=sizableApprovedNodeFixture();
   try{
     const programs=ensurePrivatePrograms(f.home);
-    const root=stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    const root=stageOrVerifyPinnedProgram(f.x.bytes,{tag:"v0.1.2",target:nativeTarget,expectedSha256:f.x.sha},programs,"v0.1.2-"+nativeTarget);
     const {send}=immutableMockForNodeAsset(f.x.bytes);
     const result=await verifyInstalledPinnedLinuxRelease({
       tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,
@@ -519,7 +519,7 @@ test("post-restart proven release refuses modified bytes, missing files, and ext
   const f=sizableApprovedNodeFixture();
   try{
     const programs=ensurePrivatePrograms(f.home);
-    const root=stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    const root=stageOrVerifyPinnedProgram(f.x.bytes,{tag:"v0.1.2",target:nativeTarget,expectedSha256:f.x.sha},programs,"v0.1.2-"+nativeTarget);
     const {send}=immutableMockForNodeAsset(f.x.bytes);
     const opts={tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,
       target:nativeTarget,home:f.home,send};
@@ -540,7 +540,7 @@ test("post-restart proof rejects stale Git commit, wrong asset SHA and untrusted
   const f=sizableApprovedNodeFixture();
   try{
     const programs=ensurePrivatePrograms(f.home);
-    stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    stageOrVerifyPinnedProgram(f.x.bytes,{tag:"v0.1.2",target:nativeTarget,expectedSha256:f.x.sha},programs,"v0.1.2-"+nativeTarget);
     const base={tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,target:nativeTarget,home:f.home};
     const good=immutableMockForNodeAsset(f.x.bytes);
     await assert.rejects(verifyInstalledPinnedLinuxRelease({
