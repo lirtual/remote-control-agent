@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  isAllowedPublicIp, resolvePinnedPublicAddress, type EgressResolver, type EgressAddress,
+  isAllowedPublicIp, resolvePinnedPublicAddress, resolvePublicDoh, resolveSyntheticDnsAnswers, type EgressResolver, type EgressAddress,
 } from "../candidates/browser-egress-policy.ts";
 
 test("public-IP guard rejects local, LAN, metadata, mapped and special ranges", () => {
@@ -67,4 +67,67 @@ test("local hostname, literals, malformed names and transport errors never pass"
     resolvePinnedPublicAddress("public.example.com", async () => {throw Error("DNS failed");}),
     /DNS failed/
   );
+});
+
+test("only pure 198.18/15 synthetic DNS triggers a safe public resolver", async () => {
+  let publicQueries = 0;
+  const resolvePublic: EgressResolver = async host => {
+    assert.equal(host, "public.example.com");
+    publicQueries++;
+    return [{address:"104.20.23.154",family:4}];
+  };
+  const fake = [{address:"198.18.1.27",family:4}] as EgressAddress[];
+  assert.deepEqual(await resolveSyntheticDnsAnswers("public.example.com",fake,resolvePublic),
+    [{address:"104.20.23.154",family:4}]);
+  assert.equal(publicQueries,1);
+  for (const answers of [
+    [{address:"198.18.1.27",family:4},{address:"127.0.0.1",family:4}],
+    [{address:"198.18.1.27",family:4},{address:"1.1.1.1",family:4}],
+    [{address:"10.0.0.1",family:4}],
+  ] as EgressAddress[][]) {
+    assert.deepEqual(await resolveSyntheticDnsAnswers("public.example.com",answers,resolvePublic),answers);
+    await assert.rejects(resolvePinnedPublicAddress("public.example.com",
+      host => resolveSyntheticDnsAnswers(host,answers,resolvePublic)),/not wholly public/);
+  }
+  assert.equal(publicQueries,1,"Mixed/private answers must never trigger DoH.");
+});
+
+test("authenticated DoH validates response shape and pins only numeric public answers", async () => {
+  const queried: string[] = [];
+  const send: typeof fetch = async (input, options) => {
+    const url=String(input);
+    queried.push(url);
+    assert.equal(options?.redirect,"error");
+    assert.equal((options?.headers as Record<string,string>).Accept,"application/dns-json");
+    const answer=url.endsWith("type=A")
+      ? [{type:1,data:"104.20.23.154"}]
+      : [{type:28,data:"2606:4700:4700::1111"}];
+    return new Response(JSON.stringify({Status:0,Answer:answer}),
+      {status:200,headers:{"content-type":"application/dns-json; charset=utf-8"}});
+  };
+  const results=await resolvePublicDoh("public.example.com",send);
+  assert.equal(queried.length,2);
+  assert.deepEqual(results,[{address:"104.20.23.154",family:4},
+    {address:"2606:4700:4700::1111",family:6}]);
+  const pinned=await resolvePinnedPublicAddress("public.example.com",
+    host=>resolveSyntheticDnsAnswers(host,[{address:"198.18.1.27",family:4}],h=>resolvePublicDoh(h,send)));
+  assert.deepEqual(pinned,{address:"104.20.23.154",family:4});
+});
+
+test("DoH errors and DoH-rebound private answers fail closed", async () => {
+  const publicA = [{type:1,data:"127.0.0.1"}];
+  const bad: Array<{status:number;mime:string;payload:unknown}> = [
+    {status:200,mime:"application/dns-json",payload:{Status:0,Answer:publicA}},
+    {status:503,mime:"application/dns-json",payload:{Status:0,Answer:[]}},
+    {status:200,mime:"text/html",payload:{Status:0,Answer:[]}},
+    {status:200,mime:"application/dns-json",payload:{Status:2}},
+    {status:200,mime:"application/dns-json",payload:{Status:0,Answer:[{type:1,data:"not-ip"}]}},
+  ];
+  for (const item of bad) {
+    const send: typeof fetch=async ()=>new Response(JSON.stringify(item.payload),
+      {status:item.status,headers:{"content-type":item.mime}});
+    await assert.rejects(resolvePinnedPublicAddress("public.example.com",
+      host=>resolveSyntheticDnsAnswers(host,[{address:"198.18.1.27",family:4}],
+        h=>resolvePublicDoh(h,send))));
+  }
 });

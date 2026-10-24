@@ -44,9 +44,65 @@ export function isAllowedPublicIp(address: string): boolean {
 export type EgressAddress = { address: string; family: 4 | 6 };
 export type EgressResolver = (hostname: string) => Promise<EgressAddress[]>;
 
-const defaultResolver: EgressResolver = async hostname =>
-  (await lookup(hostname, { all: true, verbatim: true }))
+// Transparent proxy/VPN DNS sometimes returns only 198.18/15 Fake-IP records.
+// Never dial or permit those addresses. Independently resolve the public name
+// over authenticated HTTPS instead, then apply the SAME IP allow-list below.
+const synthetic = new BlockList();
+synthetic.addSubnet("198.18.0.0", 15, "ipv4");
+const dohEndpoint = "https://cloudflare-dns.com/dns-query";
+
+export async function resolvePublicDoh(
+  hostname: string, send: typeof fetch = fetch
+): Promise<EgressAddress[]> {
+  const query = async (kind: "A" | "AAAA"): Promise<EgressAddress[]> => {
+    const url = dohEndpoint + "?name=" + encodeURIComponent(hostname) + "&type=" + kind;
+    const response = await send(url, {
+      headers: { Accept: "application/dns-json" },
+      redirect: "error", signal: AbortSignal.timeout(7_000),
+    });
+    if (!response.ok ||
+        !response.headers.get("content-type")?.toLowerCase().startsWith("application/dns-json"))
+      throw Error("Authenticated public DNS unavailable.");
+    const body = await response.text();
+    if (body.length > 16_384) throw Error("Public DNS response too large.");
+    const result = JSON.parse(body) as {
+      Status?: unknown; Answer?: unknown;
+    };
+    if (!result || result.Status !== 0 ||
+        (result.Answer !== undefined && !Array.isArray(result.Answer)))
+      throw Error("Invalid authenticated public DNS response.");
+    const records = (result.Answer ?? []) as Array<{ type?: unknown; data?: unknown }>;
+    if (records.length > 32) throw Error("Public DNS answer count exceeded.");
+    const family = kind === "A" ? 4 : 6;
+    const type = kind === "A" ? 1 : 28;
+    return records.filter(record => record.type === type).map(record => {
+      if (typeof record.data !== "string" || isIP(record.data) !== family)
+        throw Error("Invalid public DNS address.");
+      return { address: record.data, family };
+    });
+  };
+  // Failure of either family must fail closed, not silently drop bad answers.
+  return [...await query("A"), ...await query("AAAA")];
+}
+
+export async function resolveSyntheticDnsAnswers(
+  hostname: string, system: EgressAddress[],
+  publicResolver: EgressResolver = resolvePublicDoh
+): Promise<EgressAddress[]> {
+  // A mixed fake-IP/public/private answer never authorizes a fallback.
+  if (system.length > 0 && system.length <= 32 &&
+      system.every(record => record.family === 4 &&
+        isIP(record.address) === 4 && synthetic.check(record.address, "ipv4"))) {
+    return publicResolver(hostname);
+  }
+  return system;
+}
+
+const defaultResolver: EgressResolver = async hostname => {
+  const system = (await lookup(hostname, { all: true, verbatim: true }))
     .map(x => ({ address: x.address, family: x.family as 4 | 6 }));
+  return resolveSyntheticDnsAnswers(hostname, system);
+};
 
 export async function resolvePinnedPublicAddress(
   hostname: string, resolver: EgressResolver = defaultResolver
