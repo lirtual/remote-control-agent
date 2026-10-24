@@ -23,6 +23,8 @@ export interface LocalUpgradeInspection {
   readonly receiptHeaderCompatible:boolean;
 }
 export interface LinuxRuntimeInspectionContext {
+  /** From the authenticated Agent configuration, never the unit being inspected. */
+  expectedEndpoint:string;
   home?:string; keyPath?:string; executable?:string; entrypoint?:string; pid?:number;
   /** Test seam; the real Agent always invokes fixed systemctl --user show. */
   serviceShow?: (name:UnitName)=>string;
@@ -56,10 +58,7 @@ async function owned(file:string,kind:"file"|"directory"):Promise<void>{
     (kind==="file"?(!s.isFile()||s.nlink!==1):!s.isDirectory()))
     throw Error("Untrusted installed Agent file");
 }
-function expectedUnit(unit:string,root:string,key:string):boolean{
-  const lines=unit.split("\n").filter(line=>line.startsWith("Environment=REMOTE_CONTROL_AGENT_ENDPOINT="));
-  if(lines.length!==1)return false;
-  const endpoint=lines[0]!.slice("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=".length);
+function expectedUnit(unit:string,root:string,key:string,endpoint:string):boolean{
   try {
     const url=new URL(endpoint);
     if(url.protocol!=="https:"||url.username||url.password||url.hash||url.search||
@@ -146,7 +145,7 @@ export async function inspectLinuxLocalUpgrade(
       const unit=await readFile(unitFile,"utf8");
       // Canonical service uses a different installer template, so remain
       // fail-closed pending exact-template review.
-      if(name!==HISTORICAL||!expectedUnit(unit,root,key))continue;
+      if(name!==HISTORICAL||!expectedUnit(unit,root,key,options.expectedEndpoint))continue;
       const state=parseUpgradeServiceState((options.serviceShow??showService)(name));
       if(state.ActiveState!=="active"||state.SubState!=="running"||
         state.MainPID!==String(pid)||state.FragmentPath!==unitFile||state.DropInPaths!=="")continue;

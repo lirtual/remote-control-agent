@@ -61,6 +61,7 @@ function fixture(){
   writeFileSync(receipt,header,{mode:0o600});
   const context={
     home,keyPath:key,executable:bin,entrypoint:entry,pid:123456,
+    expectedEndpoint:"https://rca.example.com/",
     serviceShow:()=>fields(unit,123456),
   };
   return {home,root,key,receipt,unit,bin,entry,context,
@@ -97,6 +98,19 @@ linuxTest("altered identity, program, manifest and unit cannot satisfy native pr
   assert.equal((await inspectLinuxLocalUpgrade(req,{...f.context,entrypoint:"/tmp/user.js"})).serviceActive,false);
   writeFileSync(f.unit,"[Service]\nExecStart=/bin/bash",{mode:0o600});
   assert.equal((await inspectLinuxLocalUpgrade(req,f.context)).serviceActive,false);
+ }finally{f.cleanup();}
+});
+linuxTest("an altered but syntactically valid systemd endpoint cannot self-authorize",async()=>{
+ const f=fixture();
+ try{
+  const original=(await import("node:fs/promises")).readFile(f.unit,"utf8");
+  const unit=await original;
+  writeFileSync(f.unit,unit.replace("https://rca.example.com/","https://attacker.example/"),{mode:0o600});
+  const rejected=await inspectLinuxLocalUpgrade(req,f.context);
+  assert.equal(rejected.servicePathsMatch,false);
+  assert.equal(rejected.serviceActive,false);
+  const missing=await inspectLinuxLocalUpgrade(req,{...f.context,expectedEndpoint:""});
+  assert.equal(missing.servicePathsMatch,false);
  }finally{f.cleanup();}
 });
 linuxTest("SQLite invalid schema is not reported as readable durable receipts",async()=>{
