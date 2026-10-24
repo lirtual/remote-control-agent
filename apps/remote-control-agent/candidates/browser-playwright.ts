@@ -219,6 +219,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       // it must fail closed on DNS or connection errors, with no DIRECT route.
       const egress = await startCandidateBrowserEgressProxy();
       let context: BrowserContext | undefined;
+      let proxyBound = false;
       try {
         context = await this.driver.launchPersistentContext(profile, {
           headless: false,
@@ -229,6 +230,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
             "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
         });
         this.egressProxy = egress;
+        proxyBound = true;
         await context.route("**/*", async route => {
           try { checkedUrl(route.request().url(), false); }
           catch {
@@ -263,7 +265,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       } catch (error) {
         await context?.close().catch(() => {});
         // No browser may outlive an unverified/partially initialized proxy.
-        if (this.egressProxy === egress) await this.stopEgressProxy();
+        if (proxyBound) await this.stopEgressProxy();
         else await egress.close();
         if (context) this.reset(context);
         throw error;
