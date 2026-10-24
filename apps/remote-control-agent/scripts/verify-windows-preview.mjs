@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 // mutable archive manifest and MUST be updated only after source review.
 export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
   "apps/remote-control-agent/candidates/browser-playwright.js":
-    "c9a0c378ab89f32333901be451bd81c775b56d1cb0ba1168d05ed9cfb99aa116",
+    "0353093b493dc36b4d5fc4ef82cf57d06e00d6fbdb87cbee9b314dca126be815",
   "apps/remote-control-agent/candidates/browser-egress-proxy.js":
     "2b340d3c5173d41be741f604da609d697ecfa862090264c540202f751bc9ca7f",
   "apps/remote-control-agent/candidates/browser-egress-policy.js":
