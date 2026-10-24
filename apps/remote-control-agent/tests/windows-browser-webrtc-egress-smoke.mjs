@@ -42,36 +42,51 @@ try{
   try{
     const address=proxy.address();
     assert.ok(address && typeof address!=="string");
-    // As in the previous proxy fixture, enforce the strongest available
-    // browser-level candidate switches; actual OS confinement is separate.
-    context=await chromium.launchPersistentContext(path.join(tmp,channel),{
-      channel,headless:true,acceptDownloads:false,serviceWorkers:"block",
-      timeout:20000,
-      proxy:{server:"http://127.0.0.1:"+address.port,bypass:"<-loopback>"},
-      args:["--proxy-bypass-list=<-loopback>","--disable-quic",
-        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"],
-    });
-    const page=context.pages()[0]??await context.newPage();
-    await page.goto("about:blank");
-    const result=await page.evaluate(async ({uport,tport})=>{
-      const pc=new RTCPeerConnection({
-        iceServers:[
-          {urls:"stun:127.0.0.1:"+uport},
-          {urls:"turn:127.0.0.1:"+tport+"?transport=tcp",username:"ci",credential:"ci"},
-        ],
-      });
+    for (const mode of ["baseline", "proxy-udp-policy"]) {
+      // A/B characterization: baseline is required to distinguish a real
+      // browser probe from an inert STUN/TURN fixture. Neither result is a
+      // substitute for OS-level network isolation.
+      const beforeUdp=udpHits, beforeTcp=tcpHits;
+      const args=["--proxy-bypass-list=<-loopback>","--disable-quic"];
+      if(mode==="proxy-udp-policy")
+        args.push("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+      context=await chromium.launchPersistentContext(
+        path.join(tmp,channel+"-"+mode),{
+          channel,headless:true,acceptDownloads:false,serviceWorkers:"block",
+          timeout:20000,
+          proxy:{server:"http://127.0.0.1:"+address.port,bypass:"<-loopback>"},
+          args,
+        }
+      );
       try{
-        pc.createDataChannel("isolated-ci");
-        await pc.setLocalDescription(await pc.createOffer());
-        await new Promise(resolve=>setTimeout(resolve,1800));
-        return {webrtcAvailable:true,gatherState:pc.iceGatheringState};
-      }finally{pc.close();}
-    },{uport,tport});
-    console.log("WINDOWS_WEBRTC_PROXY_EGRESS_OBSERVATION="+JSON.stringify({
-      channel, ...result, udpHits, tcpHits,
-      strictIsolation:udpHits===0&&tcpHits===0?"NOT_PROVEN":"FAILED",
-      osNetworkConfinement:"NOT_TESTED"
-    }));
+        const page=context.pages()[0]??await context.newPage();
+        await page.goto("about:blank");
+        const result=await page.evaluate(async ({uport,tport})=>{
+          const pc=new RTCPeerConnection({
+            iceServers:[
+              {urls:"stun:127.0.0.1:"+uport},
+              {urls:"turn:127.0.0.1:"+tport+"?transport=tcp",
+                username:"ci",credential:"ci"},
+            ],
+          });
+          try{
+            pc.createDataChannel("isolated-ci");
+            await pc.setLocalDescription(await pc.createOffer());
+            await new Promise(resolve=>setTimeout(resolve,2000));
+            return {webrtcAvailable:true,gatherState:pc.iceGatheringState};
+          }finally{pc.close();}
+        },{uport,tport});
+        const deltaUdp=udpHits-beforeUdp, deltaTcp=tcpHits-beforeTcp;
+        console.log("WINDOWS_WEBRTC_PROXY_EGRESS_OBSERVATION="+JSON.stringify({
+          channel,mode,...result,udpHits:deltaUdp,tcpHits:deltaTcp,
+          strictIsolation:deltaUdp===0&&deltaTcp===0?"NOT_PROVEN":"FAILED",
+          osNetworkConfinement:"NOT_TESTED"
+        }));
+      }finally{
+        await context.close().catch(()=>{});
+        context=undefined;
+      }
+    }
     // This is intentionally an observation, NOT an assertion of containment.
     // Future integration acceptance MUST assert zero hits with a separately
     // enforced OS-level boundary and a positive control verifying probe activity.
