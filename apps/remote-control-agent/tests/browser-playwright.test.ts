@@ -222,11 +222,15 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
     for(let i=0;i<40&&!fake.calls.some(x=>x.startsWith("launch:"));i++)
       await new Promise(done=>setTimeout(done,5));
     assert.ok(fake.calls.some(x=>x.startsWith("launch:")));
-    assert.equal(await browser.stopOwnedForRevocation(),"confirmed");
+    assert.equal(await browser.stopOwnedForRevocation(),"uncertain",
+      "Revocation cannot be confirmed while the browser launch is still pending.");
+    assert.equal(browser.status(),null);
     release();
     await assert.rejects(starting,/revoked during startup/);
     assert.equal(browser.status(),null);
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
+    assert.equal(await browser.stopOwnedForRevocation(),"confirmed",
+      "Revocation becomes confirmed after startup exits and cleanup completes.");
   }finally{release();await rm(tmp,{recursive:true,force:true});}
 });
 
