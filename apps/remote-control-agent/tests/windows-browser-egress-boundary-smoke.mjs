@@ -15,9 +15,9 @@ if (!stage || !path.isAbsolute(stage)) throw Error("Pinned absolute candidate pa
 const modulePath = path.join(stage, "apps/remote-control-agent/node_modules/playwright-core/index.mjs");
 const { chromium } = await import(pathToFileURL(modulePath).href);
 
-const onLoopback = server => new Promise((resolve, reject) => {
+const onLoopback = (server, bindAddress="127.0.0.1") => new Promise((resolve, reject) => {
   server.once("error", reject);
-  server.listen(0, "127.0.0.1", () => resolve(server.address().port));
+  server.listen(0, bindAddress, () => resolve(server.address().port));
 });
 const closeServer = server => new Promise(resolve => server.close(resolve));
 
@@ -39,6 +39,18 @@ let context;
 const privateStore = await mkdtemp(path.join(os.tmpdir(), "rca-ci-egress-proxy-"));
 const localPort = await onLoopback(local);
 const localUrl = `http://127.0.0.1:${localPort}/no-access`;
+let localIPv6Connections=0, localIPv6HttpHits=0;
+const localIPv6=createServer((_request,response)=>{
+  localIPv6HttpHits++;
+  response.writeHead(200,{"content-type":"text/plain"});
+  response.end("IPV6_LOCAL_LISTENER_REACHED");
+});
+localIPv6.on("connection", socket=>{
+  localIPv6Connections++;
+  socket.on("error",()=>{});
+});
+const localIPv6Port=await onLoopback(localIPv6,"::1");
+const localIPv6Url=`http://[::1]:${localIPv6Port}/no-access`;
 const proxy = createServer((request, response) => {
   const raw = request.url ?? "";
   seen.push(raw);
@@ -87,18 +99,23 @@ try {
 
   try { await page.goto("http://public.browser-egress.test/redirect", {timeout: 8000}); }
   catch { /* A denied redirected navigation is expected. */ }
-  await page.setContent(`<img src="${localUrl}/image"><iframe src="${localUrl}/frame"></iframe>`);
+  await page.setContent(`<img src="${localUrl}/image"><iframe src="${localUrl}/frame"></iframe>
+    <img src="${localIPv6Url}/image"><iframe src="${localIPv6Url}/frame"></iframe>`);
   // A WebSocket is not caught by Playwright HTTP context.route(); this test
   // checks whether Chrome's own proxy settings capture its network attempt.
-  await page.evaluate(url => {
-    const ws = new WebSocket(url.replace(/^http/, "ws") + "/socket");
-    ws.onerror = () => {};
-  }, localUrl);
+  for (const url of [localUrl,localIPv6Url]) {
+    await page.evaluate(target => {
+      const ws = new WebSocket(target.replace(/^http/, "ws") + "/socket");
+      ws.onerror = () => {};
+    }, url);
+  }
   await page.waitForTimeout(600);
 
   assert.equal(localConnections, 0,
     "Local TCP listener received a bypassed socket; browser proxy not isolated.");
   assert.equal(localHttpHits, 0, "Local HTTP listener was reached.");
+  assert.equal(localIPv6Connections, 0, "IPv6 loopback TCP listener reached.");
+  assert.equal(localIPv6HttpHits, 0, "IPv6 loopback HTTP listener reached.");
   assert.ok(denied > 0, "No negative destination requests reached proxy.");
   console.log("WINDOWS_PROXY_BOUNDARY_FIXTURE=" + browserChannel + ":PASS");
   console.log(JSON.stringify({
@@ -108,6 +125,8 @@ try {
     observedProxyRequests: seen.length,
     localTcpConnections: localConnections,
     localHttpHits,
+    localIPv6Connections,
+    localIPv6HttpHits,
     actualAgentIsolation: "NOT_TESTED",
     dnsPinning: "NOT_TESTED",
     browserOtherTransports: "NOT_TESTED",
@@ -116,5 +135,6 @@ try {
   await context?.close().catch(() => {});
   await closeServer(proxy);
   await closeServer(local);
+  await closeServer(localIPv6);
   await rm(privateStore, { recursive: true, force: true });
 }
