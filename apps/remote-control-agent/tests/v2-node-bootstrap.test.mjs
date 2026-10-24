@@ -7,6 +7,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages, hasLegacySignedService } from "../scripts/bootstrap-node.mjs";
+import { verifyInstalledPinnedLinuxRelease } from "../scripts/verify-v2-release.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -456,4 +457,103 @@ test("signed service discovery is independent of retired loopback and Tunnel uni
     symlinkSync("/etc/passwd",signed);
     assert.throws(()=>hasLegacySignedService(home),/Untrusted/);
   }finally{rmSync(home,{recursive:true,force:true});}
+});
+
+/** Repeat the actual official GitHub metadata/download protocol without the network. */
+function immutableMockForNodeAsset(archive, {tag="v0.1.2",commit="a".repeat(40),
+  target=nativeTarget,publishedDigest=createHash("sha256").update(archive).digest("hex"),
+  immutable=true,redirect=false}={}) {
+  const api="https://api.github.com/repos/lirtual/remote-control-agent";
+  const send=async url=>{
+    if(url===api+"/releases/tags/"+tag)
+      return Response.json({id:71,tag_name:tag,draft:false,immutable,assets:[{
+        name:"remote-control-agent-"+tag+"-"+target+".tar.gz",
+        id:903,state:"uploaded",size:archive.length,
+        digest:"sha256:"+publishedDigest,url:api+"/releases/assets/903",
+      }]});
+    if(url===api+"/git/ref/tags/"+tag)
+      return Response.json({ref:"refs/tags/"+tag,object:{type:"commit",sha:commit}});
+    if(url===api+"/releases/assets/903") {
+      if(redirect)return new Response(null,{status:302,headers:{location:"http://127.0.0.1/internal"}});
+      return new Response(archive,{status:200,headers:{"content-type":"application/octet-stream"}});
+    }
+    throw Error("Unexpected public Release API request: "+url);
+  };
+  return {send};
+}
+/** The public GitHub Release API rejects toy assets <1024 bytes. Build a
+ * representative incompressible pinned fixture while preserving the exact
+ * trusted local tar layout and immutable digest requirements.
+ */
+function sizableApprovedNodeFixture() {
+  const f=localBootstrapFixture();
+  const content=Buffer.concat(Array.from({length:192},(_,i)=>
+    createHash("sha256").update("unique pinned release member "+i).digest()));
+  writeFileSync(path.join(f.x.dir,APP,"src/v2-main.js"),content,{mode:0o600});
+  const tar=spawnSync("tar",["--format=ustar","--owner=0","--group=0",
+    "--numeric-owner","--mode=u+rwX,go-rwx","-cf","-",
+    "bin","apps","bundle.json"],{cwd:f.x.dir,maxBuffer:2048*1024});
+  assert.equal(tar.status,0,tar.stderr.toString());
+  f.x.bytes=gzipSync(tar.stdout);
+  f.x.sha=createHash("sha256").update(f.x.bytes).digest("hex");
+  assert.ok(f.x.bytes.length>=1024);
+  writeFileSync(f.archive,f.x.bytes,{mode:0o600});
+  return f;
+}
+test("post-restart full installed tree equals independently re-fetched immutable Release",async()=>{
+  const f=sizableApprovedNodeFixture();
+  try{
+    const programs=ensurePrivatePrograms(f.home);
+    const root=stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    const {send}=immutableMockForNodeAsset(f.x.bytes);
+    const result=await verifyInstalledPinnedLinuxRelease({
+      tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,
+      target:nativeTarget,home:f.home,send,
+    });
+    assert.equal(result.verifiedRoot,root);
+    assert.equal(result.sha256,f.x.sha);
+    assert.deepEqual(readdirSync(programs),["v0.1.2-"+nativeTarget]);
+  }finally{f.cleanup();}
+});
+test("post-restart proven release refuses modified bytes, missing files, and extras",async()=>{
+  const f=sizableApprovedNodeFixture();
+  try{
+    const programs=ensurePrivatePrograms(f.home);
+    const root=stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    const {send}=immutableMockForNodeAsset(f.x.bytes);
+    const opts={tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,
+      target:nativeTarget,home:f.home,send};
+    const member=path.join(root,APP,"src","v2-main.js");
+    const original=readFileSync(member);
+    writeFileSync(member,"tampered");
+    await assert.rejects(verifyInstalledPinnedLinuxRelease(opts),/Modified installed/);
+    writeFileSync(member,original);
+    const extra=path.join(root,APP,"src","extra.js");
+    writeFileSync(extra,"extra",{mode:0o600});
+    await assert.rejects(verifyInstalledPinnedLinuxRelease(opts),/Installed program differs/);
+    rmSync(extra);
+    rmSync(member);
+    await assert.rejects(verifyInstalledPinnedLinuxRelease(opts),/Missing installed program/);
+  }finally{f.cleanup();}
+});
+test("post-restart proof rejects stale Git commit, wrong asset SHA and untrusted redirection",async()=>{
+  const f=sizableApprovedNodeFixture();
+  try{
+    const programs=ensurePrivatePrograms(f.home);
+    stageOrVerifyPinnedProgram(f.x.bytes,params(f.x),programs,"v0.1.2-"+nativeTarget);
+    const base={tag:"v0.1.2",commit:"a".repeat(40),sha256:f.x.sha,target:nativeTarget,home:f.home};
+    const good=immutableMockForNodeAsset(f.x.bytes);
+    await assert.rejects(verifyInstalledPinnedLinuxRelease({
+      ...base,commit:"b".repeat(40),send:good.send,
+    }),/tag does not resolve/);
+    await assert.rejects(verifyInstalledPinnedLinuxRelease({
+      ...base,sha256:"f".repeat(64),send:good.send,
+    }),/approval differs/);
+    await assert.rejects(verifyInstalledPinnedLinuxRelease({
+      ...base,send:immutableMockForNodeAsset(f.x.bytes,{immutable:false}).send,
+    }),/not published and immutable/);
+    await assert.rejects(verifyInstalledPinnedLinuxRelease({
+      ...base,send:immutableMockForNodeAsset(f.x.bytes,{redirect:true}).send,
+    }),/outside GitHub HTTPS/);
+  }finally{f.cleanup();}
 });

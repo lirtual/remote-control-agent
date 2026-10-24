@@ -295,3 +295,40 @@ export async function fetchAndStagePinnedRelease({tag,commit,target,destination,
   const result=await extractVerifiedAsset(pinned,bytes,destination);
   return { ...result,pinned };
 }
+
+/**
+ * Read-only post-reconnect provenance verification. Re-fetch the SAME official,
+ * immutable release and re-use the bootstrap's complete, byte-for-byte installed
+ * tree verifier. No secondary hash manifest, cache or extra database is needed.
+ *
+ * Call only with the persisted reviewed upgrade intent from the owner-local
+ * SQLite store, never with caller-selected URLs, directories or an unapproved
+ * "latest" tag. A false or missing result must leave the upgrade UNKNOWN.
+ */
+export async function verifyInstalledPinnedLinuxRelease({
+  tag,commit,sha256,target,home=os.homedir(),send=fetch,
+}) {
+  if (process.platform!=="linux" || process.getuid?.()===0 ||
+      target!=="linux-"+process.arch+"-glibc" ||
+      !hex.test(sha256) || !path.isAbsolute(home) ||
+      path.normalize(home)!==home) {
+    throw Error("Unsupported local upgrade verification context.");
+  }
+  // Validates official immutable Release, precise reviewed Git commit, tag,
+  // unique published asset metadata, digest and fixed GitHub HTTPS redirect
+  // boundary before comparing any owner-local executable bytes.
+  const release=await resolvePinnedRelease({tag,commit,target,send});
+  if (release.digest!==sha256)
+    throw Error("Upgrade approval differs from published asset digest.");
+  const archive=await downloadPinnedAsset(release,send);
+  // The existing locked bootstrap verifier checks owner-only paths, *all*
+  // archived file bytes and exact modes, and rejects extra/missing files,
+  // symlinks and hardlinks, never modifying the installed tree.
+  const {verifyExistingPinnedProgram}=await import("./bootstrap-node.mjs");
+  const parent=path.join(home,".local/share/mcp-workers/remote-control/programs");
+  const versionName=tag+"-"+target;
+  const verified=verifyExistingPinnedProgram(
+    archive,{expectedSha256:sha256,tag,target},parent,versionName,
+  );
+  return Object.freeze({verifiedRoot:verified,tag,commit,target,sha256});
+}
