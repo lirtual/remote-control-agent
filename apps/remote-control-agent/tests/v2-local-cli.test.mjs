@@ -219,7 +219,7 @@ test("portable installer prints a single CLI path, without promising to open the
   assert.match(source,/Pairing code \(10 min\):/);
   assert.match(source,/pairing_lookup, then explicitly pairing_approve/);
   assert.doesNotMatch(source,/MCP challenge \(12 chars\):/);
-  assert.match(source,/Ready: v2 service active/);
+  assert.match(source,/Ready: Agent active/);
   assert.match(source,/export PATH=/);
 });
 test("portable CLI hint prints PATH only when missing in the current terminal",()=>{

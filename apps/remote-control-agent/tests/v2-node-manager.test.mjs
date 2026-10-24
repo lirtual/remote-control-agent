@@ -177,14 +177,14 @@ test("Node uninstall asks for explicit exact confirmation before any action",asy
     }),/not confirmed/);
     assert.deepEqual(events,["review"]);
     assert.equal(await runInteractiveLocalManager(["uninstall"],{
-      ...base,ask:async()=>"UNINSTALL-V2"
+      ...base,ask:async()=>"UNINSTALL"
     }),0);
     assert.deepEqual(events,["review","review","execute"]);
     assert.match(output.text,/does NOT revoke cloud grants/);
     assert.match(output.text,/SQLite receipts are preserved/);
     assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
     await assert.rejects(runInteractiveLocalManager(["uninstall"],{
-      ...base,stdin:{isTTY:false},ask:async()=>"UNINSTALL-V2"
+      ...base,stdin:{isTTY:false},ask:async()=>"UNINSTALL"
     }),/interactive terminal/);
   }finally{cleanup(f);}
 });

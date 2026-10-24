@@ -178,7 +178,7 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   }
   if(cmd==="logs"){
     const state=inventory();
-    if(!state.unit){stdout.write("No managed v2 user service.\n");return 0;}
+    if(!state.unit){stdout.write("No installed Agent service.\n");return 0;}
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Logs require the local terminal");
     stdout.write("Local systemd logs may contain sensitive details; redact before sharing.\n");
     const result=invoke("journalctl",["--user","--unit",UNIT,"--no-pager",
@@ -264,13 +264,13 @@ export async function runInteractiveLocalManager(args,{
   stdout.write("Private keys and SQLite receipts are preserved; prior effects are NOT undone.\n");
   let answer;
   if(ask){
-    answer=await ask("Type UNINSTALL-V2 to confirm local removal: ");
+    answer=await ask("Type UNINSTALL to confirm local removal: ");
   }else{
     const rl=createInterface({input:stdin,output:stdout,terminal:true});
-    try{answer=await rl.question("Type UNINSTALL-V2 to confirm local removal: ");}
+    try{answer=await rl.question("Type UNINSTALL to confirm local removal: ");}
     finally{rl.close();}
   }
-  if(answer?.trim()!=="UNINSTALL-V2")throw Error("Local uninstall was not confirmed");
+  if(answer?.trim()!=="UNINSTALL")throw Error("Local uninstall was not confirmed");
   const result=execute(reviewed,{confirm:true});
   stdout.write(JSON.stringify(result,null,2)+"\n");
   return 0;

@@ -240,7 +240,7 @@ async function assertReceiptDatabaseCompatible(home, expectedSchema = 1) {
 }
 export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
-    throw new Error("Manual upgrade requires an owned v2 service.");
+    throw new Error("Manual upgrade requires an owned Agent service.");
   }
   // The local freeze socket must belong to THIS exact permanent identity,
   // not merely another same-user Agent or a service with a similar label.
@@ -251,14 +251,14 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
   const working = settings.filter(line => line.startsWith("WorkingDirectory="));
   const starts = settings.filter(line => line.startsWith("ExecStart="));
   if (working.length !== 1 || starts.length !== 1) {
-    throw new Error("Current v2 service has ambiguous executable ownership.");
+    throw new Error("Current Agent service has ambiguous executable ownership.");
   }
   const previousRoot = path.resolve(working[0].slice("WorkingDirectory=".length), "..", "..");
   const privatePrograms = path.join(home, ".local", "share", "mcp-workers", "remote-control", "programs");
   if (!previousRoot.startsWith(privatePrograms + path.sep) ||
       !starts[0].includes("ExecStart=" + path.join(previousRoot, "bin", "node") + " ") ||
       !starts[0].endsWith(path.join(previousRoot, "apps", "remote-control-agent", "src", "v2-main.js"))) {
-    throw new Error("Cannot upgrade an unverified/checkout-based current v2 Agent.");
+    throw new Error("Cannot upgrade an unverified or checkout-based Agent.");
   }
   for (const root of [previousRoot, path.resolve(path.dirname(newManifestPath))]) {
     const meta = await lstat(root);
@@ -357,7 +357,7 @@ export async function confirmLegacyV0111OfflineCutover({
   invoke=spawnSync,ask=null,
 }={}) {
   if (!stdin.isTTY || !stdout.isTTY)
-    throw new Error("Legacy v2 offline cutover requires a real local terminal.");
+    throw new Error("Legacy Agent offline cutover requires a real local terminal.");
   if (keyPath!==keyForInstallMode(home,"permanent"))
     throw new Error("Unexpected permanent identity for offline cutover.");
   const checkStopped=()=>{
@@ -365,12 +365,12 @@ export async function confirmLegacyV0111OfflineCutover({
       "--user","show",UNIT,"--property=ActiveState,SubState,MainPID","--no-pager",
     ],{encoding:"utf8",timeout:5000});
     if(result.error||result.status!==0||typeof result.stdout!=="string")
-      throw new Error("Cannot verify the stopped v2 service.");
+      throw new Error("Cannot verify the stopped Agent service.");
     const lines=result.stdout.trim().split("\n");
     if(lines.length!==3 || !lines.includes("MainPID=0") ||
        !lines.includes("ActiveState=inactive") || !lines.includes("SubState=dead") ||
        new Set(lines).size!==3) {
-      throw new Error("Legacy v2 must be manually stopped before offline cutover.");
+      throw new Error("Legacy Agent must be manually stopped before offline cutover.");
     }
   };
   const checkReceipts=()=>{
@@ -392,13 +392,13 @@ export async function confirmLegacyV0111OfflineCutover({
   stdout.write("Old Agent has no in-process Shell quiescence proof. Confirm all work is finished.\n");
   stdout.write("Service must remain stopped until the verified new Agent starts. SQLite and identity are retained.\n");
   let answer;
-  if(ask)answer=await ask("Type OFFLINE-V2-UPGRADE to confirm: ");
+  if(ask)answer=await ask("Type OFFLINE-AGENT-UPGRADE to confirm: ");
   else {
     const rl=createInterface({input:stdin,output:stdout,terminal:true});
-    try { answer=await rl.question("Type OFFLINE-V2-UPGRADE to confirm: "); }
+    try { answer=await rl.question("Type OFFLINE-AGENT-UPGRADE to confirm: "); }
     finally { rl.close(); }
   }
-  if(answer?.trim()!=="OFFLINE-V2-UPGRADE")
+  if(answer?.trim()!=="OFFLINE-AGENT-UPGRADE")
     throw new Error("Owner did not confirm one-time offline cutover.");
   // Re-check after the prompt. Do not auto-stop the live Agent.
   checkStopped();
@@ -410,7 +410,7 @@ export async function confirmLegacyV0111OfflineCutover({
  * must use explicit pinned rca upgrade and its rollback gate. */
 export function assertRepeatInstallSameVersion(unit, root, {home, keyPath} = {}) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
-    throw new Error("An unowned v2 service cannot be reused.");
+    throw new Error("An unowned Agent service cannot be reused.");
   }
   const values=unit.split("\n").filter(line=>line.startsWith("ExecStart="));
   const expected="ExecStart="+path.join(root,"bin/node")+" "+
@@ -424,9 +424,9 @@ export function assertRepeatInstallSameVersion(unit, root, {home, keyPath} = {})
     // binding first, not just a plausible ExecStart and trusted endpoint.
     let parsed;
     try { parsed = assertCanonicalV2UnitTemplate(unit, home); }
-    catch { throw new Error("Existing v2 service is noncanonical; manual review required."); }
+    catch { throw new Error("Existing Agent service is noncanonical; manual review required."); }
     if (parsed.root !== path.resolve(root) || parsed.keyPath !== keyPath) {
-      throw new Error("Existing v2 service identity or program differs; manual review required.");
+      throw new Error("Existing Agent service identity or program differs; manual review required.");
     }
   }
 }
@@ -435,7 +435,7 @@ export function assertRepeatInstallSameVersion(unit, root, {home, keyPath} = {})
 export function assertExistingServiceEndpoint(unit, endpoint) {
   const expected = "Environment=REMOTE_CONTROL_AGENT_ENDPOINT=" + trustedEndpoint(endpoint);
   if (!unit.split("\n").includes(expected)) {
-    throw new Error("Existing v2 service endpoint differs; manual review required.");
+    throw new Error("Existing Agent service endpoint differs; manual review required.");
   }
 }
 
@@ -550,7 +550,7 @@ async function readOwnedUnit(file) {
   }
   const text = await readFile(file, "utf8");
   if (!text.startsWith(MARKER + "\n")) {
-    throw new Error("An unrelated systemd service already occupies the v2 service name.");
+    throw new Error("An unrelated systemd service already occupies the Agent service name.");
   }
   return text;
 }
@@ -576,7 +576,7 @@ async function atomicUnitWrite(unitPath, content) {
 
 function assertCanonicalV2UnitTemplate(unit, home) {
   if (!unit || !unit.startsWith(MARKER + "\n")) {
-    throw new Error("Interrupted upgrade backup is not an owned v2 unit.");
+    throw new Error("Interrupted upgrade backup is not an owned Agent unit.");
   }
   const settings = unit.split("\n");
   const working = settings.filter(line => line.startsWith("WorkingDirectory="));
@@ -677,13 +677,13 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   const oldUnit = await assertRecoverablePreviousUnit(previous, home);
   let current;
   try { current = await readOwnedUnit(unitPath); }
-  catch { throw new Error("Current v2 unit cannot be verified; recovery backup preserved."); }
-  if (!current) throw new Error("Current v2 unit is missing; recovery backup preserved.");
+  catch { throw new Error("Current Agent unit cannot be verified; recovery backup preserved."); }
+  if (!current) throw new Error("Current Agent unit is missing; recovery backup preserved.");
   // A crashed activation may reference a staged program that is not yet
   // runnable. Validate its exact systemd template, but do not require the
   // interrupted new binary to exist in order to restore the old one.
   try { assertCanonicalV2UnitTemplate(current, home); }
-  catch { throw new Error("Current v2 unit is noncanonical; recovery backup preserved."); }
+  catch { throw new Error("Current Agent unit is noncanonical; recovery backup preserved."); }
   // A recovered binary must keep the same approved cloud endpoint and device
   // identity. Reject drift before touching systemd or deleting the backup.
   const settings = current.split("\n");
@@ -741,7 +741,7 @@ export async function installUnit(unitPath, content, previous) {
       } catch { /* Keep the durable backup for a later recovery attempt. */ }
     }
     try { run("systemctl", ["--user", "daemon-reload"]); } catch { /* unavailable */ }
-    throw new Error("The v2 user service could not be activated; original v1 services were not touched.");
+    throw new Error("The Agent service could not be activated; previous services were not touched.");
   }
 }
 
@@ -1061,7 +1061,7 @@ async function rePairRevokedDevice(options, keyPath, previous, stdin, stdout) {
   // touching the old identity files.
   await beginRevokedPromotion(keyPath, oldId, nextId);
   await resumeRevokedPromotion(options, keyPath, previous);
-  stdout.write("Revoked identity archived locally; new device ID paired. Activating v2 only.\n");
+  stdout.write("Previous identity archived; new device paired. Starting Agent.\n");
 }
 
 /**
@@ -1099,7 +1099,7 @@ export async function inspectInstallIdentity(options, keyPath, previous, {
   const existingKey = Boolean(await exists(keyPath));
   const existingId = Boolean(await exists(keyPath + ".device-id"));
   if (existingId && !existingKey) throw new Error("A local device ID exists without its private key.");
-  if (previous && !existingKey) throw new Error("Installed v2 service identity is missing; manual review required.");
+  if (previous && !existingKey) throw new Error("Installed Agent identity is missing; manual review required.");
   if (!existingKey) return "new";
   await ownerOnly(keyPath, 0o600);
   if (existingId) await ownerOnly(keyPath + ".device-id", 0o600);
@@ -1278,7 +1278,7 @@ export async function runLockedInstallerCli(argv, {
   });
   if (result.error) throw new Error("A local installer lock prerequisite is unavailable.");
   if (result.signal) throw new Error("Installer was interrupted; identity files were preserved.");
-  if (result.status === 75) throw new Error("Another v2 installer is already running.");
+  if (result.status === 75) throw new Error("Another Agent installer is already running.");
   // The child has already printed its sanitized error; do not print another.
   if (result.status !== 0) return result.status ?? 1;
   return 0;
@@ -1343,19 +1343,19 @@ export async function runInstaller(args, {
   }
   // A distinct temporary Agent may coexist with the installed permanent unit.
   if (options.foreground && previous && options.grantType !== "temporary") {
-    throw new Error("Foreground refuses to compete with an existing v2 systemd unit.");
+    throw new Error("An installed Agent service is already active; foreground refused.");
   }
 
   if (options.action === "uninstall") {
-    if (!previous) throw new Error("The dedicated v2 service is not installed.");
+    if (!previous) throw new Error("The Agent service is not installed.");
     run("systemctl", ["--user", "disable", "--now", UNIT]);
     await rm(unitPath);
     run("systemctl", ["--user", "daemon-reload"]);
-    stdout.write("Removed the v2 user service. Local keys retained; revoke the device from MCP separately.\n");
+    stdout.write("Agent service removed. Local identity retained; revoke the device separately.\n");
     return;
   }
   if ((options.action === "resume" && previous) || (options.action === "upgrade" && !previous)) {
-    throw new Error("Existing v2 service requires --upgrade; an absent service requires a first install.");
+    throw new Error("Existing Agent requires --upgrade; a missing Agent requires install.");
   }
   await mkdir(path.dirname(keyPath), { recursive: true, mode: 0o700 });
   const privateDirectory = await lstat(path.dirname(keyPath));
@@ -1366,7 +1366,7 @@ export async function runInstaller(args, {
 
   if (options.action === "resume") {
     if (!(await exists(keyPath)) || !(await exists(keyPath + ".device-id"))) {
-      throw new Error("Resume requires a completed local confirmation and an absent v2 service.");
+      throw new Error("Resume requires prior confirmation and an absent Agent service.");
     }
   }
 
@@ -1410,11 +1410,11 @@ export async function runInstaller(args, {
               : await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
             printPortableCliHint(stdout, launcher, home);
           }
-          stdout.write("Ready: v2 service active; existing identity retained.\n");
+          stdout.write("Ready: Agent active; identity retained.\n");
           if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
           return;
         }
-        stdout.write("Existing approved identity recovered; continuing v2 installation.\n");
+        stdout.write("Approved identity recovered; continuing installation.\n");
       } else {
         if (!stdin.isTTY || !stdout.isTTY) throw new Error("First pairing needs the device's interactive terminal.");
         if (state === "pending") stdout.write("Previous pairing not completed; retrying with the same private key.\n");
@@ -1480,12 +1480,12 @@ export async function runInstaller(args, {
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-    stdout.write("Ready: v2 service active (all paired-device tools enabled).\n");
+    stdout.write("Ready: Agent active.\n");
     printPortableCliHint(stdout, launcher, home);
     if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
   }
   if (!portable) {
-    stdout.write("v2 service active. Verify connectivity using authenticated MCP.\n");
+    stdout.write("Agent active. Verify MCP connectivity.\n");
   }
 }
 
@@ -1497,7 +1497,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // Upgrade failures need local-service guidance, not the pairing-specific
     // fallback used for enrollment failures. Keep output fixed and sanitized.
     if (process.argv.slice(2).includes("--upgrade")) {
-      process.stderr.write("Manual v2 upgrade failed. Verify the local service before retrying; no v1 service was changed.\n");
+      process.stderr.write("Upgrade failed. Inspect the Agent service before retrying.\n");
       process.exitCode = 1;
       return;
     }
@@ -1517,13 +1517,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       "Local and server device identities conflict.",
       "Pending enrollment could not be completed.",
       "Incomplete staged identity requires manual review.",
-      "Installed v2 service identity is missing; manual review required.",
-      "Existing v2 service endpoint differs; manual review required.",
+      "Installed Agent identity is missing; manual review required.",
+      "Existing Agent service endpoint differs; manual review required.",
       "Revoked foreground identity requires manual review.",
       "New device identity was not verified.",
       "Old identity archive already exists.",
       "A local installer lock prerequisite is unavailable.",
-      "Another v2 installer is already running.",
+      "Another Agent installer is already running.",
       "Installer was interrupted; identity files were preserved.",
     ];
     const detail = error instanceof PendingIdentityConflictError
@@ -1533,7 +1533,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
         : error instanceof Error && safeErrors.includes(error.message)
           ? error.message + " " : "Pairing state is uncertain; existing identity files were preserved. ";
     process.stderr.write(detail +
-      "v2 installation/upgrade/removal failed; no v1 service was changed.\n");
+      "Agent operation failed. Previous services were not changed.\n");
     process.exitCode = 1;
   });
 }

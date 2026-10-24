@@ -268,7 +268,7 @@ test("foreground reuses signed read-only v2 entrypoint and skips systemd preflig
   assert.match(src, /if \(options.foreground\)/);
   assert.match(src, /await startForeground\(\{ endpoint: trustedEndpoint\(options.endpoint\), keyPath \}\)/);
   assert.match(src, /await import\(portable \? "\.\.\/src\/v2-main\.js" : "\.\.\/src\/v2-main\.ts"\)/);
-  assert.match(src, /Foreground refuses to compete with an existing v2 systemd unit/);
+  assert.match(src, /An installed Agent service is already active; foreground refused/);
   assert.match(src, /ownerOnly\(keyPath \+ "\.device-id", 0o600\)/);
   assert.doesNotMatch(src, /nohup|supervisord|cron|pm2/);
 });
@@ -444,7 +444,7 @@ test("one installer command dispatches verified revoke to guarded local challeng
   assert.match(src, /if \(state === "revoked"\)/);
   assert.match(src, /await rePairRevokedDevice\(options, keyPath, identityPrevious, stdin, stdout\)/);
   assert.match(src, /if \(previous && options\.grantType !== "temporary"\) \{/);
-  assert.match(src, /Ready: v2 service active; existing identity retained/);
+  assert.match(src, /Ready: Agent active; identity retained/);
   assert.match(src, /ensureApprovedPermanentService\(run, pending\)/);
   assert.match(src, /if \(pending\) await clearInitialActivation\(marker\)/);
   assert.match(src, /await pairFreshPending\(options, keyPath, stdin, stdout, state === "pending"\)/);
@@ -870,7 +870,7 @@ test("installer CLI uses a private crash-released Linux flock without adding a d
     assert.equal((await stat(path.dirname(lock))).mode & 0o777, 0o700);
     await assert.rejects(runLockedInstallerCli([], {
       home: dir, invoke: () => ({ status: 75 }),
-    }), /Another v2 installer is already running/);
+    }), /Another Agent installer is already running/);
     await assert.rejects(runLockedInstallerCli([], {
       home: dir, invoke: () => ({ error: Error("missing flock") }),
     }), /installer lock prerequisite is unavailable/);

@@ -76,35 +76,29 @@ from the device's already-configured Worker installer, then uses the existing
 GitHub Release verifier, pinned SHA-256 checks, installer, and binary
 activation/rollback. Fetched shell content is never executed by this CLI.
 
-### One-time upgrade of an installed v0.1.11 Agent
+### Previously installed v0.1.11 Agent (legacy migration)
 
-The published v0.1.11 is already full-tools but has no in-process upgrade
-handshake. **Only after a newer immutable Agent Release has been approved and
-pinned by the Worker**, the owner can perform this single offline cutover from
-the **ordinary WSL/Linux terminal**, in a maintenance window:
+The original full-tools v0.1.11 Agent lacked a live-work freeze handshake.
+The production WSL2 owner completed its **one-time** signed-WSS upgrade to
+the verified immutable v0.1.20 on 2026-10-24. The same device ID, local
+identity and historical operation receipts were retained. This step has
+already been accepted; **do not repeat it**.
 
-1. Finish all Remote Control Shell, file-writing, and other operations. The
-   old Agent cannot prove quiescence; this is an explicit operator decision.
-2. Stop **only the v2 Agent**: `systemctl --user stop remote-control-v2-agent.service`.
-   Do not use Remote Control to initiate the stop: the connection will drop.
-3. In the *same local terminal*, run the approved Worker installer:
-   `curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade`.
-   It requires service `inactive/dead`, PID 0, an unlocked/intact SQLite
-   receipt store, exact old v0.1.11 program/identity ownership, and the
-   interactive `OFFLINE-V2-UPGRADE` confirmation.
-4. Check `rca version`, the local service, and signed MCP connectivity. The
-   private identity and historical SQLite receipts remain in place.
+For a separate old v0.1.11 installation, the immutable v0.1.11 `rca upgrade`
+cannot upgrade from the full-tools profile, and the public Worker `install.sh`
+does **not** accept an `--upgrade` argument. Do not use
+`curl ... | sh -s -- --upgrade` or stop the live Agent over its own MCP session.
+Any exceptional offline transition must instead use a reviewed, SHA-256-verified
+immutable Release bootstrap in explicit `--upgrade` mode from a genuine
+owner-local terminal, and complete that Release's exact offline consent prompt.
+Never bypass its confirmation or assume the old service will restart on failure.
 
-If installation fails **before activation**, the old service may remain
-stopped. Inspect it locally; after an explicit decision, it can be started
-again using `systemctl --user start remote-control-v2-agent.service`.
-An activation failure uses the existing durable systemd rollback to restore
-the previous v2 unit. No operation is replayed by the installer.
-
-Future Linux Agent releases use the owner-local Unix-socket freeze instead:
-new work is rejected after the freeze begins; active, starting or unknown work
-blocks upgrade. No v1 compatibility layer or additional service is required.
-The immutable v0.1.11/v0.1.12 Release archives are unchanged by source-only refactors.
+The WSL2 deployment still uses a historical systemd unit name while the
+[canonical Linux service migration](./docs/canonical-linux-agent-cutover.md)
+remains under review. It is a **separate** step requiring a newer reviewed
+immutable Release, isolated rollback validation and independent Tunnel
+dependency checks. Do not rename services or remove the Tunnel manually.
+Released v0.1.11/v0.1.20 archives remain unchanged.
 
 ## Native Windows x64 installation and upgrade
 

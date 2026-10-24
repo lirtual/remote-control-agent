@@ -389,7 +389,7 @@ export function executeNodeBootstrap(options,{
       ...(options.upgrade?["--upgrade"]:[])
     ],{stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""}});
     if(processResult.error||processResult.signal||processResult.status!==0)
-      throw Error("Exclusive v2 installation could not complete");
+      throw Error("Exclusive Agent installation could not complete");
     return 0;
   }
   // The reviewed new Release must first be staged and digest-checked. Only

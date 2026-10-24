@@ -182,7 +182,7 @@ test("#77 interrupted recovery refuses a noncanonical current unit before system
     await writeFile(unitPath,altered,{mode:0o600});
     const backup=unitPath+".upgrade-backup";
     await writeFile(backup,from,{mode:0o600});
-    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is noncanonical/);
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current Agent unit is noncanonical/);
     assert.equal(await readFile(unitPath,"utf8"),altered);
     assert.equal(await readFile(backup,"utf8"),from);
     await assert.rejects(access(logs),{code:"ENOENT"});
@@ -217,7 +217,7 @@ test("#77 interrupted recovery keeps backup if existing unit is absent", async()
   await withFakeUserService(async ({unitPath,from,home})=>{
     const backup=unitPath+".upgrade-backup";
     await writeFile(backup,from,{mode:0o600});
-    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is missing/);
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current Agent unit is missing/);
     assert.equal(await readFile(backup,"utf8"),from);
   });
 });
