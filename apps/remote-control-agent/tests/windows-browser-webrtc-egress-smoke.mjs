@@ -152,13 +152,17 @@ try {
   assert.ok(results.some(x=>x.mode!=="documented-policy" && x.validStunV6Hits>0),
     "No unrestricted IPv6 STUN positive control; restricted zero is inconclusive.");
   const documented = results.find(x => x.mode === "documented-policy");
-  // This is a real browser security regression gate, not a passive
-  // observation: no positive-control-qualified restricted UDP or TURN TCP
-  // may leave the browser in the controlled IPv4/IPv6 fixture.
+  // A nonzero unrestricted STUN baseline qualifies only the UDP checks.
+  // TURN TCP has its own independent positive-control requirement: existing
+  // CI has seen tcpHits=0 even without the documented WebRTC policy, so its
+  // zero in the restricted mode CANNOT substantiate TURN TCP confinement.
+  // Keep the negative assertion but report the evidence gap explicitly.
   assert.equal(documented.validStunHits, 0,
     "Restricted WebRTC leaked non-proxied IPv4 STUN.");
   assert.equal(documented.validStunV6Hits, 0,
     "Restricted WebRTC leaked non-proxied IPv6 STUN.");
+  const turnTcpPositiveControl = results.some(x =>
+    x.mode !== "documented-policy" && x.tcpHits > 0);
   assert.equal(documented.tcpHits, 0,
     "Restricted WebRTC reached direct local TURN TCP.");
   const verdict = documented.validStunHits === 0 && documented.validStunV6Hits === 0 && documented.tcpHits === 0
@@ -166,6 +170,8 @@ try {
     : "DIRECT_WEBRTC_TRAFFIC_OBSERVED";
   console.log("WINDOWS_WEBRTC_POLICY_COMPARISON=" + JSON.stringify({
     channel, verdict, modes: results.map(x=>({mode:x.mode,udp4:x.validStunHits,udp6:x.validStunV6Hits,tcp:x.tcpHits})),
+    turnTcpEvidence: turnTcpPositiveControl ? "RESTRICTED_DENIED_WITH_POSITIVE_CONTROL"
+      : "INCONCLUSIVE_NO_UNRESTRICTED_TCP_POSITIVE_CONTROL",
     productionIsolation:"NOT_TESTED", osConfinement:"NOT_TESTED",
   }));
 } finally {
