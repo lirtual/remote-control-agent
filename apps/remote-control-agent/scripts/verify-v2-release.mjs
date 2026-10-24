@@ -15,7 +15,7 @@ const REPO="lirtual/remote-control-agent";
 const API="https://api.github.com/repos/"+REPO;
 const MAX_ARCHIVE=180*1024*1024;
 const MAX_TAR=240*1024*1024;
-const ALLOWED_TARGETS=new Set(["linux-x64-glibc","linux-arm64-glibc"]);
+const ALLOWED_TARGETS=new Set(["linux-x64-glibc","linux-arm64-glibc","windows-x64"]);
 // Explicitly pinned Playwright 1.64.1 browser-core runtime candidate.
 // These paths are never allowed without an exact opt-in release manifest.
 export const PINNED_PLAYWRIGHT_VERSION="1.64.1";
@@ -39,7 +39,8 @@ const sha=/^[a-f0-9]{40}$/;
 const hex=/^[a-f0-9]{64}$/;
 const vtag=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/;
 const apiHeaders={"accept":"application/vnd.github+json","x-github-api-version":"2026-03-10","user-agent":"mcp-workers-remote-control-agent-installer"};
-export const releaseAssetName=(tag,target)=>"remote-control-agent-"+tag+"-"+target+".tar.gz";
+export const releaseAssetName=(tag,target)=>"remote-control-agent-"+tag+"-"+target+
+  (target==="windows-x64" ? ".zip" : ".tar.gz");
 
 function validateRequest({tag,commit,target}) {
   if (!vtag.test(tag) || !sha.test(commit) || !ALLOWED_TARGETS.has(target)) {
@@ -125,7 +126,7 @@ export async function resolvePinnedRelease({tag,commit,target,send=fetch}) {
   if(matches.length!==1) throw new Error("Missing or duplicate qualified Release asset.");
   const asset=matches[0];
   if(!Number.isSafeInteger(asset.id) || asset.id<1 || asset.state!=="uploaded" ||
-      !Number.isSafeInteger(asset.size) || asset.size<1024 || asset.size>MAX_ARCHIVE ||
+      !Number.isSafeInteger(asset.size) || asset.size<(target==="windows-x64" ? 100000 : 1024) || asset.size>MAX_ARCHIVE ||
       typeof asset.digest!=="string" || !/^sha256:[a-f0-9]{64}$/.test(asset.digest) ||
       asset.url!==API+"/releases/assets/"+asset.id) {
     throw new Error("Release asset ID, size or official SHA-256 digest is invalid.");
