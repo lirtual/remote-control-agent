@@ -80,7 +80,23 @@ export function comparePinnedWindowsZipToInstalled(
  const outcome=spawnSync(executable,["-NoProfile","-NonInteractive","-EncodedCommand",
    Buffer.from(source,"utf16le").toString("base64")],
    {encoding:"utf8",timeout:60000,maxBuffer:100000,windowsHide:true});
- if(outcome.error||outcome.status!==0)throw Error("Pinned ZIP SHA-256 mismatch or archive inventory unavailable");
+ if(outcome.error||outcome.status!==0){
+   // Windows PowerShell may serialize errors as CLIXML. Only report one of
+   // our own fixed error categories; do not echo paths, credentials, or raw
+   // PowerShell diagnostics to the caller or CI logs.
+   const trace=outcome.stderr??"";
+   const categories=[
+     ["Approved ZIP digest mismatch","digest"],
+     ["ZIP member count","member-count"],
+     ["Unsafe ZIP name","unsafe-member"],
+     ["ZIP link or device","link-or-device"],
+     ["Unsafe directory","directory"],
+     ["ZIP bomb","size"],
+   ] as const;
+   const code=categories.find(([phrase])=>trace.includes(phrase))?.[1]??
+     (outcome.error?"process-failure":"runtime-failure");
+   throw Error("Pinned ZIP SHA-256 mismatch or archive inventory unavailable ("+code+")");
+ }
  const parsed:unknown=JSON.parse(outcome.stdout.trim());
  const rows=Array.isArray(parsed)?parsed:[parsed];
  if(rows.length<8||rows.length>80)throw Error("Invalid ZIP member count");
