@@ -358,8 +358,10 @@ jobs:
           # Disposable only: validate Chromium's actual proxy routing for
           # redirects, localhost, subresources and WebSocket before any Agent
           # browser policy change. This is not an SSRF-isolation acceptance.
-          & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-egress-boundary-smoke.mjs $extracted
-          if ($LASTEXITCODE -ne 0) { throw 'Windows proxy boundary probe failed' }
+          foreach ($channel in @('chrome', 'msedge')) {
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-egress-boundary-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel proxy boundary probe failed" }
+          }
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
           if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }
 
