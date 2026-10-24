@@ -8,7 +8,7 @@ import os from "node:os";
 import {comparePinnedWindowsZipToInstalled} from "../src/upgrade-windows-zip-provenance.ts";
 
 const windows=process.platform==="win32"&&process.arch==="x64"?test:test.skip;
-function runPS(script:string):void {
+function runPS(script:string):string {
  const exe=path.win32.join(process.env.SystemRoot!,"System32","WindowsPowerShell","v1.0","powershell.exe");
  const result=spawnSync(exe,["-NoProfile","-NonInteractive","-EncodedCommand",
    Buffer.from(script,"utf16le").toString("base64")],
