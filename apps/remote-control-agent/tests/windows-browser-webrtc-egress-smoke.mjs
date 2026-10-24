@@ -17,8 +17,16 @@ if (!stage || !path.isAbsolute(stage) || !["chrome","msedge"].includes(channel))
 const {chromium}=await import(pathToFileURL(path.join(stage,
   "apps/remote-control-agent/node_modules/playwright-core/index.mjs")).href);
 const udp=dgram.createSocket("udp4");
-let udpHits=0, tcpHits=0;
-udp.on("message",()=>{udpHits++;});
+let tcpHits=0;
+const stunMessages=[];
+udp.on("message",(payload,remote)=>{
+  // Count only RFC 5389 STUN/TURN packets, not unrelated UDP on the runner.
+  // A valid STUN header has top two type bits 0 and magic cookie 0x2112A442.
+  if (payload.length < 20 || (payload[0] & 0xc0) !== 0 ||
+      payload.readUInt32BE(4) !== 0x2112a442 ||
+      remote.address !== "127.0.0.1") return;
+  stunMessages.push({type:payload.readUInt16BE(0),sourcePort:remote.port});
+});
 const tcp=net.createServer(socket=>{
   tcpHits++;
   socket.on("error",()=>{});
@@ -54,7 +62,7 @@ try{
       // A/B characterization: baseline is required to distinguish a real
       // browser probe from an inert STUN/TURN fixture. Neither result is a
       // substitute for OS-level network isolation.
-      const beforeUdp=udpHits, beforeTcp=tcpHits;
+      const beforeUdp=stunMessages.length, beforeTcp=tcpHits;
       const args=["--proxy-bypass-list=<-loopback>","--disable-quic"];
       if(mode==="proxy-udp-policy")
         args.push("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
@@ -84,9 +92,12 @@ try{
             return {webrtcAvailable:true,gatherState:pc.iceGatheringState};
           }finally{pc.close();}
         },{uport,tport});
-        const deltaUdp=udpHits-beforeUdp, deltaTcp=tcpHits-beforeTcp;
+        const deltaUdp=stunMessages.length-beforeUdp, deltaTcp=tcpHits-beforeTcp;
+        const types=[...new Set(stunMessages.slice(beforeUdp).map(x=>x.type))];
+        const sourcePorts=[...new Set(stunMessages.slice(beforeUdp).map(x=>x.sourcePort))];
         console.log("WINDOWS_WEBRTC_PROXY_EGRESS_OBSERVATION="+JSON.stringify({
           channel,mode,...result,udpHits:deltaUdp,tcpHits:deltaTcp,
+          stunTypes:types,uniqueSourcePorts:sourcePorts.length,
           strictIsolation:deltaUdp===0&&deltaTcp===0?"NOT_PROVEN":"FAILED",
           osNetworkConfinement:"NOT_TESTED"
         }));
@@ -94,6 +105,9 @@ try{
         await context.close().catch(()=>{});
         context=undefined;
       }
+      // Permit STUN retransmissions from the previous peer connection to
+      // finish before measuring a second, separately launched process.
+      await new Promise(resolve=>setTimeout(resolve,750));
     }
     // This is intentionally an observation, NOT an assertion of containment.
     // Future integration acceptance MUST assert zero hits with a separately
