@@ -163,7 +163,32 @@ test("activation failure restores legacy service and restarts original signed-WS
     assert.ok(system.calls.includes("enable --now remote-control-v2-agent.service"));
     assert.ok(system.calls.includes("enable --now remote-control-tunnel.service"));
     assert.equal((await lstat(path.join(x.plan.backupDir,"journal.json"))).mode&0o777,0o600);
+    await assert.rejects(lstat(path.join(x.unitDir,".remote-control-agent.restore.tmp")),{code:"ENOENT"});
   } finally {await x.dispose();}
+});
+
+test("failed automatic rollback never truncates the canonical service and permits journal recovery",async()=>{
+  const x=await fixture();
+  try{
+    // Simulate an interrupted or unrelated owner-local rollback staging file.
+    // The safe O_EXCL stage must fail rather than truncate this or the live unit.
+    const stage=path.join(x.unitDir,".remote-control-agent.restore.tmp");
+    await writeFile(stage,"INCOMPLETE", {mode:0o600});
+    const sys=fakeSystemctl({failActivate:true});
+    await assert.rejects(applyServiceCutover(x.plan,{systemctl:sys.invoke}),
+      /rollback uncertain/);
+    assert.equal(await readFile(stage,"utf8"),"INCOMPLETE");
+    assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),
+      x.plan.canonical);
+    assert.equal((await lstat(path.join(x.plan.backupDir,"journal.json"))).mode&0o777,0o600);
+    // The explicit offline rollback uses its own staged atomic rename, so
+    // backup and original identity remain independently recoverable.
+    const recovered=await rollbackServiceCutover({home:x.home,systemctl:fakeSystemctl().invoke});
+    assert.equal(recovered.status,"legacy_restored");
+    assert.equal(await readFile(path.join(x.unitDir,"remote-control-agent.service"),"utf8"),
+      x.legacy);
+    assert.equal((await readFile(x.key+".device-id","utf8")).trim(),id);
+  }finally{await x.dispose();}
 });
 
 test("owner-local rollback from inactive canonical unit restores exact previous unit",async()=>{
