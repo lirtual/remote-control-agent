@@ -23,7 +23,7 @@ New-Item -ItemType Directory -Path $folder | Out-Null
 try {
   $cmd = 'call "' + $vcvars + '" >nul && cl.exe /nologo /W4 /WX /O2 /MT /EHsc /std:c++17 /DUNICODE /D_UNICODE /Fo"' +
     (Join-Path $folder 'probe.obj') + '" /Fe"' + $exe + '" "' + $source +
-    '" /link /SUBSYSTEM:CONSOLE userenv.lib ws2_32.lib advapi32.lib'
+    '" /link /SUBSYSTEM:CONSOLE userenv.lib ws2_32.lib advapi32.lib fwpuclnt.lib rpcrt4.lib'
   & cmd.exe /d /s /c $cmd
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
     throw 'Windows AppContainer probe build failed'
