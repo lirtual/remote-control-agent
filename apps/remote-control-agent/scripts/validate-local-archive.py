@@ -28,7 +28,7 @@ def verify_refuses_unsafe_onboarding(node, installer, root):
     if result.returncode == 0:
         raise SystemExit("noninteractive portable installer activated unexpectedly")
 
-    # Real PTY: the owner must choose; an invalid selection must fail closed
+    # Real PTY: the owner must explicitly choose; Esc must cancel safely
     # *before* any pairing request or identity key is produced.
     master, slave = pty.openpty()
     proc = subprocess.Popen(cli, env=env, stdin=slave, stdout=slave, stderr=slave,
@@ -48,8 +48,8 @@ def verify_refuses_unsafe_onboarding(node, installer, root):
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Choose [1-2]:" in transcript and not challenged:
-                os.write(master, b"x\n")
+            if "1. Permanent".encode() in transcript and "2. Temporary".encode() in transcript and not challenged:
+                os.write(master, b"\x1b")
                 challenged = True
             if proc.poll() is not None:
                 break
@@ -109,8 +109,8 @@ def verify_node_bootstrap_offline(node, bootstrap, archive, tag, work):
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Choose [1-2]:" in transcript and not rejected:
-                os.write(master,b"x\n")
+            if "1. Permanent".encode() in transcript and "2. Temporary".encode() in transcript and not rejected:
+                os.write(master,b"\x1b")
                 rejected = True
             if proc.poll() is not None:
                 break

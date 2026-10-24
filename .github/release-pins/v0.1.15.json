@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.15",
+  "source_sha": "7a90504a22e3ea0c302c4c5a7d5defeb72ea7719",
+  "candidate_run_id": 39976701872,
+  "release_title": "Remote Control Agent v0.1.15 — Unified Onboarding",
+  "release_notes": "docs/releases/v0.1.15.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.15-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.15-ubuntu-24.04",
+      "sha256": "4c5c9733a37061a7223ff1ba1a019a838c105be462e04b4f73352205fa0ea1c9"
+    },
+    {
+      "name": "remote-control-agent-v0.1.15-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.15-ubuntu-24.04-arm",
+      "sha256": "b6c0b7079a090b9fddef11c27211169881b4e51ef99e36ac19f8f9678d0613d7"
+    },
+    {
+      "name": "remote-control-agent-v0.1.15-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.15-windows-x64",
+      "sha256": "eedc514831968c03447befe2cc7e125b89eca328a524e649dde58f4e9fb4e94d"
+    }
+  ]
+}

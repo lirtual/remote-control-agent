@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, resumePendingWindowsActivation, reconcileWindowsOnboard } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -26,9 +27,13 @@ test("All Windows filesystem parsers reuse the same checked path contract", () =
 });
 test("Windows preview CLI fails closed on untrusted flags and endpoints", () => {
   assert.equal(parseWindowsAgentArgs(["status"]).action, "status");
+  assert.equal(parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/"]).action, "onboard");
+  assert.throws(() => parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/", "--grant", "temporary"]));
   assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
   assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
+  assert.equal(parseWindowsAgentArgs(["re-pair", "--endpoint", "https://rca.example.test/"]).action, "re-pair");
+  assert.throws(() => parseWindowsAgentArgs(["re-pair", "--endpoint", "https://rca.example.test/", "--grant", "temporary"]));
   const temporaryPair = parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/",
     "--name", "P13-disposable", "--grant", "temporary"]);
   assert.equal(temporaryPair.grant, "temporary");
@@ -38,6 +43,9 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["rollback", "--version", "v0.1.8"]).action, "rollback");
   for (const args of [
     ["pair", "--endpoint", "http://example.test/"],
+    ["re-pair"],
+    ["re-pair", "--endpoint", "http://example.test/"],
+    ["re-pair", "--endpoint", "https://example.test/", "--version", "v0.1.0"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "permanent"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "temporary", "--grant", "temporary"],
     ["pair", "--endpoint", "https://example.test/", "--grant", "invalid"],
@@ -60,4 +68,143 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(windowsAgentStore("C:\\Users\\ray\\AppData\\Local"),
     "C:\\Users\\ray\\AppData\\Local\\mcp-workers\\remote-control");
   assert.throws(() => windowsAgentStore("\\\\server\\data"));
+});
+
+
+test("temporary approved retry resumes only the foreground session, without re-pair or user task", async () => {
+  const actions: string[][] = [];
+  await startApprovedTemporaryAgent("https://rca.example.test/", async args => {
+    actions.push(args);
+  });
+  assert.deepEqual(actions, [["run", "--endpoint", "https://rca.example.test/"]]);
+});
+
+
+test("Windows task enable requires the active signed grant, not only a local device-id file", async () => {
+  const id = "cdc1ba24-ed48-4f2e-9191-875ce6be5af0";
+  const checks: string[][] = [];
+  const verifier = async (endpoint: string, keyPath: string) => {
+    checks.push([endpoint, keyPath]);
+    return id;
+  };
+  const url = "https://rca.example.test/";
+  const key = "C:\\Users\\Test\\v2-identity.pem";
+  assert.equal(await assertSignedWindowsGrant(url, key, id, verifier), id);
+  assert.deepEqual(checks, [[url, key]]);
+  await assert.rejects(assertSignedWindowsGrant(url, key,
+    "00000000-0000-0000-0000-000000000000", verifier), /conflict|signed|grant/i);
+  await assert.rejects(assertSignedWindowsGrant(url, key, id,
+    async () => { throw new Error("owner grant revoked"); }), /revoked/);
+  assert.equal(checks.length, 2, "one verifier invocation per local claim");
+});
+
+
+test("Windows user-logon task cannot be enabled for temporary or malformed grant modes", () => {
+  assert.equal(assertWindowsAutostartMode("permanent"), true);
+  assert.throws(() => assertWindowsAutostartMode(undefined), /permanent|unknown/i); // older pair also allowed temporary grants
+  assert.throws(() => assertWindowsAutostartMode("temporary"), /permanent/i);
+  assert.throws(() => assertWindowsAutostartMode("unknown"), /permanent/i);
+});
+
+
+test("Windows onboarding resumes only a marked incomplete activation", async () => {
+  const calls: string[] = [];
+  const task = (action: "Enable" | "Start") => { calls.push(action); };
+  const cleared = async () => { calls.push("Clear"); };
+  // Enable succeeded, Start failed: the task exists but is not running.
+  await resumePendingWindowsActivation(true, {installed:true, running:false}, task, cleared);
+  assert.deepEqual(calls, ["Start", "Clear"]);
+  calls.length = 0;
+  // Owner stopped a previously completed Agent: no marker, no restart.
+  await resumePendingWindowsActivation(false, {installed:true, running:false}, task, cleared);
+  assert.deepEqual(calls, []);
+  // A terminated first registration may need both operations.
+  await resumePendingWindowsActivation(true, {installed:false, running:false}, task, cleared);
+  assert.deepEqual(calls, ["Enable", "Start", "Clear"]);
+  calls.length = 0;
+  await resumePendingWindowsActivation(true, {installed:true, running:true}, task, cleared);
+  assert.deepEqual(calls, ["Clear"]);
+});
+
+test("Windows onboarding retains pending state on failed task activation", async () => {
+  const calls: string[] = [];
+  await assert.rejects(resumePendingWindowsActivation(true, {installed:true,running:false},
+    () => { throw Error("Task Start failed"); }, async () => {calls.push("Clear");}), /Start failed/);
+  assert.equal(calls.length, 0);
+  await assert.rejects(resumePendingWindowsActivation(true, {installed:false,running:false},
+    (action) => {calls.push(action); if(action==="Start") throw Error("Task Start failed");},
+    async () => {calls.push("Clear");}), /Start failed/);
+  assert.deepEqual(calls, ["Enable","Start"]);
+});
+
+test("one-command repeat install leaves a valid signed device and running task untouched", async () => {
+  const calls: string[] = [];
+  const result = await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => "11111111-1111-4111-8111-111111111111",
+    status: () => { calls.push("status"); return { installed: true, running: true }; },
+    stop: () => { calls.push("stop"); },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); },
+  });
+  assert.equal(result, "unchanged");
+  assert.deepEqual(calls, [], "verified healthy device has no side effects");
+});
+
+test("one-command expired grant continues to owner-approved re-pair and restarts task", async () => {
+  const calls: string[] = [];
+  let running = true;
+  const result = await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => { throw new DeviceSessionRejectedError("missing grant", 404); },
+    status: () => ({installed: true, running}),
+    stop: () => { calls.push("stop"); running = false; },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); running = true; },
+  });
+  assert.equal(result, "restored");
+  assert.deepEqual(calls, ["stop", "re-pair", "start"]);
+  assert.equal(running, true);
+});
+
+test("signed but mismatched old ID is repaired without another cloud grant", async () => {
+  const calls: string[] = [];
+  await reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => "22222222-2222-4222-8222-222222222222",
+    status: () => ({ installed: true, running: false }),
+    stop: () => { calls.push("stop"); },
+    rePair: async () => { calls.push("re-pair"); },
+    start: () => { calls.push("start"); },
+  });
+  assert.deepEqual(calls, ["re-pair", "start"]);
+});
+
+test("403 and network failure never stop an existing Windows task or create pending authorization", async () => {
+  for (const err of [new DeviceSessionRejectedError("forbidden", 403), new Error("network")]) {
+    const calls: string[] = [];
+    await assert.rejects(reconcileWindowsOnboard({
+      currentId: "11111111-1111-4111-8111-111111111111",
+      verify: async () => { throw err; },
+      status: () => { calls.push("status"); return {installed:true,running:true}; },
+      stop: () => { calls.push("stop"); },
+      rePair: async () => { calls.push("re-pair"); },
+      start: () => { calls.push("start"); },
+    }), e => e === err);
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("failed owner approval never restarts or replaces an existing device", async () => {
+  let running = false;
+  const calls: string[] = [];
+  await assert.rejects(reconcileWindowsOnboard({
+    currentId: "11111111-1111-4111-8111-111111111111",
+    verify: async () => { throw new DeviceSessionRejectedError("missing", 404); },
+    status: () => ({ installed: true, running }),
+    stop: () => { calls.push("stop"); running = false; },
+    rePair: async () => { calls.push("re-pair"); throw Error("MCP approval missing"); },
+    start: () => { calls.push("start"); running = true; },
+  }), /approval missing/);
+  assert.deepEqual(calls, ["re-pair"]);
 });

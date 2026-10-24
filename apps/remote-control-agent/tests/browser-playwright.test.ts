@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { connect } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { BrowserType } from "playwright-core";
 import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
-function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
+function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void>; contextCloseWait?: Promise<void> } = {}) {
   const calls: string[] = [];
+  let proxyEndpoint: string | undefined;
+  const contextCloseListeners: Array<() => void> = [];
   let requestFilter: ((route: {
     request(): {url(): string};
     continue(): Promise<void>;
@@ -27,6 +30,9 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
     },
   };
   const context = {
+    on: (event: string, handler: () => void) => {
+      if (event === "close") contextCloseListeners.push(handler);
+    },
     pages: () => options.restoredUrl ? [{url:()=>options.restoredUrl,close:async()=>{}}] : [],
     newPage: async () => {
       assert.ok(requestFilter, "Request filtering must precede page creation.");
@@ -37,7 +43,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       requestFilter=filter;
       calls.push("context-route");
     },
-    close: async () => {calls.push("context-close");},
+    close: async () => {calls.push("context-close"); if (options.contextCloseWait) await options.contextCloseWait;},
   };
   const driver = {
     launchPersistentContext: async (profile:string,settings: Record<string,unknown>) => {
@@ -45,13 +51,24 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.equal(settings.headless,false);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
+      const proxy=settings.proxy as {server:string;bypass:string};
+      assert.match(proxy.server,/^http:\/\/127\.0\.0\.1:[0-9]+$/);
+      assert.equal(proxy.bypass,"<-loopback>");
+      proxyEndpoint=proxy.server;
+      assert.deepEqual(settings.args,[
+        "--proxy-bypass-list=<-loopback>",
+        "--disable-quic",
+        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+      ]);
       calls.push("channel:"+String(settings.channel));
       calls.push("executable:"+String(settings.executablePath));
       if (options.launchWait) await options.launchWait;
       return context;
     },
   } as unknown as BrowserType<{}>;
-  return {driver,calls,
+  return {driver,calls,proxyEndpoint:()=>proxyEndpoint,
+    simulateContextExit: () => contextCloseListeners.forEach(handler => handler()),
     request:async (url:string) => {
       assert.ok(requestFilter);
       let outcome="";
@@ -91,6 +108,14 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.equal(browser.status()?.backend,"playwright");
     await browser.close(status.session_id);
     assert.equal(browser.status(),null);
+    const proxyUrl=new URL(fake.proxyEndpoint()!);
+    await assert.rejects(new Promise<void>((resolve,reject)=>{
+      const socket=connect(Number(proxyUrl.port),"127.0.0.1",()=>{
+        socket.destroy();
+        resolve();
+      });
+      socket.once("error",reject);
+    }), /ECONNREFUSED/, "A closed Agent browser must not leave a listening egress proxy.");
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
     await assert.rejects(browser.snapshot(status.session_id),/Unknown or closed/);
   } finally { await rm(tmp,{recursive:true,force:true}); }
@@ -194,14 +219,21 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
   const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
   try{
     const starting=browser.start();
+    // Attach the rejection observer before releasing startup, preventing a
+    // transient unhandled rejection on fast CI runners.
+    const rejected=assert.rejects(starting,/revoked during startup/);
     for(let i=0;i<40&&!fake.calls.some(x=>x.startsWith("launch:"));i++)
       await new Promise(done=>setTimeout(done,5));
     assert.ok(fake.calls.some(x=>x.startsWith("launch:")));
-    assert.equal(await browser.stopOwnedForRevocation(),"confirmed");
+    assert.equal(await browser.stopOwnedForRevocation(),"uncertain",
+      "Revocation cannot be confirmed while the browser launch is still pending.");
+    assert.equal(browser.status(),null);
     release();
-    await assert.rejects(starting,/revoked during startup/);
+    await rejected;
     assert.equal(browser.status(),null);
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
+    assert.equal(await browser.stopOwnedForRevocation(),"confirmed",
+      "Revocation becomes confirmed after startup exits and cleanup completes.");
   }finally{release();await rm(tmp,{recursive:true,force:true});}
 });
 
@@ -240,4 +272,68 @@ test("context filters intercepted direct local requests; real browser redirect f
     // capture WebSocket traffic; these tests do NOT certify an SSRF sandbox.
     await manager.close(session.session_id);
   }finally{await rm(tmp,{recursive:true,force:true});}
+});
+
+test("unexpected browser exit forgets the session and removes its owned proxy", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "rca-pw-context-exit-"));
+  const fake = fakeBrowser();
+  const browser = new PlaywrightBrowserManager({agentStore: tmp, chromiumForTests: fake.driver});
+  try {
+    const session = await browser.start();
+    const endpoint = new URL(fake.proxyEndpoint()!);
+    fake.simulateContextExit();
+    assert.equal(browser.status(), null, "An exited browser must not retain an MCP session.");
+    await assert.rejects(browser.snapshot(session.session_id), /Unknown or closed/);
+    // The close callback initiates asynchronous shutdown; poll for the real
+    // listening socket to vanish, not a fixed CI-dependent delay.
+    let refused = false;
+    for (let attempt = 0; attempt < 40 && !refused; attempt++) {
+      refused = await new Promise<boolean>(resolve => {
+        const socket = connect(Number(endpoint.port), "127.0.0.1");
+        socket.once("connect", () => {socket.destroy(); resolve(false);});
+        socket.once("error", (error: NodeJS.ErrnoException) =>
+          resolve(error.code === "ECONNREFUSED"));
+      });
+      if (!refused) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(refused, true, "Unexpected browser exit left the proxy listening.");
+  } finally {
+    await rm(tmp, {recursive:true,force:true});
+  }
+});
+
+test("revocation closes the network proxy even when Chromium context shutdown stalls", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "rca-pw-revoke-stuck-context-"));
+  let release!: () => void;
+  const closeGate = new Promise<void>(done => { release = done; });
+  const fake = fakeBrowser({contextCloseWait: closeGate});
+  const browser = new PlaywrightBrowserManager({agentStore:tmp, chromiumForTests:fake.driver});
+  try {
+    await browser.start();
+    const endpoint = new URL(fake.proxyEndpoint()!);
+    let settled = false;
+    const revocation = browser.stopOwnedForRevocation().then(result => {
+      settled = true;
+      return result;
+    });
+    let refused = false;
+    for (let attempt = 0; attempt < 40 && !refused; attempt++) {
+      refused = await new Promise<boolean>(resolve => {
+        const socket = connect(Number(endpoint.port), "127.0.0.1");
+        socket.once("connect", () => { socket.destroy(); resolve(false); });
+        socket.once("error", (error: NodeJS.ErrnoException) =>
+          resolve(error.code === "ECONNREFUSED"));
+      });
+      if (!refused) await new Promise(done => setTimeout(done, 25));
+    }
+    assert.equal(refused, true, "A stuck browser must not retain its proxy listener.");
+    assert.equal(settled, false, "Revocation cannot be confirmed before browser cleanup.");
+    release();
+    assert.equal(await revocation, "confirmed");
+    assert.equal(browser.status(), null);
+    await assert.rejects(browser.start(), /revoked/);
+  } finally {
+    release();
+    await rm(tmp, {recursive:true, force:true});
+  }
 });

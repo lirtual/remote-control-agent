@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.16",
+  "source_sha": "b942a01e46253daedb220abed8e76cd121f33242",
+  "candidate_run_id": 39994843119,
+  "release_title": "Remote Control Agent v0.1.16 — One-Command Windows Upgrade",
+  "release_notes": "docs/releases/v0.1.16.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.16-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.16-ubuntu-24.04",
+      "sha256": "08ef463baa6a4cb056806fa57945b8aca1f605ed3a791e9b21cda210ac7d3352"
+    },
+    {
+      "name": "remote-control-agent-v0.1.16-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.16-ubuntu-24.04-arm",
+      "sha256": "c5d38ba20e69546ce2096a3a19804173fafc3e16bae1ad0a1c96759b8df41bb7"
+    },
+    {
+      "name": "remote-control-agent-v0.1.16-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.16-windows-x64",
+      "sha256": "c39cdf2b8de103b8b283ba9e4e973355bab9e7fce746195ab1ee952bd50a222f"
+    }
+  ]
+}

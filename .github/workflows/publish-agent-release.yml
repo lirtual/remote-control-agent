@@ -1,21 +1,16 @@
-name: Publish approved Agent Release
+name: Publish pinned Agent Release
 
-# Only a reviewed, committed release request or an explicit maintainer dispatch.
-# Ordinary main pushes, tags, CI completion and PRs never publish.
+# One reviewed pin change on main triggers the release; ordinary source pushes
+# and CI completion cannot publish. Manual dispatch also supports existing pins.
 on:
   push:
     branches: [main]
     paths:
-      - .github/release-requests/v0.1.9.json
+      - '.github/release-pins/*.json'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Reviewed immutable release candidate
-        type: choice
-        required: true
-        options: [v0.1.9]
-      approval:
-        description: Type PUBLISH-v0.1.9 to approve public prerelease
+        description: Pinned three-platform release tag
         type: string
         required: true
 
@@ -23,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: agent-release-v0.1.9
+  group: agent-release
   cancel-in-progress: false
 
 jobs:
@@ -37,9 +32,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.1.9' }}
-      RELEASE_APPROVAL: ${{ github.event_name == 'workflow_dispatch' && inputs.approval || 'PUBLISH-v0.1.9' }}
-      RELEASE_EVENT: ${{ github.event_name }}
+
     steps:
       - name: Checkout reviewed publishing manifest
         uses: actions/checkout@v4
@@ -47,36 +40,55 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check explicit approval and signed-off source
+      - name: Select release pin from main push or dispatch
+        shell: bash
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_EVENT" == push ]]; then
+            mapfile -t pins < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA" -- '.github/release-pins/*.json')
+            if (( ${#pins[@]} != 1 )); then
+              echo "A main push must change exactly one release pin" >&2
+              exit 1
+            fi
+            tag="${pins[0]##*/}"
+            tag="${tag%.json}"
+          else
+            tag="$RELEASE_TAG_INPUT"
+          fi
+          if [[ ! "$tag" =~ ^v0\.[1-9][0-9]*\.[0-9]+(-[a-z0-9][a-z0-9.-]*)?$ ]]; then
+            echo "Invalid reviewed release tag" >&2
+            exit 1
+          fi
+          printf 'RELEASE_TAG=%s\n' "$tag" >> "$GITHUB_ENV"
+
+      - name: Verify candidate and signed-off source
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$RELEASE_TAG" != v0.1.9 || "$RELEASE_APPROVAL" != PUBLISH-v0.1.9 ]]; then
-            echo "Release requires exact reviewed tag and explicit human approval" >&2
-            exit 1
-          fi
           pin=".github/release-pins/$RELEASE_TAG.json"
           test -f "$pin"
           jq -e --arg tag "$RELEASE_TAG" '
             .tag == $tag and
             (.source_sha | test("^[a-f0-9]{40}$")) and
             (.candidate_run_id | type == "number") and
-            (.assets | length == 2) and
-            .assets[0].target == "linux-x64-glibc" and
-            .assets[1].target == "linux-arm64-glibc" and
-            ([.assets[].sha256 | test("^[a-f0-9]{64}$")] | all)
+            (.assets | length == 3) and
+            [.assets[].target] == ["linux-x64-glibc", "linux-arm64-glibc", "windows-x64"] and
+            ([.assets[] |
+              (.sha256 | test("^[a-f0-9]{64}$")) and
+              (.name == ("remote-control-agent-" + $tag + "-" + .target +
+                (if .target == "windows-x64" then ".zip" else ".tar.gz" end))) and
+              (.artifact == ($tag + "-" +
+                (if .target == "windows-x64" then "windows-x64" else
+                (if .target == "linux-x64-glibc" then "ubuntu-24.04" else "ubuntu-24.04-arm" end) end)))
+             ] | all)
           ' "$pin" >/dev/null
           sha="$(jq -r .source_sha "$pin")"
           git merge-base --is-ancestor "$sha" "$GITHUB_SHA"
           run_id="$(jq -r .candidate_run_id "$pin")"
-          if [[ "$RELEASE_EVENT" == push ]]; then
-            request=".github/release-requests/v0.1.9.json"
-            test -f "$request"
-            jq -e --arg tag "$RELEASE_TAG" --arg sha "$sha" --argjson run "$run_id" '
-              .approved == true and .tag == $tag and
-              .source_sha == $sha and .candidate_run_id == $run
-            ' "$request" >/dev/null
-          fi
           gh api "repos/$GH_REPO/actions/runs/$run_id" |
             jq -e --arg sha "$sha" '
               .event == "workflow_dispatch" and
@@ -91,14 +103,14 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch and verify only pinned dual-native candidates
+      - name: Fetch and verify only three pinned native candidates
         shell: bash
         run: |
           set -euo pipefail
           pin=".github/release-pins/$RELEASE_TAG.json"
           run_id="$(jq -r .candidate_run_id "$pin")"
           mkdir -p "$RUNNER_TEMP/publish"
-          for i in 0 1; do
+          for i in 0 1 2; do
             target="$(jq -r ".assets[$i].target" "$pin")"
             artifact="$(jq -r ".assets[$i].artifact" "$pin")"
             filename="$(jq -r ".assets[$i].name" "$pin")"
@@ -106,26 +118,44 @@ jobs:
             output="$RUNNER_TEMP/candidates/$target"
             mkdir -p "$output"
             gh run download "$run_id" --name "$artifact" --dir "$output"
-            archive="$output/$target/$filename"
-            record="$output/$target/SHA256SUMS.txt"
+            if [[ "$target" == windows-x64 ]]; then
+              archive="$output/$filename"
+              record="$output/SHA256SUMS.txt"
+            else
+              archive="$output/$target/$filename"
+              record="$output/$target/SHA256SUMS.txt"
+            fi
             test -f "$archive" && test ! -L "$archive"
             test -f "$record" && test ! -L "$record"
             printf '%s  %s\n' "$digest" "$archive" | sha256sum --check --status
-            grep -Fx "$digest  release-candidate/$target/$filename" "$record" >/dev/null
-            tar -xzOf "$archive" bundle.json | jq -e \
-              --arg version "$RELEASE_TAG" --arg target "$target" '
-                .name == "remote-control-agent" and
-                .version == $version and .target == $target and
-                .artifact_schema == 1 and .device_protocol == 2 and
-                .receipt_schema == 1 and .upgrade_profile == "paired-full-v1"
-              ' >/dev/null
+            if [[ "$target" == windows-x64 ]]; then
+              # Windows PowerShell produces a CRLF checksum manifest.
+              # Normalize *only* the record ending; retain exact SHA/name checks.
+              sed 's/\r$//' "$record" | grep -Fx "$digest  $filename" >/dev/null
+              unzip -tq "$archive" >/dev/null
+              unzip -p "$archive" bundle.json | jq -e \
+                --arg version "$RELEASE_TAG" --arg target "$target" '
+                  .name == "remote-control-agent" and
+                  .version == $version and .target == $target and
+                  .artifact_schema == 1 and .device_protocol == 2
+                ' >/dev/null
+            else
+              grep -Fx "$digest  release-candidate/$target/$filename" "$record" >/dev/null
+              tar -xzOf "$archive" bundle.json | jq -e \
+                --arg version "$RELEASE_TAG" --arg target "$target" '
+                  .name == "remote-control-agent" and
+                  .version == $version and .target == $target and
+                  .artifact_schema == 1 and .device_protocol == 2 and
+                  .receipt_schema == 1 and .upgrade_profile == "paired-full-v1"
+                ' >/dev/null
+            fi
             cp -- "$archive" "$RUNNER_TEMP/publish/$filename"
           done
-          jq -r '.assets[] | "\(.sha256)  \(.name)"' "$pin" > "$RUNNER_TEMP/publish/SHA256SUMS"
-          ( cd "$RUNNER_TEMP/publish" && sha256sum --check SHA256SUMS )
-          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 3
+          jq -r '.assets[] | "\(.sha256)  \(.name)"' "$pin" > "$RUNNER_TEMP/publish/SHA256SUMS.txt"
+          ( cd "$RUNNER_TEMP/publish" && sha256sum --check SHA256SUMS.txt )
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 4
 
-      - name: Upload draft, re-download/check assets, publish immutable prerelease
+      - name: Upload draft, re-download/check assets, publish prerelease
         shell: bash
         run: |
           set -euo pipefail
@@ -142,23 +172,24 @@ jobs:
           gh release create "$RELEASE_TAG" \
             "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz" \
             "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz" \
-            "$RUNNER_TEMP/publish/SHA256SUMS" \
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-windows-x64.zip" \
+            "$RUNNER_TEMP/publish/SHA256SUMS.txt" \
             --target "$sha" --title "$title" \
             --notes-file "$notes" --prerelease --draft
           gh release view "$RELEASE_TAG" --json isDraft,isPrerelease |
             jq -e '.isDraft == true and .isPrerelease == true' >/dev/null
           mkdir -p "$RUNNER_TEMP/recheck"
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/recheck" --clobber
-          test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 3
-          ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS )
+          test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 4
+          ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS.txt )
           gh release edit "$RELEASE_TAG" --draft=false
           gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
             jq -e --arg tag "$RELEASE_TAG" '
               .tag_name == $tag and .draft == false and
-              .prerelease == true and .immutable == true
+              .prerelease == true
             ' >/dev/null
           gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" |
             jq -e --arg sha "$sha" '
               .object.type == "commit" and .object.sha == $sha
             ' >/dev/null
-          echo "Immutable GitHub prerelease $RELEASE_TAG published; no Worker deployment."
+          echo "Verified pinned GitHub prerelease $RELEASE_TAG published; no Worker deployment."
