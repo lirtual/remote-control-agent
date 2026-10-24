@@ -219,16 +219,45 @@ jobs:
             if (-not $rejected) { throw 'Untrusted legacy task path was accepted' }
           }
           $source = Get-Content -LiteralPath $path -Raw
-          if (-not $source.Contains('$Host.UI.PromptForChoice') -or
-              -not $source.Contains('Upgrade verified Agent?') -or
-              -not $source.Contains('$choices, 1') -or
-              -not $source.Contains('if ($selected -ne 0)') -or
+          if (-not $source.Contains('Confirm-Upgrade $Host.UI') -or
+              -not $source.Contains("ReadKey('NoEcho,IncludeKeyDown')") -or
+              -not $source.Contains('Upgrade? [y/N]') -or
               -not $source.Contains('Cancelled. No changes.') -or
+              $source.Contains('$Host.UI.PromptForChoice') -or
               $source.Contains("Read-Host 'Upgrade this device") -or
+              -not $source.Contains('& $nodeExisting $verifyExisting $target | Out-Null') -or
+              -not $source.Contains('& $node $verifier $stage | Out-Null') -or
               -not $source.Contains("upgrade --version `$Version") -or
               $source.Contains('public installer never upgrades it')) {
-            throw 'Existing paired device requires host-mediated opt-in confirmation and signed CLI upgrade'
+            throw 'Installer must use a safe English-only console prompt and hide verifier JSON'
           }
+          $confirm = $ast.Find({
+            param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq 'Confirm-Upgrade'
+          }, $true)
+          if (-not $confirm) { throw 'Upgrade confirmation function missing' }
+          Invoke-Expression $confirm.Extent.Text
+          $raw = [pscustomobject]@{ Key = 'n'; Fail = $false }
+          $raw | Add-Member -MemberType ScriptMethod -Name ReadKey -Value {
+            param($flags)
+            if ($flags -ne 'NoEcho,IncludeKeyDown') { throw 'Unexpected key flags' }
+            if ($this.Fail) { throw 'No interactive terminal' }
+            return [pscustomobject]@{ Character = $this.Key; KeyDown = $true }
+          }
+          $ui = [pscustomobject]@{ RawUI = $raw }
+          foreach ($key in @('n', 'N', '', [string][char]13, '?', 'x')) {
+            $raw.Key = $key
+            if (Confirm-Upgrade $ui) { throw "Unsafe confirmation for key '$key'" }
+          }
+          foreach ($key in @('y', 'Y')) {
+            $raw.Key = $key
+            if (-not (Confirm-Upgrade $ui)) { throw "Valid Y approval rejected" }
+          }
+          $raw.Fail = $true
+          $denied = $false
+          try { $null = Confirm-Upgrade $ui }
+          catch { $denied = $true }
+          if (-not $denied) { throw 'No-console failure must not approve upgrade' }
 
       - name: User task negative checks (never create a task)
         shell: pwsh
@@ -502,6 +531,9 @@ jobs:
                 -RedirectStandardError $stderrFile -NoNewWindow -PassThru -Wait
               if ($process.ExitCode -eq 0) { throw 'Installer enrolled without a real interactive terminal' }
               $diagnostic = (Get-Content -LiteralPath $stderrFile -Raw) + (Get-Content -LiteralPath $stdoutFile -Raw)
+              if ($diagnostic -match '\{"target":"windows-x64"') {
+                throw 'Verifier JSON leaked to public installer output'
+              }
               if ($diagnostic -notmatch 'Authorization incomplete. Identity kept.') {
                 # This fixture uses a disposable profile and no credentials;
                 # expose only a bounded native error to diagnose the seam.
