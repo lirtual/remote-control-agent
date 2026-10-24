@@ -13,8 +13,15 @@ const PS=[
  "$ErrorActionPreference='Stop'",
  "Add-Type -AssemblyName System.IO.Compression",
  "Add-Type -AssemblyName System.IO.Compression.FileSystem",
- "$z=[IO.Compression.ZipFile]::OpenRead('__ARCHIVE__')",
+ "$archiveStream=[IO.File]::Open('__ARCHIVE__',[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)",
  "try {",
+ " $sha=[Security.Cryptography.SHA256]::Create()",
+ " try{$digest=[BitConverter]::ToString($sha.ComputeHash($archiveStream)).Replace('-','').ToLowerInvariant()}",
+ " finally{$sha.Dispose()}",
+ " if($digest -cne '__SHA__'){throw 'Approved ZIP digest mismatch'}",
+ " $archiveStream.Position=0",
+ " $z=[IO.Compression.ZipArchive]::new($archiveStream,[IO.Compression.ZipArchiveMode]::Read,$true)",
+ " try {",
  " $entries=@($z.Entries)",
  " if($entries.Count -lt 8 -or $entries.Count -gt 80){throw 'ZIP member count'}",
  " $seen=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)",
@@ -32,13 +39,14 @@ const PS=[
  "  $total += $item.Length",
  "  if($item.Length -lt 0 -or $item.Length -gt 100000000 -or $total -gt 150000000){throw 'ZIP bomb'}",
  "  $hash=[Security.Cryptography.SHA256]::Create()",
- "  $stream=$item.Open()",
- "  try{$digest=[BitConverter]::ToString($hash.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}",
- "  finally{$stream.Dispose();$hash.Dispose()}",
+ "  $entryStream=$item.Open()",
+ "  try{$digest=[BitConverter]::ToString($hash.ComputeHash($entryStream)).Replace('-','').ToLowerInvariant()}",
+ "  finally{$entryStream.Dispose();$hash.Dispose()}",
  "  $records.Add([pscustomobject]@{name=$name;digest=$digest;length=[long]$item.Length})",
  " }",
  " @($records.ToArray()) | ConvertTo-Json -Compress -Depth 3",
- "} finally{$z.Dispose()}",
+ " } finally{$z.Dispose()}",
+ "} finally{$archiveStream.Dispose()}",
 ].join("\n");
 function abs(p:string):boolean {
  return /^[A-Za-z]:\\/.test(p)&&!p.includes("\0")&&path.win32.normalize(p)===p;
@@ -67,11 +75,12 @@ export function comparePinnedWindowsZipToInstalled(
  const windows=process.env.SystemRoot;
  if(!windows||!abs(windows))throw Error("Missing Windows system root");
  const executable=path.win32.join(windows,"System32","WindowsPowerShell","v1.0","powershell.exe");
- const source=PS.replace("__ARCHIVE__",archive.replace(/'/g,"''"));
+ const source=PS.replace("__ARCHIVE__",archive.replace(/'/g,"''"))
+   .replace("__SHA__",approvedSha256);
  const outcome=spawnSync(executable,["-NoProfile","-NonInteractive","-EncodedCommand",
    Buffer.from(source,"utf16le").toString("base64")],
    {encoding:"utf8",timeout:60000,maxBuffer:100000,windowsHide:true});
- if(outcome.error||outcome.status!==0)throw Error("Pinned ZIP archive inventory unavailable");
+ if(outcome.error||outcome.status!==0)throw Error("Pinned ZIP SHA-256 mismatch or archive inventory unavailable");
  const parsed:unknown=JSON.parse(outcome.stdout.trim());
  const rows=Array.isArray(parsed)?parsed:[parsed];
  if(rows.length<8||rows.length>80)throw Error("Invalid ZIP member count");
