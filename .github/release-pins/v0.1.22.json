@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.22",
+  "source_sha": "a1c8afe1b47c279a52569ebb44e576b29fcba4f4",
+  "candidate_run_id": 40089999490,
+  "release_title": "Remote Control Agent v0.1.22 — Direct Linux Upgrade",
+  "release_notes": "docs/releases/v0.1.22.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.22-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.22-ubuntu-24.04",
+      "sha256": "7a2d90b77d34a3bb4a540c5adcbbc19b3de29ce4b4fdf6504856e0c7b482649a"
+    },
+    {
+      "name": "remote-control-agent-v0.1.22-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.22-ubuntu-24.04-arm",
+      "sha256": "0c925d6aad4f240fe768fcfbe42acc0bfd88f640a9501f5aa63a10a8639bf702"
+    },
+    {
+      "name": "remote-control-agent-v0.1.22-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.22-windows-x64",
+      "sha256": "0ac48c46e2d642523d0ace756306fa33bc43cabb7d104e732425046bdb24bbd3"
+    }
+  ]
+}
