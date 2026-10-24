@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,chmodSync} from "node:fs";
+import {mkdtempSync,mkdirSync,writeFileSync,rmSync,chmodSync,renameSync} from "node:fs";
 import path from "node:path";
 import {tmpdir} from "node:os";
 import {inspectLinuxLocalUpgrade,parseUpgradeServiceState} from "../src/upgrade-local-inspector.ts";
@@ -111,6 +111,28 @@ linuxTest("an altered but syntactically valid systemd endpoint cannot self-autho
   assert.equal(rejected.serviceActive,false);
   const missing=await inspectLinuxLocalUpgrade(req,{...f.context,expectedEndpoint:""});
   assert.equal(missing.servicePathsMatch,false);
+ }finally{f.cleanup();}
+});
+linuxTest("canonical systemd unit can prove the same exact owner-local runtime",async()=>{
+ const f=fixture();
+ try{
+  const canonical=path.join(path.dirname(f.unit),"remote-control-agent.service");
+  renameSync(f.unit,canonical);
+  const result=await inspectLinuxLocalUpgrade(req,{...f.context,
+    serviceShow:()=>fields(canonical,123456)});
+  assert.equal(result.serviceActive,true);
+  assert.equal(result.servicePathsMatch,true);
+ }finally{f.cleanup();}
+});
+linuxTest("two configured service files are ambiguous, even with one active",async()=>{
+ const f=fixture();
+ try{
+  const canonical=path.join(path.dirname(f.unit),"remote-control-agent.service");
+  const unit=await (await import("node:fs/promises")).readFile(f.unit,"utf8");
+  writeFileSync(canonical,unit,{mode:0o600});
+  const result=await inspectLinuxLocalUpgrade(req,f.context);
+  assert.equal(result.serviceActive,false);
+  assert.equal(result.servicePathsMatch,false);
  }finally{f.cleanup();}
 });
 linuxTest("SQLite invalid schema is not reported as readable durable receipts",async()=>{

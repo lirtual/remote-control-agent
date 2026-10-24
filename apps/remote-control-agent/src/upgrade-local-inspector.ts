@@ -138,19 +138,27 @@ export async function inspectLinuxLocalUpgrade(
   }catch{return result;}
   result.receiptHeaderCompatible=await validReceiptHeader(
     path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite"));
+  let foundUnit=false,matched=false;
   for(const name of [HISTORICAL,CANONICAL] as const){
+    const unitFile=path.join(home,".config/systemd/user",name);
+    try{await lstat(unitFile);}catch(error){
+      if((error as NodeJS.ErrnoException).code==="ENOENT")continue;
+      return Object.freeze(result);
+    }
+    // A second managed file is ambiguous even if one of the services is
+    // currently running. Do not guess which unit is authoritative.
+    if(foundUnit)return Object.freeze(result);
+    foundUnit=true;
     try{
-      const unitFile=path.join(home,".config/systemd/user",name);
       await owned(unitFile,"file");
       const unit=await readFile(unitFile,"utf8");
-      // Canonical service uses a different installer template, so remain
-      // fail-closed pending exact-template review.
-      if(name!==HISTORICAL||!expectedUnit(unit,root,key,options.expectedEndpoint))continue;
+      if(!expectedUnit(unit,root,key,options.expectedEndpoint))return Object.freeze(result);
       const state=parseUpgradeServiceState((options.serviceShow??showService)(name));
-      if(state.ActiveState!=="active"||state.SubState!=="running"||
-        state.MainPID!==String(pid)||state.FragmentPath!==unitFile||state.DropInPaths!=="")continue;
-      result.serviceActive=true;result.servicePathsMatch=true;break;
-    }catch{/* Missing, foreign or inactive unit: never infer success. */}
+      matched=state.ActiveState==="active"&&state.SubState==="running"&&
+        state.MainPID===String(pid)&&state.FragmentPath===unitFile&&state.DropInPaths==="";
+    }catch{return Object.freeze(result);}
   }
+  result.serviceActive=foundUnit&&matched;
+  result.servicePathsMatch=foundUnit&&matched;
   return Object.freeze(result);
 }
