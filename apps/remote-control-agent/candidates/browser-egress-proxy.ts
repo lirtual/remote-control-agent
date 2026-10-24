@@ -122,7 +122,14 @@ export async function startCandidateBrowserEgressProxy(
   });
   proxy.on("connection", socket => {
     clientSockets.add(socket);
+    // Abrupt Edge/Chrome disconnects are untrusted network events, not
+    // process-fatal errors. Tear down only this socket and fail closed.
+    socket.on("error", () => socket.destroy());
     socket.on("close", () => clientSockets.delete(socket));
+  });
+  proxy.on("clientError", (_error, socket) => {
+    // Malformed HTTP or a peer reset must never crash the Agent process.
+    socket.destroy();
   });
   await new Promise<void>((resolve, reject) => {
     proxy.once("error", reject);
