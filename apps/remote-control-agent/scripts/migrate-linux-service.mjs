@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, rmdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, open, readFile, readdir, rename, rmdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -298,8 +298,12 @@ export async function applyServiceCutover(plan,{systemctl=defaultSystemctl}={}){
     if(modified){
       try{
         systemctl(["disable","--now",NEW]);
-        await writeFile(path.join(plan.unitDir,NEW),plan.legacyUnit,{mode:0o644});
-        await chmod(path.join(plan.unitDir,NEW),0o644);
+        // Never truncate the installed unit in-place: interruption in the
+        // rollback itself must leave either the canonical or the exact old unit.
+        const restore=path.join(plan.unitDir,".remote-control-agent.restore.tmp");
+        await secureSave(restore,plan.legacyUnit);
+        await chmod(restore,0o644);
+        await rename(restore,path.join(plan.unitDir,NEW));
         await syncDir(plan.unitDir);
         systemctl(["daemon-reload"]);
         systemctl(["start",NEW]);
