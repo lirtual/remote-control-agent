@@ -108,17 +108,23 @@ try {
   assert.equal(workerResult,"finished");
   assert.ok(lookups>workerLookupsBefore,
     "Background Worker did not exercise the actual DNS-pinned proxy.");
+  const websocketLookupsBefore=lookups;
   for(const url of [
     "ws://127.0.0.1:"+localPort+"/socket",
     "ws://[::1]:"+ipv6Port+"/socket",
     "ws://public.example.com/worker-socket",
+    "wss://127.0.0.1:"+localPort+"/socket",
+    "wss://[::1]:"+ipv6Port+"/socket",
+    "wss://public.example.com/private-dns-socket",
   ]){
     await probePage.evaluate(target=>{
       const ws=new WebSocket(target);
       ws.onerror=()=>{};
     },url);
   }
-  await probePage.waitForTimeout(350);
+  await probePage.waitForTimeout(600);
+  assert.ok(lookups>websocketLookupsBefore,
+    "Public-looking WSS/WS must reach the actual proxy resolver.");
   assert.ok(lookups>=2,"Actual proxy resolver must evaluate HTTP and HTTPS requests.");
   assert.equal(localConnections,0,"Browser bypassed proxy and reached local TCP.");
   assert.equal(localHits,0,"Browser or candidate proxy contacted forbidden local HTTP.");
@@ -144,6 +150,7 @@ try {
   console.log("WINDOWS_CANDIDATE_PROXY_PRIVATE_DNS="+channel+":PASS");
   console.log(JSON.stringify({channel,lookups,localConnections,localHits,
     localIPv6Connections,localIPv6Hits,backgroundWorkerDenied:true,
+    privateWebsocketDenied:true,
     dnsPrivateDenied:true,httpConnectDenied:true,proxyDownFallbackDenied:true,
     actualProductionIsolation:"NOT_TESTED"}));
 } finally {
