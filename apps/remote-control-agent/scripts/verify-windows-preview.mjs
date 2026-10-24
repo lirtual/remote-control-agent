@@ -14,11 +14,11 @@ import { fileURLToPath } from "node:url";
 // mutable archive manifest and MUST be updated only after source review.
 export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
   "apps/remote-control-agent/candidates/browser-playwright.js":
-    "f22a2e9ec5e65e1ebc4475ba1a7a6406acd9da629ddf885f2358acaebc1e5bd4",
+    "2c6e9d73c813624355c9e6f992a99f8d920b6814bd154af0636bb67a4f48764d",
   "apps/remote-control-agent/candidates/browser-egress-proxy.js":
-    "0000000000000000000000000000000000000000000000000000000000000000",
+    "c95dc1068a98f828e4f83cab88c4c986ab44e4f5739502120042f422ad447012",
   "apps/remote-control-agent/candidates/browser-egress-policy.js":
-    "0000000000000000000000000000000000000000000000000000000000000000",
+    "955b228952dcc1347a85b3e2b59ecddb82d7fd4034a50ca08cd52bfa5a91dce7",
 });
 export const PINNED_WINDOWS_PLAYWRIGHT_VERSION="1.64.1";
 export const PINNED_WINDOWS_PLAYWRIGHT_FILES=Object.freeze({
