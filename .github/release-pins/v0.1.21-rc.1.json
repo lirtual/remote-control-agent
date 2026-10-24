@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.21-rc.1",
+  "source_sha": "1bac1ad67762edfeab3a6abd3b3cca41a594a0f3",
+  "candidate_run_id": 40064414186,
+  "release_title": "Remote Control Agent v0.1.21-rc.1 — Browser Network Defense",
+  "release_notes": "docs/releases/v0.1.21-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.21-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.21-rc.1-ubuntu-24.04",
+      "sha256": "7c4d56a241d94d2cae53081227b5e06070e273103575e0e67dce93e5cf390883"
+    },
+    {
+      "name": "remote-control-agent-v0.1.21-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.21-rc.1-ubuntu-24.04-arm",
+      "sha256": "14796291450e437bf46ae54824a7c99f633ffb985e2345e135882bcc33cf2eb7"
+    },
+    {
+      "name": "remote-control-agent-v0.1.21-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.21-rc.1-windows-x64",
+      "sha256": "164215ea3ccabd20a2b0abebcebb708a8f9bc17ed2cb00f0788b682c53360920"
+    }
+  ]
+}
