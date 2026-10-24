@@ -100,7 +100,7 @@ export function comparePinnedWindowsZipToInstalled(
  const parsed:unknown=JSON.parse(outcome.stdout.trim());
  const rows=Array.isArray(parsed)?parsed:[parsed];
  if(rows.length<8||rows.length>80)throw Error("Invalid ZIP member count");
- const expected=new Map<string,string>();
+ const expected=new Map<string,{digest:string;length:number}>();
  for(const value of rows) {
    if(!value||typeof value!=="object")throw Error("Invalid ZIP member");
    const record=value as {name?:unknown;digest?:unknown;length?:unknown};
@@ -108,25 +108,30 @@ export function comparePinnedWindowsZipToInstalled(
      record.name.startsWith("/")||record.name.split("/").some(p=>!p||p==="."||p==="..")||
      typeof record.digest!=="string"||!HASH.test(record.digest)||
      typeof record.length!=="number"||!Number.isSafeInteger(record.length)||
-     record.length<0||expected.has(record.name.toLowerCase()))
+     record.length<0||record.length>100000000||expected.has(record.name.toLowerCase()))
     throw Error("Untrusted ZIP entry");
-   expected.set(record.name.toLowerCase(),record.digest);
+   expected.set(record.name.toLowerCase(),{digest:record.digest,length:record.length});
  }
  const root=lstatSync(targetRoot);
  if(!root.isDirectory()||root.isSymbolicLink())throw Error("Invalid program root");
  const seen=new Set<string>();
- const walk=(directory:string,prefix=""):void=>{
+ let visited=0;
+ const walk=(directory:string,prefix="",depth=0):void=>{
+   if(depth>16)throw Error("Installed program traversal exceeds approved bounds");
    for(const ent of readdirSync(directory,{withFileTypes:true})) {
+     if(++visited>160)throw Error("Installed program traversal exceeds approved bounds");
      const name=prefix?prefix+"/"+ent.name:ent.name;
      if(!SAFE.test(name)||name.split("/").some(s=>s==="."||s===".."))
        throw Error("Unsafe program path");
      const full=path.win32.join(directory,ent.name);
      const st=lstatSync(full);
      if(st.isSymbolicLink())throw Error("Reparse point in installed program");
-     if(st.isDirectory()) {walk(full,name);continue;}
+     if(st.isDirectory()) {walk(full,name,depth+1);continue;}
      if(!st.isFile()||st.nlink!==1)throw Error("Unsupported installed program entry");
-     const key=name.toLowerCase(),sha=expected.get(key);
-     if(!sha||seen.has(key)||createHash("sha256").update(readFileSync(full)).digest("hex")!==sha)
+     const key=name.toLowerCase(),member=expected.get(key);
+     // A foreign oversized file must not be buffered before checking its size.
+     if(!member||seen.has(key)||st.size!==member.length||
+       createHash("sha256").update(readFileSync(full)).digest("hex")!==member.digest)
       throw Error("Installed program differs from approved ZIP");
      seen.add(key);
    }
