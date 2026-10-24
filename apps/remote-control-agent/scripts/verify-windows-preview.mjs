@@ -10,8 +10,16 @@ import { fileURLToPath } from "node:url";
 
 // Independent audit pinning for the nine-file Windows preview payload.
 // Deliberately not loaded from the mutable preview manifest.
-export const PINNED_WINDOWS_BROWSER_MANAGER_SHA256="f22a2e9ec5e65e1ebc4475ba1a7a6406acd9da629ddf885f2358acaebc1e5bd4";
-const PACKAGED_BROWSER_MANAGER="apps/remote-control-agent/candidates/browser-playwright.js";
+// These source-compiled module pins are intentionally independent from the
+// mutable archive manifest and MUST be updated only after source review.
+export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
+  "apps/remote-control-agent/candidates/browser-playwright.js":
+    "f22a2e9ec5e65e1ebc4475ba1a7a6406acd9da629ddf885f2358acaebc1e5bd4",
+  "apps/remote-control-agent/candidates/browser-egress-proxy.js":
+    "0000000000000000000000000000000000000000000000000000000000000000",
+  "apps/remote-control-agent/candidates/browser-egress-policy.js":
+    "0000000000000000000000000000000000000000000000000000000000000000",
+});
 export const PINNED_WINDOWS_PLAYWRIGHT_VERSION="1.64.1";
 export const PINNED_WINDOWS_PLAYWRIGHT_FILES=Object.freeze({
   "apps/remote-control-agent/node_modules/playwright-core/LICENSE":"45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb",
@@ -55,11 +63,13 @@ export function inspectWindowsPreview(root) {
   const names=Object.keys(PINNED_WINDOWS_PLAYWRIGHT_FILES);
   const candidate=Object.keys(manifest.hashes).filter(k=>Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,k));
   if (manifest.browser_runtime===undefined){
-    if(candidate.length || expected.has(PACKAGED_BROWSER_MANAGER))
+    if(candidate.length ||
+        Object.keys(PINNED_WINDOWS_BROWSER_MODULES).some(k=>expected.has(k)))
       throw Error("Unrequested browser runtime.");
   }else{
-    if (expected.get(PACKAGED_BROWSER_MANAGER)!==PINNED_WINDOWS_BROWSER_MANAGER_SHA256)
-      throw Error("Missing or unreviewed packaged BrowserManager.");
+    if (Object.entries(PINNED_WINDOWS_BROWSER_MODULES)
+      .some(([name,hash])=>expected.get(name)!==hash))
+      throw Error("Missing or unreviewed packaged browser network modules.");
     const info=manifest.browser_runtime;
     if (!info || typeof info!=="object" || Array.isArray(info) ||
         Object.keys(info).sort().join(",")!=="files,name,version" ||
@@ -82,7 +92,7 @@ export function inspectWindowsPreview(root) {
       if (name === "bundle.json") continue;
       if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
           Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) ||
-          name===PACKAGED_BROWSER_MANAGER) ||
+          Object.hasOwn(PINNED_WINDOWS_BROWSER_MODULES,name)) ||
           seen.has(name) || !expected.has(name) ||
           typeof expected.get(name) !== "string" ||
           !/^[a-f0-9]{64}$/.test(expected.get(name))) {
@@ -91,7 +101,8 @@ export function inspectWindowsPreview(root) {
       const sha = createHash("sha256").update(readFileSync(full)).digest("hex");
       if (sha !== expected.get(name) ||
           (Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) && sha!==PINNED_WINDOWS_PLAYWRIGHT_FILES[name]) ||
-          (name===PACKAGED_BROWSER_MANAGER && sha!==PINNED_WINDOWS_BROWSER_MANAGER_SHA256))
+          (Object.hasOwn(PINNED_WINDOWS_BROWSER_MODULES,name) &&
+            sha!==PINNED_WINDOWS_BROWSER_MODULES[name]))
         throw Error("Windows runtime entry checksum mismatch.");
       seen.add(name);
     }
