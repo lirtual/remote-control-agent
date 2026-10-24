@@ -10,6 +10,7 @@ import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
   const calls: string[] = [];
   let proxyEndpoint: string | undefined;
+  const contextCloseListeners: Array<() => void> = [];
   let requestFilter: ((route: {
     request(): {url(): string};
     continue(): Promise<void>;
@@ -29,6 +30,9 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
     },
   };
   const context = {
+    on: (event: string, handler: () => void) => {
+      if (event === "close") contextCloseListeners.push(handler);
+    },
     pages: () => options.restoredUrl ? [{url:()=>options.restoredUrl,close:async()=>{}}] : [],
     newPage: async () => {
       assert.ok(requestFilter, "Request filtering must precede page creation.");
@@ -64,6 +68,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
     },
   } as unknown as BrowserType<{}>;
   return {driver,calls,proxyEndpoint:()=>proxyEndpoint,
+    simulateContextExit: () => contextCloseListeners.forEach(handler => handler()),
     request:async (url:string) => {
       assert.ok(requestFilter);
       let outcome="";
@@ -260,4 +265,32 @@ test("context filters intercepted direct local requests; real browser redirect f
     // capture WebSocket traffic; these tests do NOT certify an SSRF sandbox.
     await manager.close(session.session_id);
   }finally{await rm(tmp,{recursive:true,force:true});}
+});
+
+test("unexpected browser exit forgets the session and removes its owned proxy", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "rca-pw-context-exit-"));
+  const fake = fakeBrowser();
+  const browser = new PlaywrightBrowserManager({agentStore: tmp, chromiumForTests: fake.driver});
+  try {
+    const session = await browser.start();
+    const endpoint = new URL(fake.proxyEndpoint()!);
+    fake.simulateContextExit();
+    assert.equal(browser.status(), null, "An exited browser must not retain an MCP session.");
+    await assert.rejects(browser.snapshot(session.session_id), /Unknown or closed/);
+    // The close callback initiates asynchronous shutdown; poll for the real
+    // listening socket to vanish, not a fixed CI-dependent delay.
+    let refused = false;
+    for (let attempt = 0; attempt < 40 && !refused; attempt++) {
+      refused = await new Promise<boolean>(resolve => {
+        const socket = connect(Number(endpoint.port), "127.0.0.1");
+        socket.once("connect", () => {socket.destroy(); resolve(false);});
+        socket.once("error", (error: NodeJS.ErrnoException) =>
+          resolve(error.code === "ECONNREFUSED"));
+      });
+      if (!refused) await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.equal(refused, true, "Unexpected browser exit left the proxy listening.");
+  } finally {
+    await rm(tmp, {recursive:true,force:true});
+  }
 });
