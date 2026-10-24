@@ -26,8 +26,9 @@ for (const [subnet, prefix] of [
   ["2001::", 32],   // Teredo / tunnel transition
   ["2001:2::", 48], // benchmarking
   ["2001:10::", 28], ["2001:20::", 28], // ORCHID
-  ["2001:db8::", 32], // documentation
+  ["2001:db8::", 32], // documentation (RFC 3849)
   ["2002::", 16], // 6to4 encapsulation can reach private IPv4
+  ["3fff::", 20], // documentation (RFC 9637 / IANA IPv6 special-purpose registry)
 ] as const) IPv6Exception.addSubnet(subnet, prefix, "ipv6");
 
 export function isAllowedPublicIp(address: string): boolean {
