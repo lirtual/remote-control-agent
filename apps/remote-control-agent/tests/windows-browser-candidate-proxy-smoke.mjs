@@ -108,23 +108,41 @@ try {
   assert.equal(workerResult,"finished");
   assert.ok(lookups>workerLookupsBefore,
     "Background Worker did not exercise the actual DNS-pinned proxy.");
-  const websocketLookupsBefore=lookups;
-  for(const url of [
+  const websocketCases=[
     "ws://127.0.0.1:"+localPort+"/socket",
     "ws://[::1]:"+ipv6Port+"/socket",
     "ws://public.example.com/worker-socket",
     "wss://127.0.0.1:"+localPort+"/socket",
     "wss://[::1]:"+ipv6Port+"/socket",
     "wss://public.example.com/private-dns-socket",
-  ]){
-    await probePage.evaluate(target=>{
-      const ws=new WebSocket(target);
-      ws.onerror=()=>{};
-    },url);
+  ];
+  const websocketLookupsBefore=lookups;
+  for(const url of websocketCases){
+    const previousLookups=lookups;
+    const outcome=await probePage.evaluate(target=>new Promise((resolve,reject)=>{
+      let socket;
+      try{socket=new WebSocket(target);}
+      catch(error){reject(error);return;}
+      const timer=setTimeout(()=>{
+        socket.close();
+        reject(Error("WebSocket denial was not observed within 4 seconds."));
+      },4000);
+      const finish=status=>{
+        clearTimeout(timer);
+        resolve(status);
+      };
+      socket.onopen=()=>finish("opened");
+      socket.onerror=()=>finish("denied");
+      socket.onclose=()=>finish("denied");
+    }),url);
+    assert.equal(outcome,"denied","Unsafe WebSocket unexpectedly opened: "+url);
+    if(url.includes("public.example.com"))
+      assert.ok(lookups>previousLookups,
+        "Public-looking WS/WSS did not reach the candidate DNS policy: "+url);
   }
-  await probePage.waitForTimeout(600);
+  await probePage.waitForTimeout(100);
   assert.ok(lookups>websocketLookupsBefore,
-    "Public-looking WSS/WS must reach the actual proxy resolver.");
+    "Public-looking WS/WSS must reach the actual proxy resolver.");
   assert.ok(lookups>=2,"Actual proxy resolver must evaluate HTTP and HTTPS requests.");
   assert.equal(localConnections,0,"Browser bypassed proxy and reached local TCP.");
   assert.equal(localHits,0,"Browser or candidate proxy contacted forbidden local HTTP.");
