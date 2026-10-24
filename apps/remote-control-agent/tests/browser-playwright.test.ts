@@ -54,6 +54,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.deepEqual(settings.args,[
         "--proxy-bypass-list=<-loopback>",
         "--disable-quic",
+        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
         "--webrtc-ip-handling-policy=disable_non_proxied_udp",
       ]);
       calls.push("channel:"+String(settings.channel));
