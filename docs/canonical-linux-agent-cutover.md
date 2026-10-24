@@ -1,6 +1,6 @@
 # Linux Agent — one-time canonical service cutover
 
-Status (2026-10-23): **source implementation and isolated CI tests only; no immutable new release or production cutover**. The installed WSL2 identity is still connected through the existing `v0.1.11` signed-WSS Agent.
+Status (2026-10-24): **source implementation and isolated CI tests only; no canonical production cutover**. The installed WSL2 identity still connects through the existing `v0.1.11` signed-WSS Agent. Read-only host inspection confirmed the exact historical signed unit and separately active loopback, Tunnel and WSS units.
 
 ## Stable target
 
@@ -21,13 +21,13 @@ If new-service activation fails, the utility attempts to restore old files and r
 
 ## Real WSL2 cutover prerequisites
 
-1. Identify and retire any remaining consumers of the old Cloudflare Tunnel (currently still has active connections). Do not infer it is unused merely because the ChatGPT MCP Portal uses the signed-WSS Worker.
-2. Upgrade the installed **`v0.1.11 → v0.1.12`** from the real WSL2 terminal using the already-reviewed current Worker release. `v0.1.11` lacks the process-quiescence handshake, so remote stop/upgrade is unsafe.
-3. Publish and independently review a **newer immutable Agent Release** containing this migration utility; update the Worker Release pin through the normal project GitHub Actions release procedure. The current pinned `v0.1.12` is not this release.
+1. Identify all consumers of the old Cloudflare Tunnel **before retiring it**. Read-only Cloudflare review on 2026-10-24 found the Tunnel healthy with four active connections; the two accessible account Zones had no CNAME pointing to its Tunnel ID, but the API returned no ingress configuration. This does not establish that the Tunnel is unused. Keep the loopback Agent and Tunnel unchanged until the consumer audit is conclusive.
+2. On a genuine WSL2 terminal, complete the **one-time offline upgrade of the signed WSS Agent from `v0.1.11` to the currently reviewed Worker-pinned stable Release**. The bound Worker pinned `v0.1.20` when inspected on 2026-10-24; re-check it immediately before proceeding. That immutable Release's Linux installer implements the `v0.1.11` offline confirmation (`OFFLINE-V2-UPGRADE`) and preserves the old `remote-control-v2-agent.service` unit name. Stop this signed WSS service **from the WSL2 terminal**, confirm pending Shell work has completed, and run the reviewed owner-local `rca upgrade`; never initiate stop/upgrade over its own MCP session. The immutable `v0.1.12` bundle has also been independently hash-verified and staged, but it is **not a mandatory intermediate hop** if the current reviewed pin supports the direct offline path.
+3. After independently verifying the upgraded WSS Agent reconnects under the **same device ID** and preserves receipts, review and publish a **newer immutable Release containing this canonical migration utility**, then update the Worker Release pin through the normal GitHub Actions process. A pre-cutover Release such as `v0.1.20` does not include this migration utility.
 4. Validate local archive staging, the exact installed unit templates, failure-injection rollback and interrupted migration recovery in isolated environments.
-5. From the ordinary WSL2 terminal, finish outstanding work; stop the existing signed-WSS Agent, old loopback Agent and Tunnel. Do **not** issue `systemctl stop` over Remote Control because the authenticated WSS channel terminates.
+5. From the ordinary WSL2 terminal, finish outstanding work and stop the upgraded signed-WSS Agent, old loopback Agent and Tunnel **only when all Tunnel consumers have been identified and the cutover is authorized**. Do **not** stop the Agent over Remote Control because its authenticated WSS channel terminates.
 6. Run the verified Worker `install.sh --upgrade` **only once the newer reviewed Release is pinned**. It enters the owner-local migration program for the exact old collision and requests `MIGRATE-REMOTE-CONTROL` on the local terminal. Any mismatch fails closed rather than overwriting a foreign service.
-7. Confirm `remote-control-agent.service` is active with the correct immutable executable, the old unit names and Tunnel are disabled, the **original exact device ID** reconnects, read-only MCP operation succeeds, and earlier receipts remain queryable.
+7. Confirm `remote-control-agent.service` is active with the correct immutable executable, the old unit names and Tunnel are disabled, the **original exact device ID** reconnects, read-only MCP operation succeeds, and earlier receipts remain queryable. If the signed-WSS upgrade in step 2 or canonical cutover in step 6 fails, use only the documented owner-local rollback path and preserve all private backup evidence.
 8. Keep the private backups until the cutover has been independently accepted. Do not remove the old Cloudflare tunnel/DNS or source history automatically.
 
 The bundled migration program also offers `--rollback` for **owner-local offline** recovery after all three named units have been stopped. It never revokes the existing device grant, resets keys or replays earlier Shell operations.
