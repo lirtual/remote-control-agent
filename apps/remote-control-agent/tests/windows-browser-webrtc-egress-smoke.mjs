@@ -28,6 +28,7 @@ async function listen(server) {
 }
 async function probeSockets() {
   const stunPackets = [];
+  const stunPacketsV6 = [];
   const udp = dgram.createSocket("udp4");
   udp.on("message", (data, from) => {
     if (data.length < 20 || (data[0] & 0xc0) !== 0 ||
@@ -42,6 +43,17 @@ async function probeSockets() {
     udp.once("error", reject);
     udp.bind(0, "127.0.0.1", () => resolve(udp.address().port));
   });
+  const udpV6 = dgram.createSocket("udp6");
+  udpV6.on("message", (data, from) => {
+    if (data.length >= 20 && (data[0] & 0xc0) === 0 &&
+        data.readUInt32BE(4) === 0x2112a442 && from.address === "::1") {
+      stunPacketsV6.push({type:data.readUInt16BE(0),sourcePort:from.port});
+    }
+  });
+  const udpV6Port = await new Promise((resolve,reject) => {
+    udpV6.once("error",reject);
+    udpV6.bind(0,"::1",()=>resolve(udpV6.address().port));
+  });
   let tcpHits = 0;
   const tcp = net.createServer(socket => {
     tcpHits++;
@@ -50,9 +62,10 @@ async function probeSockets() {
   });
   const tcpPort = await listen(tcp);
   return {
-    udpPort, tcpPort, stunPackets, getTcpHits: () => tcpHits,
+    udpPort, udpV6Port, tcpPort, stunPackets, stunPacketsV6, getTcpHits: () => tcpHits,
     async close() {
       udp.close();
+      udpV6.close();
       await new Promise(resolve => tcp.close(resolve));
     },
   };
@@ -94,11 +107,12 @@ try {
       );
       const page = activeContext.pages()[0] ?? await activeContext.newPage();
       await page.goto("about:blank");
-      const rtc = await page.evaluate(async ({udpPort, tcpPort}) => {
+      const rtc = await page.evaluate(async ({udpPort, udpV6Port, tcpPort}) => {
         if (typeof RTCPeerConnection !== "function") return {available: false};
         const connection = new RTCPeerConnection({
           iceServers: [
             {urls: "stun:127.0.0.1:" + udpPort},
+            {urls: "stun:[::1]:" + udpV6Port},
             {urls: "turn:127.0.0.1:" + tcpPort + "?transport=tcp",
               username: "ci", credential: "ci"},
           ],
@@ -109,15 +123,18 @@ try {
           await new Promise(resolve => setTimeout(resolve, 2400));
           return {available: true, state: connection.iceGatheringState};
         } finally { connection.close(); }
-      }, {udpPort: probe.udpPort, tcpPort: probe.tcpPort});
+      }, {udpPort: probe.udpPort, udpV6Port: probe.udpV6Port,
+        tcpPort: probe.tcpPort});
       await page.waitForTimeout(250);
       const packets = probe.stunPackets;
       results.push({
         channel, mode, ...rtc,
         validStunHits: packets.length,
+        validStunV6Hits: probe.stunPacketsV6.length,
         stunTypes: [...new Set(packets.map(p => p.type))],
         uniqueSourcePorts: new Set(packets.map(p => p.sourcePort)).size,
         tcpHits: probe.getTcpHits(),
+        uniqueV6SourcePorts: new Set(probe.stunPacketsV6.map(p=>p.sourcePort)).size,
       });
       console.log("WINDOWS_WEBRTC_PROXY_EGRESS_OBSERVATION=" + JSON.stringify(results.at(-1)));
     } finally {
@@ -132,12 +149,14 @@ try {
   // remains inconclusive and must fail the gate.
   assert.ok(results.some(x=>x.mode!=="documented-policy" && x.validStunHits > 0),
     "No unrestricted STUN positive control; a zero restricted count is inconclusive.");
+  assert.ok(results.some(x=>x.mode!=="documented-policy" && x.validStunV6Hits>0),
+    "No unrestricted IPv6 STUN positive control; restricted zero is inconclusive.");
   const documented = results.find(x => x.mode === "documented-policy");
-  const verdict = documented.validStunHits === 0 && documented.tcpHits === 0
-    ? "DOCUMENTED_FLAG_BLOCKED_STUN_FIXTURE_ONLY"
+  const verdict = documented.validStunHits === 0 && documented.validStunV6Hits === 0 && documented.tcpHits === 0
+    ? "DOCUMENTED_FLAG_BLOCKED_DUAL_STACK_STUN_FIXTURE_ONLY"
     : "DIRECT_WEBRTC_TRAFFIC_OBSERVED";
   console.log("WINDOWS_WEBRTC_POLICY_COMPARISON=" + JSON.stringify({
-    channel, verdict, modes: results.map(x=>({mode:x.mode,udp:x.validStunHits,tcp:x.tcpHits})),
+    channel, verdict, modes: results.map(x=>({mode:x.mode,udp4:x.validStunHits,udp6:x.validStunV6Hits,tcp:x.tcpHits})),
     productionIsolation:"NOT_TESTED", osConfinement:"NOT_TESTED",
   }));
 } finally {
