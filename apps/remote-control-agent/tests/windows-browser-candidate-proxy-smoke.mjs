@@ -39,6 +39,7 @@ const proxy=await startCandidateBrowserEgressProxy(async host=>{
 });
 const privateStore=await mkdtemp(path.join(os.tmpdir(),"rca-candidate-proxy-"));
 let context;
+let proxyClosed=false;
 try {
   context=await chromium.launchPersistentContext(
     path.join(privateStore,"profile-"+channel),{
@@ -71,12 +72,25 @@ try {
   assert.ok(lookups>=2,"Actual proxy resolver must evaluate HTTP and HTTPS requests.");
   assert.equal(localConnections,0,"Browser bypassed proxy and reached local TCP.");
   assert.equal(localHits,0,"Browser or candidate proxy contacted forbidden local HTTP.");
+
+  // A dead proxy MUST NOT trigger a DIRECT fallback, including for loopback.
+  // This is the exact kind of gap that can invalidate an otherwise correct
+  // DNS/redirect filter when a page triggers reconnect/retry.
+  await proxy.close();
+  proxyClosed=true;
+  try {
+    await page.goto("http://127.0.0.1:"+localPort+"/proxy-down",{timeout:2500});
+  } catch { /* fail-closed proxy connection is expected */ }
+  await page.waitForTimeout(200);
+  assert.equal(localConnections,0,"Browser fell back to direct local TCP after proxy shutdown.");
+  assert.equal(localHits,0,"Browser directly reached local HTTP after proxy shutdown.");
   console.log("WINDOWS_CANDIDATE_PROXY_PRIVATE_DNS="+channel+":PASS");
   console.log(JSON.stringify({channel,lookups,localConnections,localHits,
-    dnsPrivateDenied:true,httpConnectDenied:true,actualProductionIsolation:"NOT_TESTED"}));
+    dnsPrivateDenied:true,httpConnectDenied:true,proxyDownFallbackDenied:true,
+    actualProductionIsolation:"NOT_TESTED"}));
 } finally {
   await context?.close().catch(()=>{});
-  await proxy.close();
+  if(!proxyClosed) await proxy.close();
   await new Promise(resolve=>privateListener.close(resolve));
   await rm(privateStore,{recursive:true,force:true});
 }
