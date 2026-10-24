@@ -52,3 +52,29 @@ test("candidate CONNECT proxy rejects internal and rebinding destinations", asyn
     assert.equal(await tunnel("localhost:443"),403);
   } finally { await proxy.close(); }
 });
+
+test("proxy shutdown during pending DNS never authorizes a late dial", async () => {
+  let release!: () => void, started!: () => void;
+  const dnsStarted = new Promise<void>(resolve => { started = resolve; });
+  const dnsGate = new Promise<void>(resolve => { release = resolve; });
+  const proxy = await startCandidateBrowserEgressProxy(async () => {
+    started();
+    await dnsGate;
+    return [{ address:"93.184.216.34", family:4 }];
+  });
+  const endpoint = new URL(proxy.server);
+  const completed = new Promise<void>(resolve => {
+    const req = http.request({
+      hostname:endpoint.hostname, port:Number(endpoint.port),
+      method:"GET", path:"http://public.example.com/rejected-after-close",
+    }, res => { res.resume(); res.once("end", resolve); });
+    req.once("error", () => resolve());
+    req.end();
+  });
+  await dnsStarted;
+  await proxy.close();
+  release();
+  await completed;
+  // The DNS resolver was allowed to finish, but the browser-owned proxy
+  // had already revoked its socket authority; no new public connection.
+});
