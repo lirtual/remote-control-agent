@@ -60,7 +60,7 @@ windows("mismatched SHA-256 and altered ZIP bytes cannot pass verification",()=>
  const f=fixture();
  try{
   assert.throws(()=>comparePinnedWindowsZipToInstalled(f.archive,f.installed,"f".repeat(64)),/SHA-256 mismatch/);
-  const bad=readFileSync(f.archive);bad[bad.length-1]^=1;writeFileSync(f.archive,bad);
+  const bad=readFileSync(f.archive);bad[bad.length-1]=bad[bad.length-1]! ^ 1;writeFileSync(f.archive,bad);
   assert.throws(()=>comparePinnedWindowsZipToInstalled(f.archive,f.installed,f.sha),/SHA-256 mismatch/);
  }finally{f.close();}
 });
