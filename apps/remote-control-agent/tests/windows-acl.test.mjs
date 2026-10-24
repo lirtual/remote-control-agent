@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
+import {inspectWindowsLocalUpgradeIdentity} from "../src/upgrade-windows-inspector.ts";
 import { spawnSync } from "node:child_process";
 import { writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import os from "node:os";
@@ -49,9 +51,19 @@ test("Windows native store starts with a protected current-user ACL", { skip:
   const newId = "22222222-2222-4222-8222-222222222222";
   const localId = path.win32.join(root, "v2-identity.pem.device-id");
   const pending = path.win32.join(root, "v2-identity.pem.device-id.pending");
+  // A disposable synthetic key and ID prove the same owner-only ACL path
+  // that post-reconnect recovery will inspect. Neither is a production key.
+  const fakePrivate="TEST_ONLY_NO_PRIVATE_KEY";
+  writeFileSync(key,fakePrivate,{flag:"wx"});
+  assert.equal(run("Seal",root,"v2-identity.pem").status,0);
   writeFileSync(localId, oldId + "\n", { flag: "wx" });
   try {
     assert.equal(run("Seal", root, "v2-identity.pem.device-id").status, 0);
+    const digest=createHash("sha256").update(fakePrivate).digest("hex");
+    assert.deepEqual(await inspectWindowsLocalUpgradeIdentity({device_id:oldId,identity_sha256:digest}),
+      {privateAclVerified:true,identityMatches:true});
+    assert.equal((await inspectWindowsLocalUpgradeIdentity({device_id:newId,identity_sha256:digest})).identityMatches,false);
+    assert.equal((await inspectWindowsLocalUpgradeIdentity({device_id:oldId,identity_sha256:"f".repeat(64)})).identityMatches,false);
     await replaceSignedDeviceId(path.win32.join(root, "v2-identity.pem"), oldId, newId, () => {
       assert.equal(readFileSync(localId, "utf8").trim(), oldId);
       assert.equal(existsSync(pending), true);
@@ -67,6 +79,7 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     assert.equal(readFileSync(localId, "utf8").trim(), newId);
     assert.equal(existsSync(pending), false);
   } finally {
+    rmSync(key, { force: true });
     rmSync(localId, { force: true });
     rmSync(pending, { force: true });
   }

@@ -6,9 +6,11 @@
  * identity, private-key ACL, Release archive bytes, or authenticated WSS.
  */
 import {spawnSync} from "node:child_process";
-import {readFile} from "node:fs/promises";
+import {lstat,readFile} from "node:fs/promises";
+import {createHash,timingSafeEqual} from "node:crypto";
 import path from "node:path";
 import type {UpgradeRequest} from "./upgrade-authorization.ts";
+import {assertWindowsPrivateIdentityStore} from "./windows-v2.ts";
 
 export interface WindowsTaskSnapshot {
   taskName:string; state:number; sid:string;
@@ -103,4 +105,31 @@ export async function inspectWindowsLocalUpgradeTask(
       manifest.target==="windows-x64"&&manifest.device_protocol===2&&
       manifest.receipt_schema===1&&manifest.upgrade_profile==="paired-full-v1"};
   }catch{return missing;}
+}
+
+/** Owner-local identity proof; does not claim executable provenance, task health
+ * or authenticated reconnect. All identity paths are fixed to the current user.
+ */
+export async function inspectWindowsLocalUpgradeIdentity(
+ request:Pick<UpgradeRequest,"device_id"|"identity_sha256">,
+):Promise<Readonly<{privateAclVerified:boolean;identityMatches:boolean}>> {
+ const missing={privateAclVerified:false,identityMatches:false};
+ if(process.platform!=="win32"||process.arch!=="x64")return missing;
+ try {
+  const root=assertWindowsPrivateIdentityStore();
+  const key=path.win32.join(root,"v2-identity.pem");
+  const id=key+".device-id";
+  for(const file of [key,id]){
+   const stat=await lstat(file);
+   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1)return missing;
+  }
+  // ACLs were verified by the installed Windows private-store checker.
+  const deviceId=(await readFile(id,"utf8")).trim();
+  const digest=createHash("sha256").update(await readFile(key)).digest("hex");
+  const required=request.identity_sha256;
+  const identityMatches=deviceId===request.device_id&&
+    typeof required==="string"&&/^[a-f0-9]{64}$/.test(required)&&
+    timingSafeEqual(Buffer.from(digest,"hex"),Buffer.from(required,"hex"));
+  return {privateAclVerified:true,identityMatches};
+ }catch{return missing;}
 }

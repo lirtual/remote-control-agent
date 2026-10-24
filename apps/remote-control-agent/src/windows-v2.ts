@@ -95,6 +95,13 @@ function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string
   if (result.error || result.status !== 0) throw Error("Windows private identity ACL check refused.");
 }
 
+/** Reuse the existing owner+SYSTEM ACL contract. A missing key is NOT created. */
+export function assertWindowsPrivateIdentityStore(): string {
+  const directory=windowsAgentStore(process.env.LOCALAPPDATA);
+  assertPrivateStore("Check",directory);
+  return directory;
+}
+
 async function hasFile(filename: string): Promise<boolean> {
   try {
     const info = await lstat(filename);
