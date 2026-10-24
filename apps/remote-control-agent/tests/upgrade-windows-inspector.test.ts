@@ -54,6 +54,9 @@ test("unapproved endpoint redirects, URL credentials and unsafe URL components a
     assert.equal(inspectWindowsTaskStructure(alt,root,sid,url).taskActionMatches,false);
   }
   assert.equal(inspectWindowsTaskStructure(task,root,sid,"https://different.example/").taskActionMatches,false);
+  // A well-formed but attacker-controlled URL is not the trusted endpoint.
+  const altered={...task,arguments:task.arguments.replace(endpoint,"https://attacker.example/")};
+  assert.equal(inspectWindowsTaskStructure(altered,root,sid,endpoint).taskActionMatches,false);
 });
 test("native Windows inspection never claims executable or key provenance from a task alone",async()=>{
   const req:UpgradeRequest={
@@ -64,7 +67,7 @@ test("native Windows inspection never claims executable or key provenance from a
     authorized_until:1792845120000,
   };
   if(process.platform!=="win32") {
-    assert.deepEqual(await inspectWindowsLocalUpgradeTask(req),{
+    assert.deepEqual(await inspectWindowsLocalUpgradeTask(req,endpoint),{
       taskRunning:false,taskActionMatches:false,bundleManifestMatches:false,
     });
   }
