@@ -136,13 +136,15 @@ try {
       socket.onclose=()=>finish("denied");
     }),url);
     assert.equal(outcome,"denied","Unsafe WebSocket unexpectedly opened: "+url);
-    if(url.includes("public.example.com"))
+    // ws:// normally uses CONNECT :80, which the proxy rejects BEFORE DNS.
+    // wss:// uses CONNECT :443 and must reach the pinned DNS guard.
+    if(url.startsWith("wss://public.example.com"))
       assert.ok(lookups>previousLookups,
-        "Public-looking WS/WSS did not reach the candidate DNS policy: "+url);
+        "Public-looking WSS did not reach the candidate DNS policy: "+url);
   }
   await probePage.waitForTimeout(100);
   assert.ok(lookups>websocketLookupsBefore,
-    "Public-looking WS/WSS must reach the actual proxy resolver.");
+    "Public-looking WSS must reach the actual proxy resolver.");
   assert.ok(lookups>=2,"Actual proxy resolver must evaluate HTTP and HTTPS requests.");
   assert.equal(localConnections,0,"Browser bypassed proxy and reached local TCP.");
   assert.equal(localHits,0,"Browser or candidate proxy contacted forbidden local HTTP.");
