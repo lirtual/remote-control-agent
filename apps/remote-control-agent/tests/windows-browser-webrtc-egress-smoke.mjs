@@ -19,7 +19,11 @@ const {chromium}=await import(pathToFileURL(path.join(stage,
 const udp=dgram.createSocket("udp4");
 let udpHits=0, tcpHits=0;
 udp.on("message",()=>{udpHits++;});
-const tcp=net.createServer(socket=>{tcpHits++;socket.destroy();});
+const tcp=net.createServer(socket=>{
+  tcpHits++;
+  socket.on("error",()=>{});
+  socket.destroy();
+});
 const bindUdp=()=>new Promise((resolve,reject)=>{
   udp.once("error",reject);
   udp.bind(0,"127.0.0.1",()=>resolve(udp.address().port));
@@ -34,7 +38,11 @@ let context;
 try{
   const {createServer}=await import("node:http");
   const proxy=createServer((_,res)=>{res.writeHead(403);res.end();});
-  proxy.on("connect",(_req,socket)=>{socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");});
+  proxy.on("connect",(_req,socket)=>{
+    socket.on("error",()=>{}); // TCP rejection can race Chromium teardown.
+    socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+  });
+  proxy.on("connection",socket=>socket.on("error",()=>{}));
   await new Promise((resolve,reject)=>{
     proxy.once("error",reject);
     proxy.listen(0,"127.0.0.1",resolve);
