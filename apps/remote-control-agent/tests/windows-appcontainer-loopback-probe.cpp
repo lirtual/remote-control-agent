@@ -109,10 +109,37 @@ static int child(unsigned port) {
   dst.sin_family = AF_INET;
   dst.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   dst.sin_port = htons(static_cast<u_short>(port));
-  const int status = connect(client, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+  // A firewall packet drop can leave a synchronous connect blocked beyond
+  // the parent's deadline. A bounded nonblocking connect is a real probe:
+  // success is verified with SO_ERROR, not merely writable socket readiness.
+  u_long nonblocking = 1;
+  if (ioctlsocket(client, FIONBIO, &nonblocking) != 0) {
+    closesocket(client); WSACleanup(); return 73;
+  }
+  int status = connect(client, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+  bool connected = (status == 0);
+  if (!connected && WSAGetLastError() == WSAEWOULDBLOCK) {
+    fd_set writes, errors;
+    FD_ZERO(&writes); FD_SET(client, &writes);
+    FD_ZERO(&errors); FD_SET(client, &errors);
+    timeval wait{2, 0};
+    const int ready = select(0, nullptr, &writes, &errors, &wait);
+    if (ready == SOCKET_ERROR) {
+      closesocket(client); WSACleanup(); return 74;
+    }
+    if (ready > 0 && FD_ISSET(client, &writes)) {
+      int socketError = 1;
+      int length = sizeof(socketError);
+      if (getsockopt(client, SOL_SOCKET, SO_ERROR,
+          reinterpret_cast<char*>(&socketError), &length) != 0) {
+        closesocket(client); WSACleanup(); return 75;
+      }
+      connected = (socketError == 0);
+    }
+  }
   closesocket(client);
   WSACleanup();
-  return status == 0 ? 0 : 42;
+  return connected ? 0 : 42;
 }
 int wmain(int argc, wchar_t** argv) {
   if (argc == 2 && wcscmp(argv[1], L"--health") == 0) return 0;
