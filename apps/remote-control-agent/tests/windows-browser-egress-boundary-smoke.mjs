@@ -90,7 +90,7 @@ try {
       serviceWorkers: "block", timeout: 20_000,
       proxy: { server: `http://127.0.0.1:${proxyPort}`, bypass: "<-loopback>" },
       args: ["--proxy-bypass-list=<-loopback>", "--disable-quic",
-        "--host-resolver-rules=MAP * ~NOTFOUND"],
+        "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"],
     }
   );
   const page = context.pages()[0] ?? await context.newPage();
