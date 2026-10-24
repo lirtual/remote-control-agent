@@ -123,6 +123,7 @@ export function buildWindowsPreview(args) {
   if (browserRuntime) {
     mkdirSync(path.join(stage,"apps/remote-control-agent/candidates"),
       {recursive:true,mode:0o700});
+    const audited = [];
     for (const [relative,reviewedSha] of Object.entries(PINNED_WINDOWS_BROWSER_MODULES)) {
       const name=path.basename(relative).replace(/\.js$/,".ts");
       const source=readFileSync(path.join(root,"candidates",name),"utf8");
@@ -133,11 +134,17 @@ export function buildWindowsPreview(args) {
       if((compiled.diagnostics||[]).some(x=>x.category===ts.DiagnosticCategory.Error))
         throw Error("Reviewed browser network module did not compile.");
       const bytes=Buffer.from(rewriteImports(compiled.outputText));
-      const actual=digest(bytes);
-      if(actual!==reviewedSha)
-        throw Error("Unreviewed compiled browser module "+name+": SHA256 "+actual);
-      writeFileSync(path.join(stage,relative),bytes,{mode:0o600});
-      hashes[relative]=actual;
+      audited.push({name,relative,bytes,actual:digest(bytes),reviewedSha});
+    }
+    // CI logs only code SHA-256s, never identities or tokens. Audit ALL
+    // compiled files before independent pins can be updated together.
+    if(process.env.GITHUB_ACTIONS==="true") for(const module of audited)
+      process.stdout.write("BROWSER_MODULE_AUDIT_SHA256="+module.name+":"+module.actual+"\n");
+    if(audited.some(module=>module.actual!==module.reviewedSha))
+      throw Error("Unreviewed compiled browser modules.");
+    for(const module of audited) {
+      writeFileSync(path.join(stage,module.relative),module.bytes,{mode:0o600});
+      hashes[module.relative]=module.actual;
     }
   }
   if (browserRuntime) for(const relative of browserRuntime.files){
