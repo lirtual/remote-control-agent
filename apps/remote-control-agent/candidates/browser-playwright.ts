@@ -227,6 +227,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
           acceptDownloads: false, serviceWorkers: "block",
           proxy: { server: egress.server, bypass: "<-loopback>" },
           args: ["--proxy-bypass-list=<-loopback>", "--disable-quic",
+            "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1",
             "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
         });
         this.egressProxy = egress;
