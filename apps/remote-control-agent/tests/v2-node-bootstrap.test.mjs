@@ -425,6 +425,20 @@ test("explicit upgrade uses the exact new direct-service helper, not a three-ser
     assert.ok(!calls[0].args.some(arg=>String(arg).includes("migrate")));
   }finally{f.cleanup();}
 });
+test("ordinary installation cannot duplicate an existing signed device as a second service",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const unitDir=path.join(f.home,".config/systemd/user");
+    mkdirSync(unitDir,{recursive:true});
+    writeFileSync(path.join(unitDir,"remote-control-v2-agent.service"),"legacy",{mode:0o600});
+    let invoked=0;
+    assert.throws(()=>executeNodeBootstrap({...f.opts,locked:true},{
+      home:f.home,stdin:{isTTY:true},stdout:{isTTY:true},
+      invoke:()=>{invoked++;return {status:0};}
+    }),/requires explicit --upgrade/);
+    assert.equal(invoked,0);
+  }finally{f.cleanup();}
+});
 test("signed service discovery is independent of retired loopback and Tunnel units",()=>{
   const home=mkdtempSync(path.join(tmpdir(),"rca-signed-discovery-"));
   const unitDir=path.join(home,".config/systemd/user");

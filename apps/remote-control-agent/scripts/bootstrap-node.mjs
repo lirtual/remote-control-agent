@@ -392,7 +392,10 @@ export function executeNodeBootstrap(options,{
   }
   // Existing signed WSS Agents upgrade in place; never require the retired
   // loopback/Tunnel pair or a second, migration-specific confirmation.
-  if(options.upgrade && hasLegacySignedService(home)){
+  const existingSigned=hasLegacySignedService(home);
+  if(existingSigned && !options.upgrade)
+    throw Error("Installed signed Agent requires explicit --upgrade");
+  if(existingSigned){
     const upgrader=join(prepared.root,APP,"scripts/upgrade-existing-service.mjs");
     verifyOwnedPath(upgrader);
     const changed=invoke(prepared.bin,[upgrader,prepared.root,options.endpoint],{
