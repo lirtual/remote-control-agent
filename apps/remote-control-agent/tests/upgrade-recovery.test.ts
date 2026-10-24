@@ -38,6 +38,7 @@ test("missing, forged, failed or cross-tool receipts cannot establish a verified
     {...receipt,tool_name:"start_process" as const},
     {...receipt,argument_digest:"f".repeat(64)},
     {...receipt,state:"failed" as const},
+    {...receipt,state:"admitted" as const},
   ]) assert.deepEqual(assess(altered),{kind:"unresolved",operationId:request.operation_id,reason:"receipt"});
 });
 test("prior upgrade authorization is cryptographically bound to the same exact request",()=>{

@@ -30,7 +30,7 @@ export async function admitOwnerApprovedUpgrade(
     throw new Error("Owner upgrade approval missing or expired");
   }
   const digest = operationDigest("upgrade_agent", verified);
-  const admitted = await receipts.admit(verified.operation_id, "upgrade_agent", digest);
+  const admitted = await receipts.admit(verified.operation_id, "upgrade_agent", digest, JSON.stringify(verified));
   if (admitted.kind === "full") return { kind: "busy" };
   if (!admitted.receipt) throw new Error("Upgrade receipt not durable");
   if (admitted.kind === "conflict") return { kind: "conflict", receipt: admitted.receipt };

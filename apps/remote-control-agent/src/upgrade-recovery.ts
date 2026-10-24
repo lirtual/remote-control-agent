@@ -46,7 +46,7 @@ export function assessUpgradeAfterReconnect(
   if(!receipt || receipt.operation_id!==request.operation_id ||
       receipt.tool_name!=="upgrade_agent" ||
       !sameDigest(receipt.argument_digest,operationDigest("upgrade_agent",request)) ||
-      !["admitted","running","unknown","completed"].includes(receipt.state))
+      !["running","unknown","completed"].includes(receipt.state))
     return {kind:"unresolved",operationId:request.operation_id,reason:"receipt"};
   if(observed.deviceId!==request.device_id ||
       !sameDigest(observed.identitySha256,request.identity_sha256))

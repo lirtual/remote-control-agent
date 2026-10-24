@@ -183,3 +183,56 @@ test("concurrent distinct IDs cannot both reserve a device-wide upgrade slot",as
     assert.deepEqual(results.map(r=>r.kind).sort(),["busy","new"]);
   });
 });
+test("atomic approved request metadata survives restart in the original receipt SQLite file",async()=>{
+  await fixture(async(store,dir)=>{
+    const first=await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    assert.equal(first.kind,"new");
+    assert.deepEqual(await store.getUpgradeIntent(req.operation_id),req);
+    await store.update(req.operation_id,"running","Upgrade handoff started");
+    await store.close();
+    const restarted=new ReceiptStore(dir);
+    try{
+      await restarted.open();
+      assert.equal((await restarted.get(req.operation_id))?.state,"unknown");
+      assert.deepEqual(await restarted.getUpgradeIntent(req.operation_id),req);
+      assert.equal((await admitOwnerApprovedUpgrade(restarted,req,ctx,async()=>true)).kind,"existing");
+    }finally{await restarted.close();}
+  });
+});
+test("SQLite metadata and receipt rollback together on forced COMMIT failure",async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),"rca-upgrade-atomic-"));
+  let fail=false;
+  const store=new ReceiptStore(directory,phase=>fail&&phase==="commit");
+  try{
+    await store.open();fail=true;
+    await assert.rejects(admitOwnerApprovedUpgrade(store,req,ctx,async()=>true),/commit is unavailable/);
+    fail=false;
+    assert.equal(await store.get(req.operation_id),null);
+    assert.equal(await store.getUpgradeIntent(req.operation_id),null);
+    assert.equal((await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true)).kind,"new");
+    assert.deepEqual(await store.getUpgradeIntent(req.operation_id),req);
+  }finally{fail=false;await store.close();await rm(directory,{recursive:true,force:true});}
+});
+test("tampered persisted upgrade metadata cannot be recovered or reused",async()=>{
+  await fixture(async(store,dir)=>{
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await store.close();
+    const {DatabaseSync}=await import("node:sqlite");
+    const db=new DatabaseSync(path.join(dir,"operation-receipts.sqlite"));
+    try{
+      db.prepare("UPDATE upgrade_intents SET request_json = ? WHERE operation_id = ?")
+        .run(JSON.stringify({...req,target_sha256:"d".repeat(64)}),req.operation_id);
+    }finally{db.close();}
+    await store.open();
+    await assert.rejects(store.getUpgradeIntent(req.operation_id),/digest mismatch/);
+    assert.equal((await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true)).kind,"conflict");
+  });
+});
+test("non-upgrade receipt writes never require or create upgrade metadata",async()=>{
+  await fixture(async(store)=>{
+    await store.admit("another-write","write_file","e".repeat(64));
+    assert.equal(await store.getUpgradeIntent("another-write"),null);
+    await assert.rejects(store.admit("invalid-direct","upgrade_agent","e".repeat(64)),/metadata required/);
+    assert.equal(await store.get("invalid-direct"),null);
+  });
+});

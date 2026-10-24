@@ -252,11 +252,30 @@ export class ReceiptStore {
     }
   }
 
-  async admit(operationId: string, toolName: OperationReceipt["tool_name"], digest: string):
+  async admit(operationId: string, toolName: OperationReceipt["tool_name"], digest: string,
+    upgradeRequestJson?: string):
     Promise<{ kind: "new" | "same" | "conflict" | "full"; receipt?: OperationReceipt }> {
+    if ((toolName === "upgrade_agent") !== (typeof upgradeRequestJson === "string"))
+      throw new Error("Approved upgrade metadata required only for upgrade Agent operations.");
+    if (upgradeRequestJson !== undefined) {
+      let request: unknown;
+      try { request = JSON.parse(upgradeRequestJson) as unknown; }
+      catch { throw new Error("Invalid approved upgrade metadata."); }
+      if (operationDigest("upgrade_agent", request) !== digest)
+        throw new Error("Approved upgrade metadata and digest disagree.");
+    }
     return this.transaction(() => {
       const prior = this.getStored(operationId);
       if (prior) {
+        if (upgradeRequestJson !== undefined &&
+            this.db().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_intents'").get()) {
+          const metadata = this.db().prepare("SELECT request_json FROM upgrade_intents WHERE operation_id = ?")
+            .get(operationId) as { request_json: string } | undefined;
+          if (!metadata || operationDigest("upgrade_agent", JSON.parse(metadata.request_json) as unknown) !== digest)
+            return { kind: "conflict" as const, receipt: fromRow(prior) };
+        } else if (upgradeRequestJson !== undefined) {
+          return { kind: "conflict" as const, receipt: fromRow(prior) };
+        }
         return { kind: prior.tool_name === toolName && prior.argument_digest === digest ? "same" as const : "conflict" as const, receipt: fromRow(prior) };
       }
       this.cleanup();
@@ -270,6 +289,14 @@ export class ReceiptStore {
       const now = new Date().toISOString();
       this.db().prepare("INSERT INTO receipts (operation_id, tool_name, argument_digest, state, created_at, updated_at, safe_result_summary, session_id, guarded) VALUES (?, ?, ?, 'admitted', ?, ?, NULL, NULL, 1)")
         .run(operationId, toolName, digest, now, now);
+      if (upgradeRequestJson !== undefined) {
+        // An additive table in the ORIGINAL private SQLite file, within the
+        // same transaction as the receipt. No second store/journal to reconcile.
+        this.db().exec("CREATE TABLE IF NOT EXISTS upgrade_intents (operation_id TEXT PRIMARY KEY NOT NULL, request_json TEXT NOT NULL)");
+        this.db().prepare("INSERT INTO upgrade_intents(operation_id, request_json) VALUES (?, ?)")
+          .run(operationId, upgradeRequestJson);
+        this.db().exec("DELETE FROM upgrade_intents WHERE operation_id NOT IN (SELECT operation_id FROM receipts)");
+      }
       return { kind: "new" as const, receipt: fromRow(this.getStored(operationId)!) };
     });
   }
@@ -284,6 +311,27 @@ export class ReceiptStore {
       this.db().prepare("UPDATE receipts SET state = ?, updated_at = ?, safe_result_summary = ?, session_id = COALESCE(?, session_id), guarded = ? WHERE operation_id = ?")
         .run(state, new Date().toISOString(), summary.slice(0, 128), sessionId ?? null, guarded ? 1 : 0, operationId);
       return fromRow(this.getStored(operationId)!);
+    });
+  }
+
+  /** Recover the EXACT approved request after a restart. Never grants permission.
+   * This read fails closed on missing metadata or a mismatched receipt digest.
+   */
+  async getUpgradeIntent(operationId: string): Promise<unknown | null> {
+    return this.transaction(() => {
+      const receipt = this.getStored(operationId);
+      if (!receipt || receipt.tool_name !== "upgrade_agent") return null;
+      if (!this.db().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_intents'").get())
+        throw new Error("Upgrade approval metadata unavailable.");
+      const meta = this.db().prepare("SELECT request_json FROM upgrade_intents WHERE operation_id = ?")
+        .get(operationId) as { request_json: string } | undefined;
+      if (!meta) throw new Error("Upgrade approval metadata missing.");
+      let value: unknown;
+      try { value = JSON.parse(meta.request_json) as unknown; }
+      catch { throw new Error("Upgrade approval metadata corrupt."); }
+      if (operationDigest("upgrade_agent", value) !== receipt.argument_digest)
+        throw new Error("Upgrade approval metadata digest mismatch.");
+      return value;
     });
   }
 
