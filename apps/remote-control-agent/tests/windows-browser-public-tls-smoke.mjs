@@ -19,7 +19,7 @@ const { startCandidateBrowserEgressProxy } = await import(pathToFileURL(path.joi
   process.cwd(), "apps/remote-control-agent/candidates/browser-egress-proxy.ts")).href);
 
 const profile = await mkdtemp(path.join(os.tmpdir(), "rca-ci-public-tls-"));
-let proxy, context;
+let proxy, context, proxyClosed = false;
 try {
   proxy = await startCandidateBrowserEgressProxy();
   context = await chromium.launchPersistentContext(path.join(profile, channel), {
@@ -40,12 +40,23 @@ try {
   assert.equal(response?.status(), 200, "Public HTTPS must work with verified TLS.");
   assert.match(await page.title(), /Example Domain/i);
   assert.equal(new URL(page.url()).hostname, "example.com");
+
+  // A real verified HTTPS response alone cannot exclude a browser DIRECT
+  // fallback. Tear down the candidate proxy and retry a cache-distinct HTTPS
+  // navigation in the SAME browser context: it must fail rather than escape.
+  await proxy.close();
+  proxyClosed = true;
+  const disconnected = await context.newPage();
+  await assert.rejects(disconnected.goto("https://example.com/?rca-proxy-down=ci", {
+    waitUntil: "domcontentloaded", timeout: 10_000,
+  }), "Public HTTPS navigated after its sole approved proxy was closed.");
   console.log("WINDOWS_CANDIDATE_PROXY_PUBLIC_TLS=" + channel + ":PASS");
   console.log(JSON.stringify({ channel, tlsVerifiedByBrowser: true,
     publicSite: "example.com", httpStatus: response.status(),
-    isolatedFixture: false, productionIsolation: "NOT_TESTED" }));
+    proxyDownPublicTlsDenied: true, isolatedFixture: false,
+    productionIsolation: "NOT_TESTED" }));
 } finally {
   await context?.close().catch(() => {});
-  await proxy?.close();
+  if (proxy && !proxyClosed) await proxy.close();
   await rm(profile, { recursive: true, force: true });
 }
