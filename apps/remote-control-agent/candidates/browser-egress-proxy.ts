@@ -50,6 +50,7 @@ export async function startCandidateBrowserEgressProxy(
   let closed = false;
   const clientSockets = new Set<Socket>();
   const upstreamSockets = new Set<Socket>();
+  const httpRequests = new Set<http.ClientRequest>();
   const pinned = (host: string) => resolvePinnedPublicAddress(host, resolver);
 
   const proxy = http.createServer(async (req, res) => {
@@ -71,8 +72,19 @@ export async function startCandidateBrowserEgressProxy(
       res.writeHead(upstream.statusCode ?? 502, upstream.headers);
       upstream.pipe(res);
     });
-    remote.on("error", () => { if (!res.headersSent) deny(res, 502); else res.destroy(); });
+    httpRequests.add(remote);
+    remote.once("close", () => httpRequests.delete(remote));
+    remote.on("socket", socket => {
+      upstreamSockets.add(socket);
+      socket.on("close", () => upstreamSockets.delete(socket));
+    });
+    remote.on("error", () => {
+      if (!res.headersSent && !res.destroyed) deny(res, 502);
+      else res.destroy();
+    });
     remote.on("timeout", () => remote.destroy(Error("Egress timeout.")));
+    req.once("aborted", () => remote.destroy());
+    res.once("close", () => remote.destroy());
     req.pipe(remote);
   });
   proxy.on("connect", async (req, client, head) => {
@@ -83,17 +95,21 @@ export async function startCandidateBrowserEgressProxy(
       if (closed || client.destroyed) { client.destroy(); return; }
       const upstream = net.connect({ host: ip.address, family: ip.family, port: target.port });
       upstreamSockets.add(upstream);
-      upstream.on("close", () => upstreamSockets.delete(upstream));
+      upstream.once("close", () => upstreamSockets.delete(upstream));
+      client.once("close", () => upstream.destroy());
       upstream.setTimeout(10_000, () => upstream.destroy());
+      let established = false;
       upstream.once("connect", () => {
+        if (closed || client.destroyed) { upstream.destroy(); return; }
+        established = true;
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         if (head.length) upstream.write(head);
         client.pipe(upstream).pipe(client);
       });
       upstream.on("error", () => {
-        if (!client.destroyed) {
-          client.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
-        }
+        if (client.destroyed) return;
+        if (established) client.destroy();
+        else client.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       });
     } catch {
       client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
@@ -118,6 +134,7 @@ export async function startCandidateBrowserEgressProxy(
     server: `http://127.0.0.1:${address.port}`,
     async close() {
       closed = true;
+      for (const request of httpRequests) request.destroy();
       for (const socket of upstreamSockets) socket.destroy();
       for (const socket of clientSockets) socket.destroy();
       await new Promise<void>(resolve => proxy.close(() => resolve()));
