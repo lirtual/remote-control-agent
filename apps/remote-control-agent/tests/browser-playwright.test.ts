@@ -45,6 +45,9 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.equal(settings.headless,false);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
+      assert.deepEqual(settings.args, [
+        "--disable-quic", "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+      ], "Only native-verified WebRTC UDP policy and QUIC-off may be used");
       calls.push("channel:"+String(settings.channel));
       calls.push("executable:"+String(settings.executablePath));
       if (options.launchWait) await options.launchWait;
