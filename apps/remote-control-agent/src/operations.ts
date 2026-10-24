@@ -312,6 +312,7 @@ export class ReceiptStore {
         if (state === "completed")
           throw new Error("Upgrade completion requires verified recovery.");
         if (previous.state === "completed" ||
+            (previous.state === "failed" && previous.guarded === 0) ||
             (previous.state === "unknown" && state !== "unknown" && state !== "failed") ||
             (previous.state === "running" && state === "admitted") ||
             (previous.state === "failed" && state !== "failed"))
@@ -319,17 +320,46 @@ export class ReceiptStore {
       }
       // Nonzero process exit is not proof of zero effects. Unknown/uncertain
       // failures keep their replay guard after normal retention.
-      // For upgrades, once execution may have started a later generic
-      // knownNoEffect flag can NEVER remove the guarded device-wide lock.
-      // Only a proven pre-execution cancellation (admitted -> failed) is safe.
-      // Uncertain/failed recovery needs a separate verified reconciliation.
-      const upgradeCouldHaveEffects = previous.tool_name === "upgrade_agent" &&
-        (previous.state === "running" || previous.state === "unknown" ||
-          (previous.state === "failed" && previous.guarded === 1));
+      // Generic failure callbacks cannot certify an upgrade had no effects.
+      // Only cancelUpgradeBeforeStart may remove an admitted reservation,
+      // atomically competing with the launcher's transition to running.
       const guarded = state === "unknown" || state === "admitted" || state === "running" ||
-        (state === "failed" && (!knownNoEffect || upgradeCouldHaveEffects));
+        (state === "failed" && (previous.tool_name === "upgrade_agent" || !knownNoEffect));
       this.db().prepare("UPDATE receipts SET state = ?, updated_at = ?, safe_result_summary = ?, session_id = COALESCE(?, session_id), guarded = ? WHERE operation_id = ?")
         .run(state, new Date().toISOString(), summary.slice(0, 128), sessionId ?? null, guarded ? 1 : 0, operationId);
+      return fromRow(this.getStored(operationId)!);
+    });
+  }
+
+  /** Cancel an approved upgrade ONLY before an executor claims it. This
+   * transaction serializes with update(...,"running") and never touches a
+   * started, crashed, unknown or previously guarded failure. No remote tool
+   * currently exposes this method.
+   */
+  async cancelUpgradeBeforeStart(operationId: string, expectedDigest: string): Promise<OperationReceipt> {
+    return this.transaction(() => {
+      const previous = this.getStored(operationId);
+      if (!previous || previous.tool_name !== "upgrade_agent" ||
+          previous.argument_digest !== expectedDigest || !/^[a-f0-9]{64}$/.test(expectedDigest))
+        throw new Error("Approved upgrade cancellation identity mismatch.");
+      if (previous.state === "failed" && previous.guarded === 0) {
+        if (previous.safe_result_summary !== "Cancelled before the upgrade executor started.")
+          throw new Error("Previous no-effect upgrade outcome is not a verified cancellation.");
+        return fromRow(previous); // idempotent cancellation, never re-execute
+      }
+      if (previous.state !== "admitted" || previous.guarded !== 1)
+        throw new Error("Upgrade has started or its effects are uncertain.");
+      const entry = this.db().prepare("SELECT request_json FROM upgrade_intents WHERE operation_id = ?")
+        .get(operationId) as { request_json: string } | undefined;
+      let request: unknown;
+      try { request = entry ? JSON.parse(entry.request_json) as unknown : null; }
+      catch { throw new Error("Approved upgrade cancellation metadata is corrupt."); }
+      if (!request || operationDigest("upgrade_agent", request) !== expectedDigest)
+        throw new Error("Approved upgrade cancellation metadata mismatch.");
+      this.db().prepare(
+        "UPDATE receipts SET state = 'failed', guarded = 0, updated_at = ?, " +
+        "safe_result_summary = ?, session_id = NULL WHERE operation_id = ? AND state = 'admitted'",
+      ).run(new Date().toISOString(), "Cancelled before the upgrade executor started.", operationId);
       return fromRow(this.getStored(operationId)!);
     });
   }

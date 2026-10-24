@@ -179,8 +179,11 @@ test("a cancelled, never-started upgrade can release its global reservation",asy
   await fixture(async(store)=>{
     const other={...req,operation_id:"approved-upgrade-no-effect"};
     await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
-    await store.update(req.operation_id,"failed","Cancelled before any switch",undefined,true);
-    await store.update(req.operation_id,"failed","Duplicate cancellation callback",undefined,true);
+    const digest=operationDigest("upgrade_agent",req);
+    const cancelled=await store.cancelUpgradeBeforeStart(req.operation_id,digest);
+    assert.equal(cancelled.state,"failed");
+    assert.deepEqual(await store.cancelUpgradeBeforeStart(req.operation_id,digest),cancelled);
+    await assert.rejects(store.update(req.operation_id,"running","Late executor"),/cannot be restarted|rewritten/);
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"new");
   });
 });
@@ -198,6 +201,36 @@ test("running upgrade cannot clear its guarded reservation by claiming no effect
       await restarted.update(req.operation_id,"failed","Repeated claim",undefined,true);
       assert.equal((await admitOwnerApprovedUpgrade(restarted,other,ctx,async()=>true)).kind,"busy");
     }finally{await restarted.close();}
+  });
+});
+test("upgrade cancellation refuses wrong identity, running, unknown and guarded failed states",async()=>{
+  await fixture(async(store)=>{
+    const digest=operationDigest("upgrade_agent",req);
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await assert.rejects(store.cancelUpgradeBeforeStart(req.operation_id,"f".repeat(64)),/identity mismatch/);
+    await store.update(req.operation_id,"running","Executor claimed upgrade");
+    await assert.rejects(store.cancelUpgradeBeforeStart(req.operation_id,digest),/started/);
+    await store.update(req.operation_id,"unknown","Lost connection");
+    await assert.rejects(store.cancelUpgradeBeforeStart(req.operation_id,digest),/uncertain/);
+    await store.update(req.operation_id,"failed","Rollback not verified",undefined,true);
+    await assert.rejects(store.cancelUpgradeBeforeStart(req.operation_id,digest),/uncertain/);
+  });
+});
+test("cancellation races with execution claim without permitting a second effect",async()=>{
+  await fixture(async(store)=>{
+    const digest=operationDigest("upgrade_agent",req);
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    const [cancel,start]=await Promise.allSettled([
+      store.cancelUpgradeBeforeStart(req.operation_id,digest),
+      store.update(req.operation_id,"running","Executor claimed upgrade"),
+    ]);
+    assert.notEqual(cancel.status,start.status);
+    const record=await store.get(req.operation_id);
+    assert.equal(record?.state,cancel.status==="fulfilled"?"failed":"running");
+    if(start.status==="fulfilled"){
+      const other={...req,operation_id:"approved-upgrade-race-2"};
+      assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    }
   });
 });
 test("concurrent distinct IDs cannot both reserve a device-wide upgrade slot",async()=>{
