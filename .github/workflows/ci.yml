@@ -361,6 +361,8 @@ jobs:
           foreach ($channel in @('chrome', 'msedge')) {
             & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-egress-boundary-smoke.mjs $extracted $channel
             if ($LASTEXITCODE -ne 0) { throw "Windows $channel proxy boundary probe failed" }
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-webrtc-egress-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel WebRTC egress observation failed" }
           }
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
           if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }
