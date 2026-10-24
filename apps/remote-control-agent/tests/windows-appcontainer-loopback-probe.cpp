@@ -23,8 +23,8 @@
 static void require(bool ok, const char* reason) {
   if (!ok) throw std::runtime_error(reason);
 }
-static std::wstring command(const std::wstring& image, unsigned port) {
-  return L"\"" + image + L"\" --child " + std::to_wstring(port);
+static std::wstring command(const std::wstring& image, unsigned port, bool health) {
+  return L"\"" + image + (health ? L"\" --health" : L"\" --child " + std::to_wstring(port));
 }
 struct Profile {
   std::wstring name;
@@ -35,7 +35,7 @@ struct Profile {
     if (created) DeleteAppContainerProfile(name.c_str());
   }
 };
-static DWORD launch(const std::wstring& exe, unsigned port, PSID packageSid) {
+static DWORD launch(const std::wstring& exe, unsigned port, PSID packageSid, bool health = false) {
   STARTUPINFOEXW si{};
   si.StartupInfo.cb = sizeof(si);
   PROCESS_INFORMATION pi{};
@@ -59,7 +59,7 @@ static DWORD launch(const std::wstring& exe, unsigned port, PSID packageSid) {
     si.lpAttributeList = list;
     flags |= EXTENDED_STARTUPINFO_PRESENT;
   }
-  std::wstring args = command(exe, port);
+  std::wstring args = command(exe, port, health);
   const BOOL started = CreateProcessW(exe.c_str(), args.data(),
     nullptr, nullptr, FALSE, flags, nullptr, nullptr,
     &si.StartupInfo, &pi);
@@ -115,6 +115,7 @@ static int child(unsigned port) {
   return status == 0 ? 0 : 42;
 }
 int wmain(int argc, wchar_t** argv) {
+  if (argc == 2 && wcscmp(argv[1], L"--health") == 0) return 0;
   if (argc == 3 && wcscmp(argv[1], L"--child") == 0) {
     const long port = wcstol(argv[2], nullptr, 10);
     if (port < 1 || port > 65535) return 72;
@@ -166,6 +167,13 @@ int wmain(int argc, wchar_t** argv) {
     }
     profile.created = true;
     // No internetClient, privateNetworkClientServer or loopback exemptions.
+    // First prove that the AppContainer can load and execute this exact
+    // program without any Winsock calls. A network timeout is not evidence
+    // of isolation if a no-network child never reaches main().
+    std::puts("APPCONTAINER_SANDBOX_HEALTH_START");
+    std::fflush(stdout);
+    require(launch(exe, port, profile.sid, true) == 0,
+      "AppContainer no-network child did not complete startup");
     std::puts("APPCONTAINER_SANDBOX_START");
     std::fflush(stdout);
     const DWORD result = launch(exe, port, profile.sid);
