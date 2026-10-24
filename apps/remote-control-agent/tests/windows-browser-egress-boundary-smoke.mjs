@@ -9,6 +9,8 @@ import path from "node:path";
 // create a system-wide proxy or claim complete SSRF isolation.
 if (process.platform !== "win32") throw Error("Native Windows CI only.");
 const stage = process.argv[2];
+const browserChannel = process.argv[3] ?? "chrome";
+if (!["chrome", "msedge"].includes(browserChannel)) throw Error("Unsupported test browser.");
 if (!stage || !path.isAbsolute(stage)) throw Error("Pinned absolute candidate path required.");
 const modulePath = path.join(stage, "apps/remote-control-agent/node_modules/playwright-core/index.mjs");
 const { chromium } = await import(pathToFileURL(modulePath).href);
@@ -65,9 +67,9 @@ try {
   // Chrome's default implicit localhost proxy bypass MUST be overridden;
   // never consider merely setting proxy.server to be a security guarantee.
   context = await chromium.launchPersistentContext(
-    path.join(privateStore, "profile"),
+    path.join(privateStore, "profile-" + browserChannel),
     {
-      channel: "chrome", headless: true, acceptDownloads: false,
+      channel: browserChannel, headless: true, acceptDownloads: false,
       serviceWorkers: "block", timeout: 20_000,
       proxy: { server: `http://127.0.0.1:${proxyPort}`, bypass: "<-loopback>" },
       args: ["--proxy-bypass-list=<-loopback>", "--disable-quic"],
@@ -93,8 +95,9 @@ try {
     "Local TCP listener received a bypassed socket; browser proxy not isolated.");
   assert.equal(localHttpHits, 0, "Local HTTP listener was reached.");
   assert.ok(denied > 0, "No negative destination requests reached proxy.");
-  console.log("WINDOWS_PROXY_BOUNDARY_FIXTURE=PASS");
+  console.log("WINDOWS_PROXY_BOUNDARY_FIXTURE=" + browserChannel + ":PASS");
   console.log(JSON.stringify({
+    browserChannel,
     publicFixture: true,
     redirectedOrLocalDenied: denied,
     observedProxyRequests: seen.length,
