@@ -72,6 +72,14 @@ windows("modified, missing, and extra installed Windows program members are refu
   assert.throws(()=>comparePinnedWindowsZipToInstalled(f.archive,f.installed,f.sha),/Missing/);
  }finally{f.close();}
 });
+windows("installed tree enumeration is bounded before an attacker can force deep traversal",()=>{
+ const f=fixture();
+ try{
+  let dir=f.installed;
+  for(let i=0;i<18;i++){dir=path.join(dir,"d");mkdirSync(dir);}
+  assert.throws(()=>comparePinnedWindowsZipToInstalled(f.archive,f.installed,f.sha),/approved bounds/);
+ }finally{f.close();}
+});
 windows("a Windows ZIP containing noncanonical backslash member paths is refused",()=>{
  const f=fixture();
  try{
