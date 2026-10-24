@@ -16,7 +16,7 @@ export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
   "apps/remote-control-agent/candidates/browser-playwright.js":
     "2c6e9d73c813624355c9e6f992a99f8d920b6814bd154af0636bb67a4f48764d",
   "apps/remote-control-agent/candidates/browser-egress-proxy.js":
-    "c95dc1068a98f828e4f83cab88c4c986ab44e4f5739502120042f422ad447012",
+    "2b340d3c5173d41be741f604da609d697ecfa862090264c540202f751bc9ca7f",
   "apps/remote-control-agent/candidates/browser-egress-policy.js":
     "955b228952dcc1347a85b3e2b59ecddb82d7fd4034a50ca08cd52bfa5a91dce7",
 });
