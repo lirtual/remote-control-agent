@@ -25,9 +25,20 @@ function fixture() {
   mkdirSync(path.dirname(file),{recursive:true});
   writeFileSync(file,i===0?randomBytes(130000):Buffer.from("member"+i));
  }
- const ps="Add-Type -AssemblyName System.IO.Compression.FileSystem;"+
-  "[IO.Compression.ZipFile]::CreateFromDirectory('"+
-  installed.replace(/'/g,"''")+"','"+archive.replace(/'/g,"''")+"')";
+ const ps=[
+  "Add-Type -AssemblyName System.IO.Compression",
+  "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+  "$root='"+installed.replace(/'/g,"''")+"'",
+  "$dest='"+archive.replace(/'/g,"''")+"'",
+  "$zip=[IO.Compression.ZipFile]::Open($dest,[IO.Compression.ZipArchiveMode]::Create)",
+  "try {",
+  " $prefix=[IO.Path]::GetFullPath($root).TrimEnd([char]92)+[char]92",
+  " foreach($file in [IO.Directory]::EnumerateFiles($root,'*',[IO.SearchOption]::AllDirectories)){",
+  "  $relative=$file.Substring($prefix.Length).Replace([char]92,[char]47)",
+  "  $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,$file,$relative,[IO.Compression.CompressionLevel]::Optimal)",
+  " }",
+  "}finally{$zip.Dispose()}",
+ ].join("\n");
  runPS(ps);
  const sha=createHash("sha256").update(readFileSync(archive)).digest("hex");
  assert.ok(readFileSync(archive).length>=100000);
@@ -54,6 +65,17 @@ windows("modified, missing, and extra installed Windows program members are refu
   unlinkSync(path.join(f.installed,"bin","extra.bin"));
   unlinkSync(member);
   assert.throws(()=>comparePinnedWindowsZipToInstalled(f.archive,f.installed,f.sha),/Missing/);
+ }finally{f.close();}
+});
+windows("a Windows ZIP containing noncanonical backslash member paths is refused",()=>{
+ const f=fixture();
+ try{
+  const unsafe=path.join(f.base,"unsafe-windows.zip");
+  runPS("Add-Type -AssemblyName System.IO.Compression.FileSystem;"+
+    "[IO.Compression.ZipFile]::CreateFromDirectory('"+
+    f.installed.replace(/'/g,"''")+"','"+unsafe.replace(/'/g,"''")+"')");
+  const sha=createHash("sha256").update(readFileSync(unsafe)).digest("hex");
+  assert.throws(()=>comparePinnedWindowsZipToInstalled(unsafe,f.installed,sha),/inventory unavailable/);
  }finally{f.close();}
 });
 windows("mismatched SHA-256 and altered ZIP bytes cannot pass verification",()=>{
