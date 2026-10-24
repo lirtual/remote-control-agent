@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { connect } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,6 +9,7 @@ import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
 function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
   const calls: string[] = [];
+  let proxyEndpoint: string | undefined;
   let requestFilter: ((route: {
     request(): {url(): string};
     continue(): Promise<void>;
@@ -48,6 +50,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       const proxy=settings.proxy as {server:string;bypass:string};
       assert.match(proxy.server,/^http:\/\/127\.0\.0\.1:[0-9]+$/);
       assert.equal(proxy.bypass,"<-loopback>");
+      proxyEndpoint=proxy.server;
       assert.deepEqual(settings.args,[
         "--proxy-bypass-list=<-loopback>",
         "--disable-quic",
@@ -59,7 +62,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       return context;
     },
   } as unknown as BrowserType<{}>;
-  return {driver,calls,
+  return {driver,calls,proxyEndpoint:()=>proxyEndpoint,
     request:async (url:string) => {
       assert.ok(requestFilter);
       let outcome="";
@@ -99,6 +102,14 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     assert.equal(browser.status()?.backend,"playwright");
     await browser.close(status.session_id);
     assert.equal(browser.status(),null);
+    const proxyUrl=new URL(fake.proxyEndpoint()!);
+    await assert.rejects(new Promise<void>((resolve,reject)=>{
+      const socket=connect(Number(proxyUrl.port),"127.0.0.1",()=>{
+        socket.destroy();
+        resolve();
+      });
+      socket.once("error",reject);
+    }), /ECONNREFUSED/, "A closed Agent browser must not leave a listening egress proxy.");
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
     await assert.rejects(browser.snapshot(status.session_id),/Unknown or closed/);
   } finally { await rm(tmp,{recursive:true,force:true}); }
