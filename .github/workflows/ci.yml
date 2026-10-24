@@ -355,6 +355,21 @@ jobs:
           Write-Output 'P3_PINNED_WINDOWS_PORTABLE_CLI_STATUS=PASS'
           & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $extracted (Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64')
           if ($LASTEXITCODE -ne 0) { throw 'Installed Chrome and tamper checks failed for pinned Playwright candidate' }
+          # Disposable only: validate Chromium's actual proxy routing for
+          # redirects, localhost, subresources and WebSocket before any Agent
+          # browser policy change. This is not an SSRF-isolation acceptance.
+          foreach ($channel in @('chrome', 'msedge')) {
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-egress-boundary-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel proxy boundary probe failed" }
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-webrtc-egress-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel WebRTC egress observation failed" }
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-quic-egress-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel QUIC UDP positive-control probe failed" }
+            & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-candidate-proxy-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel candidate DNS-pinned proxy smoke failed" }
+            & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-public-tls-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel public TLS through pinned proxy failed" }
+          }
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
           if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }
 
