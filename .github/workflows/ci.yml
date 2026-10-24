@@ -320,6 +320,13 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
+      - name: Native Windows AppContainer loopback feasibility (disposable, no WFP)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & pwsh -NoProfile -NonInteractive -File apps/remote-control-agent/tests/windows-appcontainer-probe.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated Windows AppContainer networking feasibility failed' }
+
       - name: Native Windows pinned Playwright candidate and real Chrome validation (offline archive)
         shell: pwsh
         run: |
