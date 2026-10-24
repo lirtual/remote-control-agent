@@ -160,6 +160,11 @@ struct WfpExperiment {
     permit.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
     permit.subLayerKey = sublayer;
     permit.action.type = FWP_ACTION_PERMIT;
+    // Exact SID + loopback + TCP + port only. Try a higher-priority hard
+    // permit (FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT) without broad exemptions.
+    // A stronger system AppContainer block may still veto it; that is a
+    // legitimate architecture rejection, not a reason to weaken the match.
+    permit.flags = FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT;
     permit.weight.type = FWP_UINT8;
     permit.weight.uint8 = 15;
     permit.numFilterConditions = 4;
@@ -334,13 +339,17 @@ int wmain(int argc, wchar_t** argv) {
       const bool allowedArrived = arrived(listener, 200000);
       std::printf("WFP_APPCONTAINER_PROXY_PORT_LISTENER_HIT=%d\n",
         static_cast<int>(allowedArrived));
-      require(allowed == 0 && allowedArrived,
-        "WFP permit did not enable the AppContainer's exact proxy port");
+      // Always verify the dynamic session disappears, even if this host
+      // refuses our exact-port allow rule. Failure must not leave policy.
       scoped.closeAndVerify();
+      std::puts("WINDOWS_WFP_DYNAMIC_RULES_REMOVED=PASS");
+      const DWORD afterClose = launch(exe, port, profile.sid);
+      require(afterClose == 42 && !arrived(listener, 200000),
+        "AppContainer could still reach proxy after WFP cleanup");
+      std::puts("WINDOWS_WFP_TEMPORARY_POLICY_CLEANUP=PASS");
+      require(allowed == 0 && allowedArrived,
+        "WFP exact-port hard permit still cannot override AppContainer loopback isolation");
     }
-    require(launch(exe, port, profile.sid) == 42 && !arrived(listener, 200000),
-      "AppContainer could still use proxy after temporary WFP session closed");
-    std::puts("WINDOWS_WFP_TEMPORARY_POLICY_CLEANUP=PASS");
     std::puts("WINDOWS_APPCONTAINER_PROXY_ONLY_ISOLATION=FIXTURE_PASS");
   } catch (const std::exception& error) {
     std::fprintf(stderr, "APPCONTAINER_PROBE_ERROR=%s\n", error.what());
