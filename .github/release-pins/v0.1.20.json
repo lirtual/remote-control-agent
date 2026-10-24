@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.20",
+  "source_sha": "d9aea9f66914bcb8200b73460350f8138eeed536",
+  "candidate_run_id": 40047441955,
+  "release_title": "Remote Control Agent v0.1.20 — English-only Upgrade Prompt",
+  "release_notes": "docs/releases/v0.1.20.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.20-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.20-ubuntu-24.04",
+      "sha256": "88e7bb3d60d60d3a79e3832c58bab609a01ebc9993e643780dab9b08400d8710"
+    },
+    {
+      "name": "remote-control-agent-v0.1.20-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.20-ubuntu-24.04-arm",
+      "sha256": "a09287979330b05c554783ca84e1dc4c0b7d4f48a966fb1e6a8a92965890d3c4"
+    },
+    {
+      "name": "remote-control-agent-v0.1.20-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.20-windows-x64",
+      "sha256": "1691278d76c00cd475330758584f5ba85b8d4c6e6f2dae9c51c5fbed8c23ddea"
+    }
+  ]
+}
