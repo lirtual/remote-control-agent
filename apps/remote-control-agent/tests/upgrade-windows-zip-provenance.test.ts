@@ -33,15 +33,18 @@ function fixture() {
   "$dest='"+archive.replace(/'/g,"''")+"'",
   "$zip=[IO.Compression.ZipFile]::Open($dest,[IO.Compression.ZipArchiveMode]::Create)",
   "try {",
-  " $prefix=[IO.Path]::GetFullPath($root).TrimEnd([char]92)+[char]92",
-  " foreach($file in [IO.Directory]::EnumerateFiles($root,'*',[IO.SearchOption]::AllDirectories)){",
-  "  $relative=$file.Substring($prefix.Length).Replace([char]92,[char]47)",
-  "  Write-Host ('ZIP_FIXTURE_MEMBER='+$relative)",
+  " $canonicalRoot=[IO.Path]::GetFullPath($root).TrimEnd([char]92,[char]47)",
+  " $prefix=$canonicalRoot+[char]92",
+  " foreach($file in [IO.Directory]::EnumerateFiles($canonicalRoot,'*',[IO.SearchOption]::AllDirectories)){",
+  "  $canonicalFile=[IO.Path]::GetFullPath($file)",
+  "  if(-not $canonicalFile.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw 'Fixture path escaped directory'}",
+  "  $relative=$canonicalFile.Substring($prefix.Length).Replace([char]92,[char]47)",
+  "  if(-not ($relative.StartsWith('bin/') -or $relative.StartsWith('apps/'))){throw 'Fixture member path is invalid'}",
   "  $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,$file,$relative,[IO.Compression.CompressionLevel]::Optimal)",
   " }",
   "}finally{$zip.Dispose()}",
  ].join("\n");
- console.log(runPS(ps));
+ runPS(ps);
  const sha=createHash("sha256").update(readFileSync(archive)).digest("hex");
  assert.ok(readFileSync(archive).length>=100000);
  return {base,installed,archive,sha,close:()=>rmSync(base,{recursive:true,force:true})};
