@@ -312,14 +312,22 @@ export class ReceiptStore {
         if (state === "completed")
           throw new Error("Upgrade completion requires verified recovery.");
         if (previous.state === "completed" ||
-            (previous.state === "unknown" && state === "running") ||
+            (previous.state === "unknown" && state !== "unknown" && state !== "failed") ||
+            (previous.state === "running" && state === "admitted") ||
             (previous.state === "failed" && state !== "failed"))
           throw new Error("Upgrade state cannot be restarted or rewritten.");
       }
       // Nonzero process exit is not proof of zero effects. Unknown/uncertain
       // failures keep their replay guard after normal retention.
+      // For upgrades, once execution may have started a later generic
+      // knownNoEffect flag can NEVER remove the guarded device-wide lock.
+      // Only a proven pre-execution cancellation (admitted -> failed) is safe.
+      // Uncertain/failed recovery needs a separate verified reconciliation.
+      const upgradeCouldHaveEffects = previous.tool_name === "upgrade_agent" &&
+        (previous.state === "running" || previous.state === "unknown" ||
+          (previous.state === "failed" && previous.guarded === 1));
       const guarded = state === "unknown" || state === "admitted" || state === "running" ||
-        (state === "failed" && !knownNoEffect);
+        (state === "failed" && (!knownNoEffect || upgradeCouldHaveEffects));
       this.db().prepare("UPDATE receipts SET state = ?, updated_at = ?, safe_result_summary = ?, session_id = COALESCE(?, session_id), guarded = ? WHERE operation_id = ?")
         .run(state, new Date().toISOString(), summary.slice(0, 128), sessionId ?? null, guarded ? 1 : 0, operationId);
       return fromRow(this.getStored(operationId)!);

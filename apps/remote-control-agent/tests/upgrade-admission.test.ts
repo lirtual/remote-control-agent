@@ -171,8 +171,33 @@ test("uncertain and guarded failures keep global upgrade admission closed",async
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
     await store.update(req.operation_id,"failed","Cannot establish old service state");
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
-    await store.update(req.operation_id,"failed","No side effects established",undefined,true);
+    await store.update(req.operation_id,"failed","Unverified no-effect claim",undefined,true);
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+  });
+});
+test("a cancelled, never-started upgrade can release its global reservation",async()=>{
+  await fixture(async(store)=>{
+    const other={...req,operation_id:"approved-upgrade-no-effect"};
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await store.update(req.operation_id,"failed","Cancelled before any switch",undefined,true);
+    await store.update(req.operation_id,"failed","Duplicate cancellation callback",undefined,true);
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"new");
+  });
+});
+test("running upgrade cannot clear its guarded reservation by claiming no effects",async()=>{
+  await fixture(async(store,dir)=>{
+    const other={...req,operation_id:"approved-upgrade-running-failed"};
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await store.update(req.operation_id,"running","Started handoff");
+    await store.update(req.operation_id,"failed","Claimed no effects",undefined,true);
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    await store.close();
+    const restarted=new ReceiptStore(dir);
+    try{
+      await restarted.open();
+      await restarted.update(req.operation_id,"failed","Repeated claim",undefined,true);
+      assert.equal((await admitOwnerApprovedUpgrade(restarted,other,ctx,async()=>true)).kind,"busy");
+    }finally{await restarted.close();}
   });
 });
 test("concurrent distinct IDs cannot both reserve a device-wide upgrade slot",async()=>{
