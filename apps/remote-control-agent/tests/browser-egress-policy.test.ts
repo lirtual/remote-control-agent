@@ -13,6 +13,7 @@ test("public-IP guard rejects local, LAN, metadata, mapped and special ranges", 
     "224.0.0.1", "240.0.0.1",
     "::", "::1", "::ffff:127.0.0.1", "fe80::1", "fc00::1",
     "fd00::1", "ff02::1", "2001:db8::1",
+    "3fff::1", "3fff:fff::1",
     "2002:c0a8:0101::1", "2001::1",
     "not an address",
   ]) assert.equal(isAllowedPublicIp(address), false, address);
@@ -40,6 +41,7 @@ test("mixed public and private A/AAAA answers fail closed, including DNS rebindi
     [{address:"169.254.169.254",family:4},{address:"8.8.8.8",family:4}],
     [{address:"2606:4700:4700::1111",family:6},{address:"::1",family:6}],
     [{address:"::ffff:192.168.1.1",family:6}],
+    [{address:"2606:4700:4700::1111",family:6},{address:"3fff::1",family:6}],
     [{address:"93.184.216.34",family:6}],
     [],
   ]) {
