@@ -320,7 +320,7 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
-      - name: Native Windows AppContainer loopback feasibility (disposable, no WFP)
+      - name: Native Windows AppContainer WFP port-scope probe (dynamic CI only)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
