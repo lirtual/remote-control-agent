@@ -62,13 +62,16 @@ try {
   }));
   // Both direct localhost and a public-looking hostname resolving to localhost
   // are attempted from the page; neither may connect to the listener.
-  await page.goto("about:blank");
-  await page.setContent('<img src="http://public.example.com/private-image">');
-  await page.evaluate(url=>{
+  // Chromium can asynchronously install its error page after a rejected
+  // HTTPS CONNECT. Use a new page so that transition cannot race this probe.
+  await page.close().catch(()=>{});
+  const probePage=await context.newPage();
+  await probePage.setContent('<img src="http://public.example.com/private-image">');
+  await probePage.evaluate(url=>{
     const ws=new WebSocket(url);
     ws.onerror=()=>{};
   },"ws://127.0.0.1:"+localPort+"/socket");
-  await page.waitForTimeout(350);
+  await probePage.waitForTimeout(350);
   assert.ok(lookups>=2,"Actual proxy resolver must evaluate HTTP and HTTPS requests.");
   assert.equal(localConnections,0,"Browser bypassed proxy and reached local TCP.");
   assert.equal(localHits,0,"Browser or candidate proxy contacted forbidden local HTTP.");
@@ -79,9 +82,9 @@ try {
   await proxy.close();
   proxyClosed=true;
   try {
-    await page.goto("http://127.0.0.1:"+localPort+"/proxy-down",{timeout:2500});
+    await probePage.goto("http://127.0.0.1:"+localPort+"/proxy-down",{timeout:2500});
   } catch { /* fail-closed proxy connection is expected */ }
-  await page.waitForTimeout(200);
+  await probePage.waitForTimeout(200);
   assert.equal(localConnections,0,"Browser fell back to direct local TCP after proxy shutdown.");
   assert.equal(localHits,0,"Browser directly reached local HTTP after proxy shutdown.");
   console.log("WINDOWS_CANDIDATE_PROXY_PRIVATE_DNS="+channel+":PASS");
