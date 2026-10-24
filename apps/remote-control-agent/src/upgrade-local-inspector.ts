@@ -97,7 +97,7 @@ async function validReceiptHeader(file:string):Promise<boolean>{
 }
 export async function inspectLinuxLocalUpgrade(
   request:Readonly<UpgradeRequest>,
-  options:LinuxRuntimeInspectionContext={},
+  options:LinuxRuntimeInspectionContext,
 ):Promise<Readonly<LocalUpgradeInspection>>{
   const result={
     deviceId:"",identitySha256:"",runningVersion:"",platform:"",
