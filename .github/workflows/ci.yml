@@ -152,6 +152,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows full-tool tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
+          # These source tests must run on native Windows: Linux skips the
+          # ZIP/file-system branch even when its test command is green.
+          node --experimental-strip-types --test tests/upgrade-windows-zip-provenance.test.ts tests/upgrade-windows-release.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows immutable ZIP proof tests failed' }
       - name: New public PowerShell installer parses under Windows without executing
         shell: pwsh
         run: |
