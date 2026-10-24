@@ -387,7 +387,13 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     this.revoked = true;
     this.uncertain = true;
     const active = this.context;
-    if (!active && !this.closingContext) return "confirmed";
+    // An in-flight startup can own a live proxy/browser before the context
+    // is published. Never acknowledge confirmed revocation until that startup
+    // has actually terminated and completed its fail-closed cleanup.
+    if (!active && !this.closingContext) {
+      if (this.busy || this.egressProxy || this.egressShutdown) return "uncertain";
+      return "confirmed";
+    }
     try {
       if (active) {
         await this.closeOwnedContext(active);
