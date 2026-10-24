@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import http from "node:http";
+import net from "node:net";
 import { startCandidateBrowserEgressProxy } from "../candidates/browser-egress-proxy.ts";
 
 test("candidate egress proxy denies private URL, private DNS and an unapproved HTTP port", async () => {
@@ -77,4 +78,39 @@ test("proxy shutdown during pending DNS never authorizes a late dial", async () 
   await completed;
   // The DNS resolver was allowed to finish, but the browser-owned proxy
   // had already revoked its socket authority; no new public connection.
+});
+
+test("malformed browser proxy socket and peer reset never kill the local server", async () => {
+  const proxy = await startCandidateBrowserEgressProxy(async () => {
+    throw Error("Rejected requests must not resolve DNS.");
+  });
+  const endpoint = new URL(proxy.server);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const socket = net.connect(Number(endpoint.port), endpoint.hostname);
+      socket.on("error", () => resolve()); // Peer reset is expected.
+      socket.once("connect", () => {
+        socket.write("BAD \\u0000 HTTP/1.1\\r\\nHost: invalid\\r\\n\\r\\n");
+        socket.destroy();
+        resolve();
+      });
+      socket.once("close", resolve);
+      socket.once("timeout", () => reject(Error("Unexpected socket timeout.")));
+      socket.setTimeout(2000);
+    });
+    const response = await new Promise<number>((resolve, reject) => {
+      const request = http.request({
+        hostname: endpoint.hostname, port: Number(endpoint.port),
+        method: "GET", path: "http://127.0.0.1/blocked",
+      }, result => {
+        result.resume();
+        result.once("end", () => resolve(result.statusCode ?? 0));
+      });
+      request.once("error", reject);
+      request.end();
+    });
+    assert.equal(response, 403, "Proxy must remain available and reject unsafe destinations.");
+  } finally {
+    await proxy.close();
+  }
 });
