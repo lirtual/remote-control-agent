@@ -157,7 +157,9 @@ test("active upgrade blocks any second operation ID until verified completion",a
     assert.equal((await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true)).kind,"new");
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
     assert.equal(await store.get(other.operation_id),null);
-    await store.update(req.operation_id,"completed","Installed version and identity verified");
+    await assert.rejects(store.update(req.operation_id,"completed","Caller guessed success"),/verified recovery/);
+    await store.update(req.operation_id,"running","Verified handoff began");
+    await store.completeVerifiedUpgrade(req.operation_id,operationDigest("upgrade_agent",req));
     assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"new");
   });
 });

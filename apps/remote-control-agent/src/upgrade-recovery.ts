@@ -9,7 +9,7 @@
  * solely from the Agent's version string.
  */
 import {timingSafeEqual} from "node:crypto";
-import {operationDigest, type OperationReceipt} from "./operations.ts";
+import {operationDigest, type OperationReceipt, type ReceiptStore} from "./operations.ts";
 import type {UpgradeRequest} from "./upgrade-authorization.ts";
 
 export interface TrustedUpgradeEvidence {
@@ -62,4 +62,43 @@ export function assessUpgradeAfterReconnect(
   if(!observed.authenticatedSameDevice)
     return {kind:"unresolved",operationId:request.operation_id,reason:"connection"};
   return {kind:"verified",operationId:request.operation_id};
+}
+
+
+/**
+ * Reconcile a prior durable upgrade record, never initiate or retry an OS
+ * installer. Only the owner-local Agent reconnection path may provide this
+ * trusted evidence inspector. Do not route it from an incoming MCP argument.
+ */
+export async function finalizeUpgradeAfterReconnect(
+  receipts: ReceiptStore,
+  operationId: string,
+  inspectTrustedLocalState: (approved: Readonly<UpgradeRequest>) => Promise<Readonly<TrustedUpgradeEvidence>>,
+): Promise<UpgradeRecoveryVerdict> {
+  const unresolved = (reason: Extract<UpgradeRecoveryVerdict,{kind:"unresolved"}>["reason"]):
+    UpgradeRecoveryVerdict => ({kind:"unresolved",operationId,reason});
+  if (!/^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/.test(operationId))
+    return unresolved("receipt");
+  let receipt: OperationReceipt | null;
+  let target: UpgradeRequest | null;
+  try {
+    receipt = await receipts.get(operationId);
+    if (!receipt || receipt.tool_name !== "upgrade_agent") return unresolved("receipt");
+    const loaded = await receipts.getUpgradeIntent(operationId);
+    if (!loaded || typeof loaded !== "object" || Array.isArray(loaded) ||
+        (loaded as {operation_id?:unknown}).operation_id !== operationId)
+      return unresolved("receipt");
+    target = loaded as UpgradeRequest;
+  } catch { return unresolved("receipt"); }
+  let observed: Readonly<TrustedUpgradeEvidence>;
+  try { observed = await inspectTrustedLocalState(target); }
+  catch { return unresolved("service"); }
+  const verdict = assessUpgradeAfterReconnect(target,receipt,observed);
+  if (verdict.kind !== "verified") return verdict;
+  try {
+    // CAS inside the same SQLite transaction prevents an asynchronous
+    // inspector from finalizing an operation concurrently marked failed.
+    await receipts.completeVerifiedUpgrade(operationId,receipt.argument_digest);
+  } catch { return unresolved("receipt"); }
+  return verdict;
 }

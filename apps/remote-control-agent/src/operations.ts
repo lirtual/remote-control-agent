@@ -303,13 +303,58 @@ export class ReceiptStore {
 
   async update(operationId: string, state: OperationState, summary: string, sessionId?: string, knownNoEffect = false): Promise<OperationReceipt> {
     return this.transaction(() => {
-      if (!this.getStored(operationId)) throw new Error("Receipt disappeared.");
+      const previous = this.getStored(operationId);
+      if (!previous) throw new Error("Receipt disappeared.");
+      // Upgrade completion requires independently verified service, identity,
+      // published asset and authenticated reconnection. Ordinary mutation
+      // results must not close the device-wide upgrade reservation.
+      if (previous.tool_name === "upgrade_agent") {
+        if (state === "completed")
+          throw new Error("Upgrade completion requires verified recovery.");
+        if (previous.state === "completed" ||
+            (previous.state === "unknown" && state === "running") ||
+            (previous.state === "failed" && state !== "failed"))
+          throw new Error("Upgrade state cannot be restarted or rewritten.");
+      }
       // Nonzero process exit is not proof of zero effects. Unknown/uncertain
       // failures keep their replay guard after normal retention.
       const guarded = state === "unknown" || state === "admitted" || state === "running" ||
         (state === "failed" && !knownNoEffect);
       this.db().prepare("UPDATE receipts SET state = ?, updated_at = ?, safe_result_summary = ?, session_id = COALESCE(?, session_id), guarded = ? WHERE operation_id = ?")
         .run(state, new Date().toISOString(), summary.slice(0, 128), sessionId ?? null, guarded ? 1 : 0, operationId);
+      return fromRow(this.getStored(operationId)!);
+    });
+  }
+
+  /** Owner-local finalization only, after a trusted reconnect inspector
+   * has independently verified the SAME device, key, running executable,
+   * exact immutable Release, healthy OS unit and readable prior receipts.
+   * No MCP/remote route invokes this method. The transaction rechecks state,
+   * digest and persisted intent to reject stale or conflicting evidence.
+   */
+  async completeVerifiedUpgrade(operationId: string, expectedDigest: string): Promise<OperationReceipt> {
+    return this.transaction(() => {
+      const prior = this.getStored(operationId);
+      if (!prior || prior.tool_name !== "upgrade_agent" ||
+          prior.argument_digest !== expectedDigest ||
+          !/^[a-f0-9]{64}$/.test(expectedDigest))
+        throw new Error("Upgrade receipt is missing or changed.");
+      if (!this.db().prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_intents'").get())
+        throw new Error("Upgrade target metadata is missing.");
+      const entry = this.db().prepare("SELECT request_json FROM upgrade_intents WHERE operation_id = ?")
+        .get(operationId) as {request_json: string} | undefined;
+      let target: unknown;
+      try { target = entry ? JSON.parse(entry.request_json) as unknown : null; }
+      catch { throw new Error("Upgrade target metadata is corrupt."); }
+      if (!target || operationDigest("upgrade_agent", target) !== expectedDigest)
+        throw new Error("Upgrade target metadata does not match approval.");
+      if (prior.state === "completed") return fromRow(prior); // verified repeat is read-only
+      if (prior.state !== "running" && prior.state !== "unknown")
+        throw new Error("Upgrade did not enter a verifiable running state.");
+      this.db().prepare(
+        "UPDATE receipts SET state = 'completed', updated_at = ?, safe_result_summary = ?, " +
+        "session_id = NULL, guarded = 1 WHERE operation_id = ?",
+      ).run(new Date().toISOString(), "Same-device signed Release and service verified after reconnect.", operationId);
       return fromRow(this.getStored(operationId)!);
     });
   }
