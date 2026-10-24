@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { BrowserType } from "playwright-core";
 import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
-function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void> } = {}) {
+function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void>; contextCloseWait?: Promise<void> } = {}) {
   const calls: string[] = [];
   let proxyEndpoint: string | undefined;
   const contextCloseListeners: Array<() => void> = [];
@@ -43,7 +43,7 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       requestFilter=filter;
       calls.push("context-route");
     },
-    close: async () => {calls.push("context-close");},
+    close: async () => {calls.push("context-close"); if (options.contextCloseWait) await options.contextCloseWait;},
   };
   const driver = {
     launchPersistentContext: async (profile:string,settings: Record<string,unknown>) => {
@@ -299,5 +299,41 @@ test("unexpected browser exit forgets the session and removes its owned proxy", 
     assert.equal(refused, true, "Unexpected browser exit left the proxy listening.");
   } finally {
     await rm(tmp, {recursive:true,force:true});
+  }
+});
+
+test("revocation closes the network proxy even when Chromium context shutdown stalls", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "rca-pw-revoke-stuck-context-"));
+  let release!: () => void;
+  const closeGate = new Promise<void>(done => { release = done; });
+  const fake = fakeBrowser({contextCloseWait: closeGate});
+  const browser = new PlaywrightBrowserManager({agentStore:tmp, chromiumForTests:fake.driver});
+  try {
+    await browser.start();
+    const endpoint = new URL(fake.proxyEndpoint()!);
+    let settled = false;
+    const revocation = browser.stopOwnedForRevocation().then(result => {
+      settled = true;
+      return result;
+    });
+    let refused = false;
+    for (let attempt = 0; attempt < 40 && !refused; attempt++) {
+      refused = await new Promise<boolean>(resolve => {
+        const socket = connect(Number(endpoint.port), "127.0.0.1");
+        socket.once("connect", () => { socket.destroy(); resolve(false); });
+        socket.once("error", (error: NodeJS.ErrnoException) =>
+          resolve(error.code === "ECONNREFUSED"));
+      });
+      if (!refused) await new Promise(done => setTimeout(done, 25));
+    }
+    assert.equal(refused, true, "A stuck browser must not retain its proxy listener.");
+    assert.equal(settled, false, "Revocation cannot be confirmed before browser cleanup.");
+    release();
+    assert.equal(await revocation, "confirmed");
+    assert.equal(browser.status(), null);
+    await assert.rejects(browser.start(), /revoked/);
+  } finally {
+    release();
+    await rm(tmp, {recursive:true, force:true});
   }
 });
