@@ -28,7 +28,10 @@ const local = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/plain" });
   response.end("ISOLATED_TEST_LISTENER");
 });
-local.on("connection", () => { localConnections++; });
+local.on("connection", socket => {
+  localConnections++;
+  socket.on("error", () => {});
+});
 
 const seen = [];
 let denied = 0;
@@ -58,10 +61,12 @@ const proxy = createServer((request, response) => {
   response.end("BLOCKED_BY_ISOLATED_TEST_PROXY");
 });
 proxy.on("connect", (request, socket) => {
+  socket.on("error", () => {}); // Chromium may reset a denied tunnel.
   seen.push("CONNECT " + request.url);
   denied++;
   socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 });
+proxy.on("connection", socket => socket.on("error", () => {}));
 const proxyPort = await onLoopback(proxy);
 try {
   // Chrome's default implicit localhost proxy bypass MUST be overridden;
