@@ -199,12 +199,6 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         headless: false,
         ...(this.executable ? { executablePath: this.executable } : { channel }),
         acceptDownloads: false, serviceWorkers: "block",
-        // The only Chrome/Edge flag verified by native Windows CI to suppress
-        // direct STUN UDP under an HTTP proxy. The previously used
-        // --force-webrtc-ip-handling-policy variant is not recognized.
-        // This is defense in depth, NOT private-network isolation by itself.
-        args: ["--disable-quic",
-          "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
       });
       try {
         await context.route("**/*", async route => {
