@@ -219,6 +219,9 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
   const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
   try{
     const starting=browser.start();
+    // Attach the rejection observer before releasing startup, preventing a
+    // transient unhandled rejection on fast CI runners.
+    const rejected=assert.rejects(starting,/revoked during startup/);
     for(let i=0;i<40&&!fake.calls.some(x=>x.startsWith("launch:"));i++)
       await new Promise(done=>setTimeout(done,5));
     assert.ok(fake.calls.some(x=>x.startsWith("launch:")));
@@ -226,7 +229,7 @@ test("revocation during slow Chromium startup prevents publishing a session",asy
       "Revocation cannot be confirmed while the browser launch is still pending.");
     assert.equal(browser.status(),null);
     release();
-    await assert.rejects(starting,/revoked during startup/);
+    await rejected;
     assert.equal(browser.status(),null);
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
     assert.equal(await browser.stopOwnedForRevocation(),"confirmed",
