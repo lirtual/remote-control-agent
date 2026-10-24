@@ -82,19 +82,20 @@ export function readWindowsUserTaskSnapshot():WindowsTaskSnapshot {
 }
 export async function inspectWindowsLocalUpgradeTask(
   request:Readonly<UpgradeRequest>,
+  expectedEndpoint:string,
 ):Promise<Readonly<WindowsTaskStructureEvidence>>{
   const missing={taskRunning:false,taskActionMatches:false,bundleManifestMatches:false};
   if(process.platform!=="win32"||process.arch!=="x64"||
-    request.target_platform!=="windows-x64")return missing;
+    request.target_platform!=="windows-x64"||!safeEndpoint(expectedEndpoint))return missing;
   const store=process.env.LOCALAPPDATA;
   if(!store||!path.win32.isAbsolute(store))return missing;
   const root=path.win32.join(store,"mcp-workers","remote-control","programs",
     request.target_version+"-windows-x64");
   try {
     const task=readWindowsUserTaskSnapshot();
-    const m=/^"([^"]+)" run --endpoint "(https:\/\/[^"]+)"$/.exec(task.arguments);
-    if(!m)return missing;
-    const current=inspectWindowsTaskStructure(task,root,task.sid,m[2]!);
+    // Trust the already-authenticated configured endpoint, never a URL read
+    // back from the task under inspection. The task is not an authority.
+    const current=inspectWindowsTaskStructure(task,root,task.sid,expectedEndpoint);
     if(!current.taskActionMatches)return missing;
     const manifest=JSON.parse(await readFile(path.win32.join(root,"bundle.json"),"utf8")) as Record<string,unknown>;
     return {...current,bundleManifestMatches:
