@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.21-rc.2",
+  "source_sha": "e7e340bd385cb8f08bef1632f4cfa07961a9d6ab",
+  "candidate_run_id": 40065767664,
+  "release_title": "Remote Control Agent v0.1.21-rc.2 — Fake-IP DNS Compatibility",
+  "release_notes": "docs/releases/v0.1.21-rc.2.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.21-rc.2-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.21-rc.2-ubuntu-24.04",
+      "sha256": "bc5d5abf7455649d5b2ea063d26cc202a89f6f4b8a15c9b5be2963d08fdc4c31"
+    },
+    {
+      "name": "remote-control-agent-v0.1.21-rc.2-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.21-rc.2-ubuntu-24.04-arm",
+      "sha256": "ac4ba0277a65ca35d51b8b5d4b674b191e261fd00a10f9c93e446b8cbed5d027"
+    },
+    {
+      "name": "remote-control-agent-v0.1.21-rc.2-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.21-rc.2-windows-x64",
+      "sha256": "df9aac5801585e7df376ec5a58678cb723e514b7b77d3a25897bfc98738fdf06"
+    }
+  ]
+}
