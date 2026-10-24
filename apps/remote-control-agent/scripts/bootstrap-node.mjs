@@ -18,7 +18,7 @@ const FILES=new Set([
   "bin/node","bundle.json",APP+"/package.json",
   APP+"/scripts/install-v2.mjs",APP+"/scripts/bootstrap-node.mjs",
   APP+"/scripts/manage-v2.mjs",APP+"/scripts/lifecycle-v2.mjs",
-  APP+"/scripts/upgrade-v2.mjs",APP+"/scripts/migrate-linux-service.mjs",APP+"/scripts/verify-v2-release.mjs",
+  APP+"/scripts/upgrade-v2.mjs",APP+"/scripts/upgrade-existing-service.mjs",APP+"/scripts/verify-v2-release.mjs",
   APP+"/scripts/rca.sh",APP+"/.build/session-supervisor",
 ]);
 const MAX_ARCHIVE=180*1024*1024, MAX_UNCOMPRESSED=240*1024*1024, MAX_FILES=80;
@@ -226,24 +226,22 @@ export function stageOrVerifyPinnedProgram(bytes,expected,parent,versionName){
     :stagePinnedProgram(bytes,expected,parent,versionName);
 }
 
-/** Exactly one explicit --upgrade path may invoke the owner-local one-time
- * cutover. Foreign/mismatched units are never assumed safe to overwrite.
+/** Preserve an existing signed-WSS service name during direct upgrades.
+ * Reject collisions and links; exact template validation happens in the
+ * offline-staged upgrader before it touches systemd.
  */
-export function needsCanonicalServiceCutover(home){
-  const base=join(home,".config/systemd/user");
-  const old=join(base,"remote-control-v2-agent.service");
-  const canonical=join(base,"remote-control-agent.service");
-  let oldSt,canSt;
-  try{oldSt=lstatSync(old);canSt=lstatSync(canonical);}
+export function hasLegacySignedService(home){
+  const dir=join(home,".config/systemd/user");
+  const old=join(dir,"remote-control-v2-agent.service");
+  let stat;
+  try{stat=lstatSync(old);}
   catch(e){if(e.code==="ENOENT")return false;throw e;}
-  if(!oldSt.isFile()||oldSt.isSymbolicLink()||oldSt.uid!==process.getuid()||
-     !canSt.isFile()||canSt.isSymbolicLink()||canSt.uid!==process.getuid())
-    throw Error("Untrusted installed Agent service");
-  // Only the explicitly identified old loopback + signed Agent pair is eligible.
-  const legacy="# Installed from docs/remote-control/systemd/remote-control-agent.service.example\n";
-  const signed="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n";
-  return readFileSync(canonical,"utf8").startsWith(legacy) &&
-    readFileSync(old,"utf8").startsWith(signed);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.uid!==process.getuid()||
+    (stat.mode&0o777)!==0o600)throw Error("Untrusted installed signed service");
+  const canonical=join(dir,"remote-control-agent.service");
+  try{lstatSync(canonical);throw Error("Conflicting canonical Agent service");}
+  catch(e){if(e.code!=="ENOENT")throw e;}
+  return true;
 }
 
 /** Immutable Worker-origin CLI handoff. Never mutates identity itself. */
@@ -392,17 +390,16 @@ export function executeNodeBootstrap(options,{
       throw Error("Exclusive Agent installation could not complete");
     return 0;
   }
-  // The reviewed new Release must first be staged and digest-checked. Only
-  // this exact pre-existing service collision invokes the one-time converter;
-  // all other installs use the standard fail-closed identity/upgrade path.
-  if(options.upgrade && needsCanonicalServiceCutover(home)){
-    const migrator=join(prepared.root,APP,"scripts/migrate-linux-service.mjs");
-    verifyOwnedPath(migrator);
-    const changed=invoke(prepared.bin,[migrator,"--apply",prepared.root],{
+  // Existing signed WSS Agents upgrade in place; never require the retired
+  // loopback/Tunnel pair or a second, migration-specific confirmation.
+  if(options.upgrade && hasLegacySignedService(home)){
+    const upgrader=join(prepared.root,APP,"scripts/upgrade-existing-service.mjs");
+    verifyOwnedPath(upgrader);
+    const changed=invoke(prepared.bin,[upgrader,prepared.root,options.endpoint],{
       stdio:"inherit",env:{...process.env,NODE_OPTIONS:"",NODE_PATH:""},
     });
     if(changed.error||changed.signal||changed.status!==0)
-      throw Error("Owner-terminal service cutover incomplete; originals retained");
+      throw Error("Reviewed direct Agent upgrade failed; existing identity retained");
     return 0;
   }
   // install-v2.mjs handles the existing lifetime selection, owner challenge,

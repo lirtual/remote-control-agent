@@ -47,7 +47,7 @@ ALLOWED_FILES = frozenset((
     APP + "/scripts/manage-v2.py", APP + "/.build/session-supervisor",
     APP + "/scripts/bootstrap-node.mjs", APP + "/scripts/manage-v2.mjs",
     APP + "/scripts/lifecycle-v2.mjs", APP + "/scripts/upgrade-v2.mjs",
-    APP + "/scripts/migrate-linux-service.mjs",
+    APP + "/scripts/upgrade-existing-service.mjs",
     APP + "/scripts/verify-v2-release.mjs", APP + "/scripts/rca.sh",
 ))
 ELF_FILES = frozenset(("bin/node", APP + "/.build/session-supervisor"))

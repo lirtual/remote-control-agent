@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages, needsCanonicalServiceCutover } from "../scripts/bootstrap-node.mjs";
+import { inspectPinnedArchiveBytes, stagePinnedProgram, stageOrVerifyPinnedProgram, parseNodeBootstrapArgs, prepareNodeBootstrap, executeNodeBootstrap, ensurePrivatePrograms, removeSafeOrphanStages, hasLegacySignedService } from "../scripts/bootstrap-node.mjs";
 
 const APP="apps/remote-control-agent";
 const manifest={name:"remote-control-agent",artifact_schema:1,version:"v0.1.2",
@@ -27,6 +27,7 @@ function fixture({corrupt=false,symlink=false,pax=false,duplicate=false,profile=
     [APP+"/scripts/manage-v2.mjs","export const candidate = true;\n",0o600],
     [APP+"/scripts/lifecycle-v2.mjs","export const candidate = true;\n",0o600],
     [APP+"/scripts/upgrade-v2.mjs","export const candidate = true;\n",0o600],
+    [APP+"/scripts/upgrade-existing-service.mjs","export const candidate = true;\n",0o600],
     [APP+"/scripts/verify-v2-release.mjs","export const candidate = true;\n",0o600],
     [APP+"/scripts/rca.sh","#!/bin/sh\n",0o700],
     [APP+"/scripts/install-v2.mjs","export const candidate = true;\n",0o600],
@@ -407,21 +408,38 @@ test("failed installer activation preserves prior local keys and does not report
   }finally{f.cleanup();}
 });
 
-test("one-time canonical upgrade detection never treats unrelated unit pairs as eligible",()=>{
-  const home=mkdtempSync(path.join(tmpdir(),"rca-cutover-discovery-"));
+test("explicit upgrade uses the exact new direct-service helper, not a three-service migration",()=>{
+  const f=localBootstrapFixture();
+  try{
+    const unitDir=path.join(f.home,".config/systemd/user");
+    mkdirSync(unitDir,{recursive:true});
+    writeFileSync(path.join(unitDir,"remote-control-v2-agent.service"),"legacy", {mode:0o600});
+    const calls=[];
+    assert.equal(executeNodeBootstrap({...f.opts,locked:true,upgrade:true},{
+      home:f.home,stdin:{isTTY:true},stdout:{isTTY:true},
+      invoke:(cmd,args,env)=>{calls.push({cmd,args,env});return {status:0};}
+    }),0);
+    assert.equal(calls.length,1);
+    assert.ok(calls[0].args[0].endsWith("/scripts/upgrade-existing-service.mjs"));
+    assert.deepEqual(calls[0].args.slice(2),[f.opts.endpoint]);
+    assert.ok(!calls[0].args.some(arg=>String(arg).includes("migrate")));
+  }finally{f.cleanup();}
+});
+test("signed service discovery is independent of retired loopback and Tunnel units",()=>{
+  const home=mkdtempSync(path.join(tmpdir(),"rca-signed-discovery-"));
   const unitDir=path.join(home,".config/systemd/user");
   mkdirSync(unitDir,{recursive:true});
-  const a=path.join(unitDir,"remote-control-agent.service");
-  const b=path.join(unitDir,"remote-control-v2-agent.service");
-  try {
-    assert.equal(needsCanonicalServiceCutover(home),false);
-    writeFileSync(a,"# Installed from docs/remote-control/systemd/remote-control-agent.service.example\n");
-    writeFileSync(b,"# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n");
-    assert.equal(needsCanonicalServiceCutover(home),true);
-    writeFileSync(a,"# Managed by Remote Control Agent installer.\n");
-    assert.equal(needsCanonicalServiceCutover(home),false);
-    rmSync(a);
-    symlinkSync("/etc/passwd",a);
-    assert.throws(()=>needsCanonicalServiceCutover(home),/Untrusted/);
+  const signed=path.join(unitDir,"remote-control-v2-agent.service");
+  const canonical=path.join(unitDir,"remote-control-agent.service");
+  try{
+    assert.equal(hasLegacySignedService(home),false);
+    writeFileSync(signed,"test", {mode:0o600});
+    assert.equal(hasLegacySignedService(home),true);
+    writeFileSync(canonical,"other",{mode:0o600});
+    assert.throws(()=>hasLegacySignedService(home),/Conflicting/);
+    rmSync(canonical);
+    rmSync(signed);
+    symlinkSync("/etc/passwd",signed);
+    assert.throws(()=>hasLegacySignedService(home),/Untrusted/);
   }finally{rmSync(home,{recursive:true,force:true});}
 });
