@@ -196,6 +196,8 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
         $name -cmatch '^apps/remote-control-agent/node_modules(?:/playwright-core(?:/lib)?)?/$'
       $allowedFile = $name -cmatch '^(?:bin/(?:node\.exe|rca-background\.exe)|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$' -or
         $name -ceq 'apps/remote-control-agent/candidates/browser-playwright.js' -or
+        $name -ceq 'apps/remote-control-agent/candidates/browser-egress-proxy.js' -or
+        $name -ceq 'apps/remote-control-agent/candidates/browser-egress-policy.js' -or
         $name -cmatch '^apps/remote-control-agent/node_modules/playwright-core/(?:LICENSE|package\.json|browsers\.json|index\.(?:js|mjs)|lib/(?:bootstrap\.js|coreBundle\.js|utilsBundle\.js(?:\.LICENSE)?))$'
       if (($name.EndsWith('/') -and -not $allowedDir) -or
           (-not $name.EndsWith('/') -and -not $allowedFile)) {
