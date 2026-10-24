@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type BrowserContext, type BrowserType, type Page } from "playwright-core";
+import { startCandidateBrowserEgressProxy } from "./browser-egress-proxy.ts";
 import type {
   BrowserBackend, BrowserStatus, BrowserTabAction, BrowserTabsResult, BrowserTarget,
 } from "../src/browser-backend.ts";
@@ -84,6 +85,8 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   private revoked = false;
   private version = 0;
   private closingContext: Promise<void> | null = null;
+  private egressProxy: Awaited<ReturnType<typeof startCandidateBrowserEgressProxy>> | null = null;
+  private egressShutdown: Promise<void> | null = null;
 
   constructor(options: PlaywrightBrowserOptions) {
     if (!path.isAbsolute(options.agentStore)) throw Error("Agent-private browser path must be absolute.");
@@ -164,11 +167,27 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     this.version = 0;
   }
 
+  private stopEgressProxy(): Promise<void> {
+    if (this.egressShutdown) return this.egressShutdown;
+    const proxy = this.egressProxy;
+    if (!proxy) return Promise.resolve();
+    this.egressProxy = null;
+    const closing = proxy.close();
+    this.egressShutdown = closing;
+    // Preserve a rejected cleanup promise as a fail-closed marker.
+    void closing.then(() => {
+      if (this.egressShutdown === closing) this.egressShutdown = null;
+    }, () => {});
+    return closing;
+  }
+
   private closeOwnedContext(context: BrowserContext): Promise<void> {
     if (this.closingContext) return this.closingContext;
-    // Defer close until the Promise is recorded, so synchronous Page close
-    // callbacks cannot start a second close or race a new Profile launch.
-    const closing = Promise.resolve().then(() => context.close());
+    // The browser context must close before its only network route is removed.
+    const closing = Promise.resolve().then(async () => {
+      try { await context.close(); }
+      finally { await this.stopEgressProxy(); }
+    });
     this.closingContext = closing;
     // On a failed close, keep the rejected Promise as a fail-closed marker:
     // do not reopen the same Profile or report successful revocation cleanup.
@@ -188,6 +207,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
     return this.exclusive(async () => {
       if (this.revoked) throw Error("Browser ownership revoked; startup denied.");
       if (this.closingContext) await this.closingContext;
+      if (this.egressShutdown) await this.egressShutdown;
       if (this.context && this.sessionId) return this.status()!;
       const channel = this.channelForTests ??
         (process.platform === "win32" ? defaultWindowsChannel() : "chrome");
@@ -195,12 +215,20 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       await mkdir(profile, { recursive: true, mode: 0o700 });
       // A pre-existing Profile lock is an explicit error, not a license to
       // take over or terminate another browser process.
-      const context = await this.driver.launchPersistentContext(profile, {
-        headless: false,
-        ...(this.executable ? { executablePath: this.executable } : { channel }),
-        acceptDownloads: false, serviceWorkers: "block",
-      });
+      // Start a per-session, loopback-only policy proxy BEFORE Chromium:
+      // it must fail closed on DNS or connection errors, with no DIRECT route.
+      const egress = await startCandidateBrowserEgressProxy();
+      let context: BrowserContext | undefined;
       try {
+        context = await this.driver.launchPersistentContext(profile, {
+          headless: false,
+          ...(this.executable ? { executablePath: this.executable } : { channel }),
+          acceptDownloads: false, serviceWorkers: "block",
+          proxy: { server: egress.server, bypass: "<-loopback>" },
+          args: ["--proxy-bypass-list=<-loopback>", "--disable-quic",
+            "--webrtc-ip-handling-policy=disable_non_proxied_udp"],
+        });
+        this.egressProxy = egress;
         await context.route("**/*", async route => {
           try { checkedUrl(route.request().url(), false); }
           catch {
@@ -220,7 +248,10 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         this.version = 0;
         this.nextTab = 1;
         context.on?.("page", page => { this.register(page); });
-        context.on?.("close", () => { this.reset(context); });
+        context.on?.("close", () => {
+          this.reset(context);
+          void this.stopEgressProxy().catch(() => { this.uncertain = true; });
+        });
         const page = restored[0] ?? await context.newPage();
         // Other blank tabs, including manually added tabs, are visible to list.
         for (const open of context.pages()) this.register(open);
@@ -230,8 +261,11 @@ export class PlaywrightBrowserManager implements BrowserBackend {
         if (this.revoked) throw Error("Browser ownership revoked during startup.");
         return this.status()!;
       } catch (error) {
-        await context.close().catch(() => {});
-        this.reset(context);
+        await context?.close().catch(() => {});
+        // No browser may outlive an unverified/partially initialized proxy.
+        if (this.egressProxy === egress) await this.stopEgressProxy();
+        else await egress.close();
+        if (context) this.reset(context);
         throw error;
       }
     });
