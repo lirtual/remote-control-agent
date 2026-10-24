@@ -14,7 +14,10 @@ if (-not $installation) { throw 'MSVC native x64 compiler missing' }
 $vcvars = Join-Path $installation 'VC\Auxiliary\Build\vcvars64.bat'
 if (-not (Test-Path -LiteralPath $vcvars)) { throw 'MSVC environment unavailable' }
 $source = Join-Path $PSScriptRoot 'windows-appcontainer-loopback-probe.cpp'
-$folder = Join-Path $env:RUNNER_TEMP ('rca-appcontainer-' + [guid]::NewGuid().ToString('N'))
+# The AppContainer must traverse ancestor directories to load its image.
+# GitHub RUNNER_TEMP lives under private D:\a\_temp ACLs. Put only this
+# disposable fixture beneath ProgramData's traversable parent instead.
+$folder = Join-Path $env:ProgramData ('rca-appcontainer-' + [guid]::NewGuid().ToString('N'))
 $exe = Join-Path $folder 'rca-ci-loopback-probe.exe'
 New-Item -ItemType Directory -Path $folder | Out-Null
 try {
