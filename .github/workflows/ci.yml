@@ -363,6 +363,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Windows $channel proxy boundary probe failed" }
             & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-webrtc-egress-smoke.mjs $extracted $channel
             if ($LASTEXITCODE -ne 0) { throw "Windows $channel WebRTC egress observation failed" }
+            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-quic-egress-smoke.mjs $extracted $channel
+            if ($LASTEXITCODE -ne 0) { throw "Windows $channel QUIC UDP positive-control probe failed" }
             & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-candidate-proxy-smoke.mjs $extracted $channel
             if ($LASTEXITCODE -ne 0) { throw "Windows $channel candidate DNS-pinned proxy smoke failed" }
             & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-public-tls-smoke.mjs $extracted $channel
