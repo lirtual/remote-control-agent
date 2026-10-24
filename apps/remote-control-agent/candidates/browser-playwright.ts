@@ -107,7 +107,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   }
 
   private requireContext(id: string): BrowserContext {
-    if (!ID.test(id) || id !== this.sessionId || !this.context)
+    if (this.revoked || !ID.test(id) || id !== this.sessionId || !this.context)
       throw Error("Unknown or closed browser session.");
     return this.context;
   }
@@ -120,6 +120,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
   }
 
   private assertFresh(version: number): void {
+    if (this.revoked) throw Error("Browser ownership revoked during action.");
     if (!Number.isSafeInteger(version) || version !== this.version)
       throw Error("Stale snapshot; observe again before acting.");
     if (this.uncertain) throw Error("Previous browser effect is uncertain; no implicit replay.");
@@ -183,10 +184,12 @@ export class PlaywrightBrowserManager implements BrowserBackend {
 
   private closeOwnedContext(context: BrowserContext): Promise<void> {
     if (this.closingContext) return this.closingContext;
-    // The browser context must close before its only network route is removed.
+    // Tear down the only approved route immediately, even if Chromium's
+    // Context shutdown stalls. Real-browser proxy-down CI rejects DIRECT fallback.
     const closing = Promise.resolve().then(async () => {
-      try { await context.close(); }
-      finally { await this.stopEgressProxy(); }
+      const proxyClosing = this.stopEgressProxy();
+      try { await Promise.all([context.close(), proxyClosing]); }
+      finally { await proxyClosing; }
     });
     this.closingContext = closing;
     // On a failed close, keep the rejected Promise as a fail-closed marker:
@@ -221,6 +224,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       let context: BrowserContext | undefined;
       let proxyBound = false;
       try {
+        if (this.revoked) throw Error("Browser ownership revoked during startup.");
         context = await this.driver.launchPersistentContext(profile, {
           headless: false,
           ...(this.executable ? { executablePath: this.executable } : { channel }),
@@ -339,6 +343,7 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       const tabs = await Promise.all([...this.pages].filter(([, page]) => !page.isClosed()).map(async ([id, page]) => ({
         tab_id: id, url: page.url(), title: (await page.title()).slice(0, 160),
       })));
+      if (this.revoked) throw Error("Browser ownership revoked during tabs operation.");
       return { selected_tab_id: this.selectedTabId, tabs };
     });
   }
