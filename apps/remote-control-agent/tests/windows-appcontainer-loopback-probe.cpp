@@ -330,11 +330,9 @@ int wmain(int argc, wchar_t** argv) {
         "WFP scoped rule did not deny neighboring loopback port");
       std::puts("WFP_OTHER_LOOPBACK_PORT_DENIED=PASS");
       const DWORD allowed = launch(exe, port, profile.sid);
-      std::printf("WFP_APPCONTAINER_PROXY_PORT_CHILD_EXIT=%lu
-", allowed);
+      std::printf("WFP_APPCONTAINER_PROXY_PORT_CHILD_EXIT=%lu\n", allowed);
       const bool allowedArrived = arrived(listener, 200000);
-      std::printf("WFP_APPCONTAINER_PROXY_PORT_LISTENER_HIT=%d
-",
+      std::printf("WFP_APPCONTAINER_PROXY_PORT_LISTENER_HIT=%d\n",
         static_cast<int>(allowedArrived));
       require(allowed == 0 && allowedArrived,
         "WFP permit did not enable the AppContainer's exact proxy port");
