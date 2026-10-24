@@ -45,6 +45,14 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
       assert.equal(settings.headless,false);
       assert.equal(settings.acceptDownloads,false);
       assert.equal(settings.serviceWorkers,"block");
+      const proxy=settings.proxy as {server:string;bypass:string};
+      assert.match(proxy.server,/^http:\/\/127\.0\.0\.1:[0-9]+$/);
+      assert.equal(proxy.bypass,"<-loopback>");
+      assert.deepEqual(settings.args,[
+        "--proxy-bypass-list=<-loopback>",
+        "--disable-quic",
+        "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+      ]);
       calls.push("channel:"+String(settings.channel));
       calls.push("executable:"+String(settings.executablePath));
       if (options.launchWait) await options.launchWait;
