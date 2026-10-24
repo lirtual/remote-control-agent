@@ -90,7 +90,7 @@ test("malformed browser proxy socket and peer reset never kill the local server"
       const socket = net.connect(Number(endpoint.port), endpoint.hostname);
       socket.on("error", () => resolve()); // Peer reset is expected.
       socket.once("connect", () => {
-        socket.write("BAD \\u0000 HTTP/1.1\\r\\nHost: invalid\\r\\n\\r\\n");
+        socket.write("BAD \u0000 HTTP/1.1\r\nHost: invalid\r\n\r\n");
         socket.destroy();
         resolve();
       });
