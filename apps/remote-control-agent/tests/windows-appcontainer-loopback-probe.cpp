@@ -70,8 +70,12 @@ static DWORD launch(const std::wstring& exe, unsigned port, PSID packageSid) {
     throw std::runtime_error("Unable to launch disposable AppContainer child");
   }
   DWORD exit = STILL_ACTIVE;
+  std::printf("APPCONTAINER_CHILD_LAUNCHED=%s\n", packageSid ? "sandbox" : "baseline");
+  std::fflush(stdout);
   const DWORD wait = WaitForSingleObject(pi.hProcess, 10000);
   if (wait != WAIT_OBJECT_0) {
+    std::printf("APPCONTAINER_CHILD_WAIT=%s:%lu\n", packageSid ? "sandbox" : "baseline", wait);
+    std::fflush(stdout);
     TerminateProcess(pi.hProcess, 99);
     WaitForSingleObject(pi.hProcess, 2000);
   } else {
@@ -142,6 +146,8 @@ int wmain(int argc, wchar_t** argv) {
       "Cannot resolve test executable");
 
     // Unrestricted positive control: a real TCP connection MUST succeed.
+    std::puts("APPCONTAINER_BASELINE_START");
+    std::fflush(stdout);
     require(launch(exe, port, nullptr) == 0,
       "Unrestricted positive-control child did not connect");
     require(arrived(listener, 200000),
@@ -160,6 +166,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     profile.created = true;
     // No internetClient, privateNetworkClientServer or loopback exemptions.
+    std::puts("APPCONTAINER_SANDBOX_START");
+    std::fflush(stdout);
     const DWORD result = launch(exe, port, profile.sid);
     std::printf("APPCONTAINER_CHILD_EXIT=%lu\n", result);
     require(result == 42,
