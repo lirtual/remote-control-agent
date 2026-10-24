@@ -203,6 +203,18 @@ test("running upgrade cannot clear its guarded reservation by claiming no effect
     }finally{await restarted.close();}
   });
 });
+test("a generic no-effect callback cannot masquerade as approved upgrade cancellation",async()=>{
+  await fixture(async(store)=>{
+    const other={...req,operation_id:"approved-upgrade-no-effect-forgery"};
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await store.update(req.operation_id,"failed","Unverified no-effect claim",undefined,true);
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    await assert.rejects(
+      store.cancelUpgradeBeforeStart(req.operation_id,operationDigest("upgrade_agent",req)),
+      /uncertain/,
+    );
+  });
+});
 test("upgrade cancellation refuses wrong identity, running, unknown and guarded failed states",async()=>{
   await fixture(async(store)=>{
     const digest=operationDigest("upgrade_agent",req);
