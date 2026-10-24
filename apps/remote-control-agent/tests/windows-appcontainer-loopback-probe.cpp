@@ -124,7 +124,7 @@ struct WfpExperiment {
       scope.fieldKey = FWPM_CONDITION_ALE_PACKAGE_ID;
       scope.matchType = FWP_MATCH_EQUAL;
       scope.conditionValue.type = FWP_SID;
-      scope.conditionValue.sid = appSid;
+      scope.conditionValue.sid = reinterpret_cast<SID*>(appSid);
       FWPM_FILTER0 deny{};
       deny.displayData.name = const_cast<wchar_t*>(L"RCA CI package deny");
       deny.layerKey = *layerKey;
@@ -142,7 +142,7 @@ struct WfpExperiment {
     permitConditions[0].fieldKey = FWPM_CONDITION_ALE_PACKAGE_ID;
     permitConditions[0].matchType = FWP_MATCH_EQUAL;
     permitConditions[0].conditionValue.type = FWP_SID;
-    permitConditions[0].conditionValue.sid = appSid;
+    permitConditions[0].conditionValue.sid = reinterpret_cast<SID*>(appSid);
     permitConditions[1].fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
     permitConditions[1].matchType = FWP_MATCH_EQUAL;
     permitConditions[1].conditionValue.type = FWP_UINT32;
