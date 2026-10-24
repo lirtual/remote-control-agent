@@ -44,7 +44,7 @@ export function verifyOwnedProgram(version){
     APP+"/scripts/bootstrap-v2.py",APP+"/scripts/manage-v2.py",
     APP+"/scripts/bootstrap-node.mjs",APP+"/scripts/manage-v2.mjs",
     APP+"/scripts/lifecycle-v2.mjs",APP+"/scripts/upgrade-v2.mjs",
-    APP+"/scripts/migrate-linux-service.mjs",
+    APP+"/scripts/upgrade-existing-service.mjs",
     APP+"/scripts/verify-v2-release.mjs",APP+"/scripts/rca.sh"]);
   if(Array.isArray(info.modules)){
     if(info.modules.length>80)throw Error("Unexpected Agent module inventory");

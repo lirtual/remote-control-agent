@@ -57,48 +57,40 @@ remain unchanged; upgrades are separate explicitly authorized operations.
 
 ## Installation and upgrades
 
-**Migration warning (2026-10-23):** The existing WSL2 deployment still uses a legacy service name and an older loopback service occupies the desired canonical name. The [canonical service refactor](https://github.com/lirtual/remote-control-agent/pull/23) is **not** an installed Release or a safe in-place unit rename. Do not manually rename systemd units or delete the old Tunnel. Follow the [reviewed offline cutover conditions](./docs/canonical-linux-agent-cutover.md) before the one-time migration.
+The approved Worker serves immutable, SHA-256-verified Release assets. Use
+its Linux installer from an ordinary user terminal:
 
+```sh
+curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh
+```
 
-The approved Worker serves a pinned Release installer. Its GitHub assets are
-SHA-256 verified before any bundled executable runs:
+To upgrade an existing **permanently paired** Linux Agent to a newer pinned
+release, use the same installer with an explicit upgrade option:
 
-    curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh
+```sh
+curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade
+```
 
-For an already-paired permanent installation, the existing one-time
-read-only to full-tools migration uses an explicit flag:
+The currently installed signed-WSS service is upgraded **in place**.
+Installations using the historical `remote-control-v2-agent.service`
+filename retain that filename during upgrades; new installations use
+`remote-control-agent.service`. No extra service-name migration, loopback
+Agent, Cloudflare Tunnel, or separate `MIGRATE-REMOTE-CONTROL` prompt is
+required. The service's display description, environment variable names and
+actual binary refer to the current Agent.
 
-    curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade
+Upgrades require an intact signed device identity, validated local service
+template and verified newer Release. Active Agents must prove there are no
+outstanding or uncertain operations via the local freeze handshake. If the
+service is busy, has foreign systemd modifications, or state is uncertain,
+the upgrade fails closed. Activation failure restores the prior unit, with
+owner-private recovery evidence kept if rollback itself fails.
 
-The next CLI revision adds **rca upgrade** without manually specifying a
-tag or Git commit. It reads only the reviewed immutable Release metadata
-from the device's already-configured Worker installer, then uses the existing
-GitHub Release verifier, pinned SHA-256 checks, installer, and binary
-activation/rollback. Fetched shell content is never executed by this CLI.
-
-### Previously installed v0.1.11 Agent (legacy migration)
-
-The original full-tools v0.1.11 Agent lacked a live-work freeze handshake.
-The production WSL2 owner completed its **one-time** signed-WSS upgrade to
-the verified immutable v0.1.20 on 2026-10-24. The same device ID, local
-identity and historical operation receipts were retained. This step has
-already been accepted; **do not repeat it**.
-
-For a separate old v0.1.11 installation, the immutable v0.1.11 `rca upgrade`
-cannot upgrade from the full-tools profile, and the public Worker `install.sh`
-does **not** accept an `--upgrade` argument. Do not use
-`curl ... | sh -s -- --upgrade` or stop the live Agent over its own MCP session.
-Any exceptional offline transition must instead use a reviewed, SHA-256-verified
-immutable Release bootstrap in explicit `--upgrade` mode from a genuine
-owner-local terminal, and complete that Release's exact offline consent prompt.
-Never bypass its confirmation or assume the old service will restart on failure.
-
-The WSL2 deployment still uses a historical systemd unit name while the
-[canonical Linux service migration](./docs/canonical-linux-agent-cutover.md)
-remains under review. It is a **separate** step requiring a newer reviewed
-immutable Release, isolated rollback validation and independent Tunnel
-dependency checks. Do not rename services or remove the Tunnel manually.
-Released v0.1.11/v0.1.20 archives remain unchanged.
+These instructions apply once a Release containing the direct-upgrade path
+is published and the Worker pin has been updated to it. Existing immutable
+Release assets are not changed retroactively. Verify the same device ID,
+signed WSS/MCP connectivity, file and Shell tools, and durable receipts after
+upgrade. Do not stop an Agent using the Shell of that same Agent.
 
 ## Native Windows x64 installation and upgrade
 
