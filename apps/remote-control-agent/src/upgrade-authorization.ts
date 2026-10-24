@@ -1,11 +1,11 @@
 /** Owner-approved, one-shot Agent upgrade request contract.
  * Does NOT invoke a process or grant approval by itself.
  */
-import { createHash, timingSafeEqual } from "node:crypto";
+import { timingSafeEqual } from "node:crypto";
 const HEX40=/^[a-f0-9]{40}$/;
 const HEX64=/^[a-f0-9]{64}$/;
 const UUID=/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
-const VERSION=/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+const VERSION=/^v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})$/;
 const OP=/^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
 const PROFILE=/^(windows-x64|linux-x64-glibc|linux-arm64-glibc)$/;
 export interface UpgradeRequest {
@@ -28,7 +28,7 @@ export interface UpgradeValidationContext {
 }
 const keys=["operation_id","device_id","source_version","target_version","target_commit","target_sha256","target_platform","identity_sha256","authorized_until"];
 function checkExact(value: unknown,allowed: readonly string[]): asserts value is Record<string, unknown> {
- if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join("|")!==allowed.slice().sort().join("|"))
+ if(!value||typeof value!=="object"||Array.isArray(value)||(Object.keys(value).length!==allowed.length || Object.keys(value).some(key=>!allowed.includes(key))))
   throw Error("Unrecognized upgrade request fields");
 }
 function newer(next: string,current: string): boolean {
@@ -61,16 +61,4 @@ export function validateUpgradeRequest(value: UpgradeRequest,{deviceId,installed
     approvedRelease.platform!==value.target_platform)
   throw Error("Upgrade release is not approved");
  return Object.freeze({...value});
-}
-export function upgradeAuthorizationDigest(value: UpgradeRequest): string {
- checkExact(value,keys);
- return createHash("sha256").update(keys.map(key=>JSON.stringify(value[key as keyof UpgradeRequest])).join("\n")).digest("hex");
-}
-export function guardUpgradeReplay(existing: {digest: string} | null,value: UpgradeRequest): "new" | "existing" {
- if(!existing)return "new";
- if(typeof existing.digest!=="string"||!HEX64.test(existing.digest))throw Error("Corrupt upgrade receipt");
- const expected=upgradeAuthorizationDigest(value);
- if(!timingSafeEqual(Buffer.from(existing.digest,"hex"),Buffer.from(expected,"hex")))
-   throw Error("Conflicting upgrade operation id");
- return "existing";
 }
