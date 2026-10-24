@@ -251,6 +251,22 @@ function Complete-ApprovedOnboarding([string]$launcher) {
     throw 'Authorization incomplete. Identity kept.'
   }
 }
+# Read a console key directly: PromptForChoice renders system-localized
+# help/default text even when its title and choices are English.
+# Read-Host can consume piped script input from "irm ... | iex".
+function Confirm-Upgrade([object]$ui) {
+  Write-Host -NoNewline 'Upgrade? [y/N] '
+  try {
+    $key = $ui.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+  } catch {
+    Write-Host ''
+    throw 'Interactive approval unavailable. No changes.'
+  }
+  Write-Host ''
+  return [bool]($key.KeyDown -and
+    ($key.Character -ceq 'y' -or $key.Character -ceq 'Y'))
+}
+
 $temp = $null
 $stage = $null
 $promoted = $false
@@ -281,20 +297,9 @@ try {
       Write-Output ("Agent: {0} -> {1}" -f $oldVersion, $Version)
       Write-Output 'Finish active operations before upgrading.'
       Write-Output ("Task: {0} (state preserved)" -f $task.State)
-      # Prompt through the PowerShell host UI rather than stdin: the public
-      # one-liner is evaluated by iex while receiving script text from a pipe.
-      # No host support or no affirmative choice must never approve an upgrade.
-      $choices = [System.Management.Automation.Host.ChoiceDescription[]] @(
-        [System.Management.Automation.Host.ChoiceDescription]::new('&Yes', 'Upgrade'),
-        [System.Management.Automation.Host.ChoiceDescription]::new('&No', 'Keep current')
-      )
-      try {
-        $selected = $Host.UI.PromptForChoice('Agent update',
-          'Upgrade verified Agent?', $choices, 1)
-      } catch {
-        throw 'This terminal could not collect upgrade approval; existing device unchanged'
-      }
-      if ($selected -ne 0) {
+      # Console key comes from RawUI, not redirected pipeline stdin.
+      # Any key other than Y (including Enter) is a safe cancellation.
+      if (-not (Confirm-Upgrade $Host.UI)) {
         Write-Output 'Cancelled. No changes.'
         return
       }
@@ -307,7 +312,7 @@ try {
     Assert-PrivateFolder $target
     $nodeExisting = [IO.Path]::Combine($target,'bin','node.exe')
     $verifyExisting = [IO.Path]::Combine($target,'apps','remote-control-agent','scripts','verify-windows-preview.mjs')
-    & $nodeExisting $verifyExisting $target
+    & $nodeExisting $verifyExisting $target | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Existing program manifest failed verification' }
     if ($upgradeExisting) {
       & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
@@ -344,7 +349,7 @@ try {
   $node = [IO.Path]::Combine($stage, 'bin', 'node.exe')
   $verifier = [IO.Path]::Combine($stage, 'apps', 'remote-control-agent',
                                 'scripts', 'verify-windows-preview.mjs')
-  & $node $verifier $stage
+  & $node $verifier $stage | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Bundle file manifest failed verification' }
   $manifest = Get-Content -LiteralPath ([IO.Path]::Combine($stage, 'bundle.json')) -Raw | ConvertFrom-Json
   if ($manifest.version -cne $Version) { throw 'Manifest version mismatch' }
