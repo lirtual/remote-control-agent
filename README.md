@@ -2,12 +2,12 @@
 
 Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Current Linux v2 release
+## Current Linux release
 
 Native Windows x64 full-tools and the pinned Playwright browser runtime are packaged separately from the Linux Agent. Publication requires a reviewed, single-file approval commit on `main` after Agent CI succeeds. Merging source does not install, upgrade or re-pair any device.
 
 
-The published immutable **v0.1.11** Agent enables file reads, file writes,
+The published immutable **v0.1.12** Linux Agent enables file reads, file writes,
 Shell and managed sessions for approved paired devices. It runs as the user's
 systemd service and authenticates to the approved Worker over signed outbound
 WSS. There are no per-feature switches and no need to pair again during an
@@ -57,6 +57,9 @@ remain unchanged; upgrades are separate explicitly authorized operations.
 
 ## Installation and upgrades
 
+**Migration warning (2026-10-23):** The existing WSL2 deployment still uses a legacy service name and an older loopback service occupies the desired canonical name. The [canonical service refactor](https://github.com/lirtual/remote-control-agent/pull/23) is **not** an installed Release or a safe in-place unit rename. Do not manually rename systemd units or delete the old Tunnel. Follow the [reviewed offline cutover conditions](./docs/canonical-linux-agent-cutover.md) before the one-time migration.
+
+
 The approved Worker serves a pinned Release installer. Its GitHub assets are
 SHA-256 verified before any bundled executable runs:
 
@@ -73,35 +76,29 @@ from the device's already-configured Worker installer, then uses the existing
 GitHub Release verifier, pinned SHA-256 checks, installer, and binary
 activation/rollback. Fetched shell content is never executed by this CLI.
 
-### One-time v0.1.11 -> next v2 version
+### Previously installed v0.1.11 Agent (legacy migration)
 
-The published v0.1.11 is already full-tools but has no in-process upgrade
-handshake. **Only after a newer immutable Agent Release has been approved and
-pinned by the Worker**, the owner can perform this single offline cutover from
-the **ordinary WSL/Linux terminal**, in a maintenance window:
+The original full-tools v0.1.11 Agent lacked a live-work freeze handshake.
+The production WSL2 owner completed its **one-time** signed-WSS upgrade to
+the verified immutable v0.1.20 on 2026-10-24. The same device ID, local
+identity and historical operation receipts were retained. This step has
+already been accepted; **do not repeat it**.
 
-1. Finish all Remote Control Shell, file-writing, and other operations. The
-   old Agent cannot prove quiescence; this is an explicit operator decision.
-2. Stop **only the v2 Agent**: `systemctl --user stop remote-control-v2-agent.service`.
-   Do not use Remote Control to initiate the stop: the connection will drop.
-3. In the *same local terminal*, run the approved Worker installer:
-   `curl -fsSL https://YOUR_APPROVED_WORKER/install.sh | sh -s -- --upgrade`.
-   It requires service `inactive/dead`, PID 0, an unlocked/intact SQLite
-   receipt store, exact old v0.1.11 program/identity ownership, and the
-   interactive `OFFLINE-V2-UPGRADE` confirmation.
-4. Check `rca version`, the local service, and signed MCP connectivity. The
-   private identity and historical SQLite receipts remain in place.
+For a separate old v0.1.11 installation, the immutable v0.1.11 `rca upgrade`
+cannot upgrade from the full-tools profile, and the public Worker `install.sh`
+does **not** accept an `--upgrade` argument. Do not use
+`curl ... | sh -s -- --upgrade` or stop the live Agent over its own MCP session.
+Any exceptional offline transition must instead use a reviewed, SHA-256-verified
+immutable Release bootstrap in explicit `--upgrade` mode from a genuine
+owner-local terminal, and complete that Release's exact offline consent prompt.
+Never bypass its confirmation or assume the old service will restart on failure.
 
-If installation fails **before activation**, the old service may remain
-stopped. Inspect it locally; after an explicit decision, it can be started
-again using `systemctl --user start remote-control-v2-agent.service`.
-An activation failure uses the existing durable systemd rollback to restore
-the previous v2 unit. No operation is replayed by the installer.
-
-Future full-tools v2 releases use the owner-local Unix-socket freeze instead:
-new work is rejected after the freeze begins; active, starting or unknown work
-blocks upgrade. No v1 compatibility layer or additional service is required.
-The immutable v0.1.11 binary is unchanged by this source PR.
+The WSL2 deployment still uses a historical systemd unit name while the
+[canonical Linux service migration](./docs/canonical-linux-agent-cutover.md)
+remains under review. It is a **separate** step requiring a newer reviewed
+immutable Release, isolated rollback validation and independent Tunnel
+dependency checks. Do not rename services or remove the Tunnel manually.
+Released v0.1.11/v0.1.20 archives remain unchanged.
 
 ## Native Windows x64 installation and upgrade
 

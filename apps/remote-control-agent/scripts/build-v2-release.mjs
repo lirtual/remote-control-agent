@@ -210,7 +210,7 @@ export function build(args) {
   writeFileSync(path.join(work,"apps/remote-control-agent/scripts/install-v2.mjs"),
     rewriteExtensions(installer),{mode:0o600});
   for (const name of ["bootstrap-node.mjs","manage-v2.mjs",
-      "lifecycle-v2.mjs","upgrade-v2.mjs","verify-v2-release.mjs","rca.sh"]) {
+      "lifecycle-v2.mjs","upgrade-v2.mjs","migrate-linux-service.mjs","verify-v2-release.mjs","rca.sh"]) {
     const sourceFile=path.join(root,"scripts",name);
     const dest=path.join(work,"apps/remote-control-agent/scripts",name);
     copyFileSync(sourceFile,dest);

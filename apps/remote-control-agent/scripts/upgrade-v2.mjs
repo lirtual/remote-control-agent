@@ -69,9 +69,9 @@ function sameOrOlder(candidate,current){
 function serviceEndpoint(unit){
   if(!unit)throw Error("Upgrade requires an installer-owned permanent service");
   const values=unit.split("\n")
-    .filter(x=>x.startsWith("Environment=REMOTE_CONTROL_V2_ENDPOINT="));
+    .filter(x=>x.startsWith("Environment=REMOTE_CONTROL_AGENT_ENDPOINT="));
   if(values.length!==1)throw Error("Missing or ambiguous approved Worker origin");
-  const endpoint=values[0].slice("Environment=REMOTE_CONTROL_V2_ENDPOINT=".length);
+  const endpoint=values[0].slice("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=".length);
   const url=new URL(endpoint);
   if(url.protocol!=="https:"||url.username||url.password||url.search||
      url.hash||url.pathname!=="/"||url.port||

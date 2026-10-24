@@ -276,8 +276,8 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                 if not chunk:
                     break
                 transcript += chunk
-            if b"Type UNINSTALL-V2 to confirm" in transcript and not confirmed:
-                os.write(uninstall_master, b"UNINSTALL-V2\n")
+            if b"Type UNINSTALL to confirm" in transcript and not confirmed:
+                os.write(uninstall_master, b"UNINSTALL\n")
                 confirmed = True
             if removing.poll() is not None:
                 break

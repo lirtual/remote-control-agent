@@ -26,7 +26,7 @@ async function fixture() {
 test("repeat installer reuses only the exact running program, never silently switches CLI versions",()=>{
   const old="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.1-linux-x64-glibc";
   const next="/home/test/.local/share/mcp-workers/remote-control/programs/v0.1.2-linux-x64-glibc";
-  const unit="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.\n[Service]\n"+
+  const unit="# Managed by Remote Control Agent installer.\n[Service]\n"+
     "ExecStart="+old+"/bin/node "+old+"/apps/remote-control-agent/src/v2-main.js\n";
   assert.equal(assertRepeatInstallSameVersion(unit,old),undefined);
   assert.throws(()=>assertRepeatInstallSameVersion(unit,next),/use reviewed rca upgrade/);
@@ -219,7 +219,7 @@ test("portable installer prints a single CLI path, without promising to open the
   assert.match(source,/Pairing code \(10 min\):/);
   assert.match(source,/pairing_lookup, then explicitly pairing_approve/);
   assert.doesNotMatch(source,/MCP challenge \(12 chars\):/);
-  assert.match(source,/Ready: v2 service active/);
+  assert.match(source,/Ready: Agent active/);
   assert.match(source,/export PATH=/);
 });
 test("portable CLI hint prints PATH only when missing in the current terminal",()=>{

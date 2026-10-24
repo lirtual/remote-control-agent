@@ -182,7 +182,7 @@ test("#77 interrupted recovery refuses a noncanonical current unit before system
     await writeFile(unitPath,altered,{mode:0o600});
     const backup=unitPath+".upgrade-backup";
     await writeFile(backup,from,{mode:0o600});
-    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is noncanonical/);
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current Agent unit is noncanonical/);
     assert.equal(await readFile(unitPath,"utf8"),altered);
     assert.equal(await readFile(backup,"utf8"),from);
     await assert.rejects(access(logs),{code:"ENOENT"});
@@ -217,7 +217,7 @@ test("#77 interrupted recovery keeps backup if existing unit is absent", async()
   await withFakeUserService(async ({unitPath,from,home})=>{
     const backup=unitPath+".upgrade-backup";
     await writeFile(backup,from,{mode:0o600});
-    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current v2 unit is missing/);
+    await assert.rejects(recoverInterruptedUpgrade({home,unitPath}),/Current Agent unit is missing/);
     assert.equal(await readFile(backup,"utf8"),from);
   });
 });
@@ -256,7 +256,7 @@ test("#77 successful local upgrade writes new v2 unit without identity reset", a
     assert.equal(await readFile(unitPath,"utf8"),to);
     await assert.rejects(access(unitPath+".upgrade-backup"),{code:"ENOENT"});
     const calls=await readFile(logs,"utf8");
-    assert.match(calls,/--user restart remote-control-v2-agent\.service/);
+    assert.match(calls,/--user restart remote-control-agent\.service/);
   });
 });
 
@@ -286,7 +286,7 @@ test("#77 failed first activation deletes only the newly installed v2 unit", asy
     await assert.rejects(installUnit(unitPath,to,null), /could not be activated/);
     await assert.rejects(access(unitPath),{code:"ENOENT"});
     const calls=await readFile(logs,"utf8");
-    assert.match(calls,/--user enable --now remote-control-v2-agent\.service/);
-    assert.match(calls,/--user disable --now remote-control-v2-agent\.service/);
+    assert.match(calls,/--user enable --now remote-control-agent\.service/);
+    assert.match(calls,/--user disable --now remote-control-agent\.service/);
   });
 });

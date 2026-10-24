@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 APP = Path("apps/remote-control-agent")
-UNIT = "remote-control-v2-agent.service"
+UNIT = "remote-control-agent.service"
 VERSION = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
@@ -47,7 +47,7 @@ def installed_endpoint(bootstrap):
     if not unit:
         return None
     lines = [s.partition("=")[2] for s in unit.splitlines()
-             if s.startswith("Environment=REMOTE_CONTROL_V2_ENDPOINT=")]
+             if s.startswith("Environment=REMOTE_CONTROL_AGENT_ENDPOINT=")]
     if len(lines) != 1:
         raise ValueError("Cannot establish a unique owned Worker endpoint.")
     from urllib.parse import urlsplit

@@ -93,7 +93,7 @@ test("#77 reviewed full-tools upgrade requires authoritative in-process freeze",
     await rm(path.dirname(receiptFile), {recursive:true,force:true});
     await assert.doesNotReject(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"));
     await createReceiptDatabase(home, 1);
-    await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by mcp-workers","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
+    await assert.rejects(assertSafePortableUpgrade(unit.replace("Managed by Remote Control Agent","Managed by someone else"),home,newRoot+"/bundle.json"),/owned/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,upgrade_profile:"shell-enabled"}),{mode:0o600});
     await assert.rejects(assertSafePortableUpgrade(unit,home,newRoot+"/bundle.json"),/profile|quiescence/);
     await writeFile(newRoot+"/bundle.json",JSON.stringify({...profile,receipt_schema:2}),{mode:0o600});
@@ -121,10 +121,10 @@ test("v0.1.11 one-time offline cutover requires explicit owner confirmation, sto
   const keyPath=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
   const deviceId="af666663-b30c-4b3d-ad85-c8047dc3516b";
   const output=[];
-  let state="inactive", confirm="OFFLINE-V2-UPGRADE", probes=0;
+  let state="inactive", confirm="OFFLINE-AGENT-UPGRADE", probes=0;
   const invoke=(binary,args)=>{
     assert.equal(binary,"systemctl");
-    assert.deepEqual(args,["--user","show","remote-control-v2-agent.service",
+    assert.deepEqual(args,["--user","show","remote-control-agent.service",
       "--property=ActiveState,SubState,MainPID","--no-pager"]);
     probes++;
     return {status:0,stdout:state==="inactive"
@@ -146,7 +146,7 @@ test("v0.1.11 one-time offline cutover requires explicit owner confirmation, sto
     await assert.rejects(confirmLegacyV0111OfflineCutover(options),/manually stopped/);
     state="inactive";confirm="no";
     await assert.rejects(confirmLegacyV0111OfflineCutover(options),/did not confirm/);
-    confirm="OFFLINE-V2-UPGRADE";
+    confirm="OFFLINE-AGENT-UPGRADE";
     await assert.rejects(confirmLegacyV0111OfflineCutover({
       ...options,ask:async()=>{state="active";return confirm;}
     }),/manually stopped/);
