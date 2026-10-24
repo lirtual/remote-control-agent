@@ -152,6 +152,15 @@ try {
   assert.ok(results.some(x=>x.mode!=="documented-policy" && x.validStunV6Hits>0),
     "No unrestricted IPv6 STUN positive control; restricted zero is inconclusive.");
   const documented = results.find(x => x.mode === "documented-policy");
+  // This is a real browser security regression gate, not a passive
+  // observation: no positive-control-qualified restricted UDP or TURN TCP
+  // may leave the browser in the controlled IPv4/IPv6 fixture.
+  assert.equal(documented.validStunHits, 0,
+    "Restricted WebRTC leaked non-proxied IPv4 STUN.");
+  assert.equal(documented.validStunV6Hits, 0,
+    "Restricted WebRTC leaked non-proxied IPv6 STUN.");
+  assert.equal(documented.tcpHits, 0,
+    "Restricted WebRTC reached direct local TURN TCP.");
   const verdict = documented.validStunHits === 0 && documented.validStunV6Hits === 0 && documented.tcpHits === 0
     ? "DOCUMENTED_FLAG_BLOCKED_DUAL_STACK_STUN_FIXTURE_ONLY"
     : "DIRECT_WEBRTC_TRAFFIC_OBSERVED";
