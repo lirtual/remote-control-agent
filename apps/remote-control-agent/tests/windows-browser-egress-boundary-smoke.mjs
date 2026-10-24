@@ -89,7 +89,8 @@ try {
       channel: browserChannel, headless: true, acceptDownloads: false,
       serviceWorkers: "block", timeout: 20_000,
       proxy: { server: `http://127.0.0.1:${proxyPort}`, bypass: "<-loopback>" },
-      args: ["--proxy-bypass-list=<-loopback>", "--disable-quic"],
+      args: ["--proxy-bypass-list=<-loopback>", "--disable-quic",
+        "--host-resolver-rules=MAP * ~NOTFOUND"],
     }
   );
   const page = context.pages()[0] ?? await context.newPage();
