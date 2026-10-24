@@ -14,6 +14,7 @@ function runPS(script:string):void {
    Buffer.from(script,"utf16le").toString("base64")],
    {encoding:"utf8",timeout:20000,windowsHide:true});
  assert.equal(result.status,0,result.stderr||result.stdout);
+ return result.stdout;
 }
 function fixture() {
  const base=mkdtempSync(path.join(os.tmpdir(),"rca-zip-proof-"));
@@ -35,11 +36,12 @@ function fixture() {
   " $prefix=[IO.Path]::GetFullPath($root).TrimEnd([char]92)+[char]92",
   " foreach($file in [IO.Directory]::EnumerateFiles($root,'*',[IO.SearchOption]::AllDirectories)){",
   "  $relative=$file.Substring($prefix.Length).Replace([char]92,[char]47)",
+  "  Write-Host ('ZIP_FIXTURE_MEMBER='+$relative)",
   "  $null=[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip,$file,$relative,[IO.Compression.CompressionLevel]::Optimal)",
   " }",
   "}finally{$zip.Dispose()}",
  ].join("\n");
- runPS(ps);
+ console.log(runPS(ps));
  const sha=createHash("sha256").update(readFileSync(archive)).digest("hex");
  assert.ok(readFileSync(archive).length>=100000);
  return {base,installed,archive,sha,close:()=>rmSync(base,{recursive:true,force:true})};
