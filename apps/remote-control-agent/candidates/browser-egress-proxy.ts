@@ -47,6 +47,7 @@ function parseConnectAuthority(authority: string): { hostname: string; port: num
 export async function startCandidateBrowserEgressProxy(
   resolver?: EgressResolver
 ): Promise<{ server: string; close(): Promise<void> }> {
+  let closed = false;
   const clientSockets = new Set<Socket>();
   const upstreamSockets = new Set<Socket>();
   const pinned = (host: string) => resolvePinnedPublicAddress(host, resolver);
@@ -58,6 +59,7 @@ export async function startCandidateBrowserEgressProxy(
     let ip;
     try { ip = await pinned(url.hostname); }
     catch { deny(res); return; }
+    if (closed || res.destroyed) { res.destroy(); return; }
     // Never forward a hostname to Node's dialer: no post-validation DNS.
     // The original hostname survives as the HTTP Host value.
     const remote = http.request({
@@ -78,6 +80,7 @@ export async function startCandidateBrowserEgressProxy(
     try {
       target = parseConnectAuthority(req.url ?? "");
       const ip = await pinned(target.hostname);
+      if (closed || client.destroyed) { client.destroy(); return; }
       const upstream = net.connect({ host: ip.address, family: ip.family, port: target.port });
       upstreamSockets.add(upstream);
       upstream.on("close", () => upstreamSockets.delete(upstream));
@@ -114,6 +117,7 @@ export async function startCandidateBrowserEgressProxy(
   return {
     server: `http://127.0.0.1:${address.port}`,
     async close() {
+      closed = true;
       for (const socket of upstreamSockets) socket.destroy();
       for (const socket of clientSockets) socket.destroy();
       await new Promise<void>(resolve => proxy.close(() => resolve()));
