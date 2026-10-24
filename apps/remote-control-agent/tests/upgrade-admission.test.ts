@@ -106,3 +106,46 @@ test("old receipts remain intact and queryable alongside upgrade receipt",async(
     assert.equal(old?.tool_name,"write_file");
   });
 });
+
+test("concurrent same-ID requests have exactly one new admission",async()=>{
+  await fixture(async(store)=>{
+    const attempts=await Promise.all(Array.from({length:8},()=>admitOwnerApprovedUpgrade(
+      store,req,ctx,async()=>true,
+    )));
+    assert.equal(attempts.filter(a=>a.kind==="new").length,1);
+    assert.equal(attempts.filter(a=>a.kind==="existing").length,7);
+    assert.ok(attempts.every(a=>a.kind!=="full"&&
+      a.receipt.argument_digest===operationDigest("upgrade_agent",req)));
+  });
+});
+test("concurrent conflicting targets cannot share one authorization operation",async()=>{
+  await fixture(async(store)=>{
+    const revised={...req,authorized_until:now+60000};
+    const attempts=await Promise.all([
+      admitOwnerApprovedUpgrade(store,req,ctx,async()=>true),
+      admitOwnerApprovedUpgrade(store,revised,ctx,async()=>true),
+    ]);
+    assert.deepEqual(attempts.map(a=>a.kind).sort(),["conflict","new"]);
+    const stored=await store.get(req.operation_id);
+    assert.ok(stored?.argument_digest===operationDigest("upgrade_agent",req)||
+      stored?.argument_digest===operationDigest("upgrade_agent",revised));
+  });
+});
+test("SQLite commit failure fails closed without accepting or replaying upgrade",async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),"rca-upgrade-persist-"));
+  let rejectCommit=false;
+  const store=new ReceiptStore(directory,phase=>rejectCommit&&phase==="commit");
+  try {
+    await store.open();
+    rejectCommit=true;
+    await assert.rejects(admitOwnerApprovedUpgrade(store,req,ctx,async()=>true),/commit is unavailable/);
+    rejectCommit=false;
+    assert.equal(await store.get(req.operation_id),null);
+    const admitted=await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    assert.equal(admitted.kind,"new");
+  } finally {
+    rejectCommit=false;
+    await store.close();
+    await rm(directory,{recursive:true,force:true});
+  }
+});
