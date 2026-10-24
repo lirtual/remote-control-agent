@@ -114,7 +114,7 @@ test("concurrent same-ID requests have exactly one new admission",async()=>{
     )));
     assert.equal(attempts.filter(a=>a.kind==="new").length,1);
     assert.equal(attempts.filter(a=>a.kind==="existing").length,7);
-    assert.ok(attempts.every(a=>a.kind!=="full"&&
+    assert.ok(attempts.every(a=>a.kind!=="busy"&&
       a.receipt.argument_digest===operationDigest("upgrade_agent",req)));
   });
 });
@@ -148,4 +148,38 @@ test("SQLite commit failure fails closed without accepting or replaying upgrade"
     await store.close();
     await rm(directory,{recursive:true,force:true});
   }
+});
+
+
+test("active upgrade blocks any second operation ID until verified completion",async()=>{
+  await fixture(async(store)=>{
+    const other={...req,operation_id:"approved-upgrade-2"};
+    assert.equal((await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true)).kind,"new");
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    assert.equal(await store.get(other.operation_id),null);
+    await store.update(req.operation_id,"completed","Installed version and identity verified");
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"new");
+  });
+});
+test("uncertain and guarded failures keep global upgrade admission closed",async()=>{
+  await fixture(async(store)=>{
+    const other={...req,operation_id:"approved-upgrade-3"};
+    await admitOwnerApprovedUpgrade(store,req,ctx,async()=>true);
+    await store.update(req.operation_id,"unknown","Upgrade outcome uncertain");
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    await store.update(req.operation_id,"failed","Cannot establish old service state");
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"busy");
+    await store.update(req.operation_id,"failed","No side effects established",undefined,true);
+    assert.equal((await admitOwnerApprovedUpgrade(store,other,ctx,async()=>true)).kind,"new");
+  });
+});
+test("concurrent distinct IDs cannot both reserve a device-wide upgrade slot",async()=>{
+  await fixture(async(store)=>{
+    const other={...req,operation_id:"approved-upgrade-4"};
+    const results=await Promise.all([
+      admitOwnerApprovedUpgrade(store,req,ctx,async()=>true),
+      admitOwnerApprovedUpgrade(store,other,ctx,async()=>true),
+    ]);
+    assert.deepEqual(results.map(r=>r.kind).sort(),["busy","new"]);
+  });
 });

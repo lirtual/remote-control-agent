@@ -14,7 +14,7 @@ export type UpgradeAdmission = Readonly<
   | { kind: "new"; receipt: OperationReceipt }
   | { kind: "existing"; receipt: OperationReceipt }
   | { kind: "conflict"; receipt: OperationReceipt }
-  | { kind: "full" }
+  | { kind: "busy" }
 >;
 
 export async function admitOwnerApprovedUpgrade(
@@ -31,7 +31,7 @@ export async function admitOwnerApprovedUpgrade(
   }
   const digest = operationDigest("upgrade_agent", verified);
   const admitted = await receipts.admit(verified.operation_id, "upgrade_agent", digest);
-  if (admitted.kind === "full") return { kind: "full" };
+  if (admitted.kind === "full") return { kind: "busy" };
   if (!admitted.receipt) throw new Error("Upgrade receipt not durable");
   if (admitted.kind === "conflict") return { kind: "conflict", receipt: admitted.receipt };
   if (admitted.kind === "same") return { kind: "existing", receipt: admitted.receipt };

@@ -260,6 +260,13 @@ export class ReceiptStore {
         return { kind: prior.tool_name === toolName && prior.argument_digest === digest ? "same" as const : "conflict" as const, receipt: fromRow(prior) };
       }
       this.cleanup();
+      // Serialise upgrades across DIFFERENT operation IDs in the existing
+      // transaction. An uncertain/guarded failure needs explicit reconciliation
+      // before another signed binary replacement may be accepted.
+      if (toolName === "upgrade_agent" && this.db().prepare(
+        "SELECT 1 FROM receipts WHERE tool_name = 'upgrade_agent' AND " +
+        "(state IN ('admitted','running','unknown') OR (state = 'failed' AND guarded = 1)) LIMIT 1",
+      ).get()) return { kind: "full" as const };
       const now = new Date().toISOString();
       this.db().prepare("INSERT INTO receipts (operation_id, tool_name, argument_digest, state, created_at, updated_at, safe_result_summary, session_id, guarded) VALUES (?, ?, ?, 'admitted', ?, ?, NULL, NULL, 1)")
         .run(operationId, toolName, digest, now, now);
