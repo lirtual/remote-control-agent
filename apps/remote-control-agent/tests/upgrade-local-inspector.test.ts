@@ -121,6 +121,7 @@ linuxTest("local service proof alone MUST NOT attest immutable Release origin or
   // installer and authenticated connection boundaries, not inferred here.
   const verdict=assessUpgradeAfterReconnect(req,receipt,{
     ...local,immutableReleaseCommit:"",immutableReleaseAssetSha256:"",
+    serviceExecutableVerified:false,durableReceiptsReadable:false,
     authenticatedSameDevice:false,
   });
   assert.deepEqual(verdict,{kind:"unresolved",operationId:req.operation_id,reason:"release"});
