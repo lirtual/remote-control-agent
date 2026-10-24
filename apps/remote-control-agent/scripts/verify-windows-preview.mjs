@@ -18,7 +18,7 @@ export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
   "apps/remote-control-agent/candidates/browser-egress-proxy.js":
     "2b340d3c5173d41be741f604da609d697ecfa862090264c540202f751bc9ca7f",
   "apps/remote-control-agent/candidates/browser-egress-policy.js":
-    "2d5a3d3b49c56cefa57f3e7d26d9fe5e8ddd9558955c2ba962f1919c6373fe89",
+    "24b94978c89db86f0986e4026046c2f8acf70c831f123afe7c3fa9063f6e8bd3",
 });
 export const PINNED_WINDOWS_PLAYWRIGHT_VERSION="1.64.1";
 export const PINNED_WINDOWS_PLAYWRIGHT_FILES=Object.freeze({
