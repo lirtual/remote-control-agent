@@ -133,7 +133,16 @@ public static class HandoffJob {
   # SHA rechecked immediately before CreateProcess; deployment config is read-only.
   $phase = 'config_hash'
   $binaryLock = [IO.File]::Open($x.executable,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
-  if ((Get-FileHash -LiteralPath $x.executable -Algorithm SHA256).Hash.ToLowerInvariant() -cne $x.sha256) { throw 'Executable changed' }
+  # Hash the already-open handle: opening it again via Get-FileHash can fail
+  # under Windows sharing rules, and a second lookup would invite a path race.
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $digest = ([BitConverter]::ToString($sha.ComputeHash($binaryLock))).Replace('-','').ToLowerInvariant()
+  } finally {
+    $sha.Dispose()
+    $binaryLock.Position = 0
+  }
+  if ($digest -cne $x.sha256) { throw 'Executable changed' }
   $phase = 'native_launch'
   [HandoffJob]::Run($x.executable,$arguments,$x.directory,$owner,[long]$x.expires_at,{
     param($childPid,$started)
