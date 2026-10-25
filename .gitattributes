@@ -1,0 +1,3 @@
+
+# Runtime integrity pin uses these exact bytes on every build host.
+apps/remote-control-agent/scripts/windows-handoff-tunnel.ps1 text eol=lf

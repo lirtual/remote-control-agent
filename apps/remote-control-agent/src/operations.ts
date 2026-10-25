@@ -183,6 +183,10 @@ export class ReceiptStore {
     await chmod(backup, 0o600);
   }
 
+  hasUnresolvedBrowserOperations(): boolean {
+    return Boolean(this.db().prepare("SELECT 1 FROM receipts WHERE tool_name LIKE 'browser_%' AND state IN ('admitted','running','unknown') LIMIT 1").get());
+  }
+
   async open(): Promise<void> {
     if (this.database) return;
     await mkdir(this.directory, { recursive: true, mode: 0o700 });

@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 // mutable archive manifest and MUST be updated only after source review.
 export const PINNED_WINDOWS_BROWSER_MODULES=Object.freeze({
   "apps/remote-control-agent/candidates/browser-playwright.js":
-    "817d5c7ba89c44ecf362653832af6efa6794477e2057ff21c9a31db7fbeb19a3",
+    "2cfc5f91675795794502331755ec2b1c46691ad44d47dd169bb4f7d6a2c4cb0e",
   "apps/remote-control-agent/candidates/browser-egress-proxy.js":
     "2b340d3c5173d41be741f604da609d697ecfa862090264c540202f751bc9ca7f",
   "apps/remote-control-agent/candidates/browser-egress-policy.js":
@@ -54,12 +54,15 @@ export function inspectWindowsPreview(root) {
       !expected.has("apps/remote-control-agent/scripts/verify-windows-preview.mjs") ||
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
+      !expected.has("apps/remote-control-agent/scripts/windows-handoff-tunnel.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
-      expected.size < 9 || expected.size > 41 ||
+      expected.size < 9 || expected.size > 42 ||
       expected.get("bin/node.exe") !==
         "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32") {
     throw Error("Incomplete or unknown Windows preview files.");
   }
+  if (expected.get("apps/remote-control-agent/scripts/windows-handoff-tunnel.ps1") !== "8c5e2110eba11e135357d16278488669df45cbd4e6ffb72d4431989e95c03154")
+    throw Error("Unreviewed handoff supervisor.");
   const names=Object.keys(PINNED_WINDOWS_PLAYWRIGHT_FILES);
   const candidate=Object.keys(manifest.hashes).filter(k=>Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,k));
   if (manifest.browser_runtime===undefined){
@@ -90,7 +93,7 @@ export function inspectWindowsPreview(root) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
-      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
+      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task|windows-handoff-tunnel)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
           Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) ||
           Object.hasOwn(PINNED_WINDOWS_BROWSER_MODULES,name)) ||
           seen.has(name) || !expected.has(name) ||
