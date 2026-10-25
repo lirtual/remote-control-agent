@@ -81,7 +81,7 @@ if ($x.stop) {
   if (result.error || result.status !== 0) throw Error("tunnel_child_identity_unknown");
   return JSON.parse(result.stdout.trim()) as ChildIdentity | null;
 }
-const HELPER_SHA256 = "8c5e2110eba11e135357d16278488669df45cbd4e6ffb72d4431989e95c03154";
+const HELPER_SHA256 = "5f5b98a4b386f65a451c2b69075c8a8deefee54b36d9754ae5a497ca589556f8";
 export function windowsTunnelLauncher(platform = process.platform as string): {executable:string;args:string[]} {
   if (platform !== "win32" || !process.env.SystemRoot || !/^[A-Za-z]:\\/.test(process.env.SystemRoot))
     throw Error("native_windows_required");

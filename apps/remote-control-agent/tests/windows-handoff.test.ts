@@ -52,7 +52,11 @@ test("native job: owner crash, supervisor crash, absolute expiry and unverified 
         assert.equal(JSON.parse(await readFile(marker,"utf8")).child,undefined);
       }else{
         let child!: {pid:number;started:string};
-        await wait(async()=>{try {child=JSON.parse(await readFile(marker,"utf8")).child;return !!child;}catch{return false;}});
+        await wait(async()=>{
+          if (supervisor?.exitCode !== null && supervisor?.exitCode !== undefined)
+            throw Error(`Supervisor exited before child start: code=${supervisor.exitCode}, ${stderr.slice(0,300)}`);
+          try {child=JSON.parse(await readFile(marker,"utf8")).child;return !!child;}catch{return false;}
+        });
         if(mode==="owner")owner.kill();
         if(mode==="supervisor")supervisor.kill();
         await exited;

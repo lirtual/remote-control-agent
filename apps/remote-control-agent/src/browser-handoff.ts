@@ -36,6 +36,17 @@ export class BrowserHandoff {
   constructor(directory: string) {
     this.directory = directory;
     this.marker = path.join(directory, "browser-handoff-pending.json");
+    // On Windows, lstat(file\\child) may report ENOENT rather than ENOTDIR.
+    // Validate the parent itself before interpreting missing markers as clean.
+    try {
+      const parent = lstatSync(directory);
+      if (!parent.isDirectory() || parent.isSymbolicLink()) throw Error("invalid_private_store");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        this.blocked = true; this.state = "pending_return"; this.reason = "private_store_unavailable";
+        return;
+      }
+    }
     try {
       // Any marker (including malformed data) is evidence requiring return.
       try { lstatSync(this.marker); } catch (e) {

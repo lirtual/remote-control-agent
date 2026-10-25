@@ -2,8 +2,10 @@
 # Ephemeral child supervisor only; never installed as a service or scheduled task.
 param([ValidateSet('Run','Recover','Stop')][string]$Action = 'Run')
 $ErrorActionPreference = 'Stop'
+$phase = 'startup'
 try {
   $x = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  $phase = 'native_definition'
   Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -90,6 +92,7 @@ public static class HandoffJob {
     [IO.File]::Delete($x.marker)
     'confirmed'; exit 0
   }
+  $phase = 'owner_identity'
   $owner = Get-Process -Id ([int]$x.owner_pid)
   $null = $owner.Handle # Retain the original kernel object; never follow a reused PID.
   if ($owner.HasExited -or $owner.StartTime.ToUniversalTime().Ticks.ToString() -cne $x.owner_started) { throw 'Owner exited or changed' }
@@ -103,8 +106,10 @@ public static class HandoffJob {
   }
   $intent = [IO.File]::ReadAllText($x.marker) | ConvertFrom-Json
   if ($intent.version -ne 1 -or $intent.owner.pid -ne $owner.Id -or $intent.owner.started -cne $x.owner_started -or $intent.supervisor) { throw 'Intent mismatch' }
+  $phase = 'save_supervisor_identity'
   Save-Marker $false
   # Re-read the single protected deployment configuration, never arbitrary argv.
+  $phase = 'config_validation'
   $config = [IO.File]::ReadAllText([IO.Path]::Combine($x.config_directory,'browser-handoff-config.json')) | ConvertFrom-Json
   if ((($config.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'cloudflared_path,cloudflared_sha256,email' -or
       $config.email -cnotmatch '^[A-Za-z0-9.!#$%&''+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' -or $config.email.Length -gt 254 -or
@@ -123,6 +128,7 @@ public static class HandoffJob {
   # SHA rechecked immediately before CreateProcess; deployment config is read-only.
   $binaryLock = [IO.File]::Open($x.executable,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
   if ((Get-FileHash -LiteralPath $x.executable -Algorithm SHA256).Hash.ToLowerInvariant() -cne $x.sha256) { throw 'Executable changed' }
+  $phase = 'native_launch'
   [HandoffJob]::Run($x.executable,$arguments,$x.directory,$owner,[long]$x.expires_at,{
     param($childPid,$started)
     $m.child=@{pid=$childPid; started=$started; executable=$x.executable}
@@ -133,6 +139,6 @@ public static class HandoffJob {
   exit 0
 } catch {
   # Never echo exception data (which can contain deployment secrets or command lines).
-  [Console]::Error.WriteLine('{"level":"error","message":"handoff_supervisor_failed"}')
+  [Console]::Error.WriteLine("{`"level`":`"error`",`"message`":`"handoff_supervisor_failed`",`"phase`":`"$phase`"}")
   exit 1
 }

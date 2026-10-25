@@ -84,7 +84,7 @@ test("Windows paired engine supports file effects, receipts and bounded native s
     const duringRevoke = await invoke("start_process", {
       command: "Start-Sleep -Seconds 60", timeout_ms: 0,
     });
-    assert.equal(duringRevoke?.status, 200);
+    assert.equal(duringRevoke?.status, 200, `Unexpected native process admission: ${JSON.stringify(duringRevoke?.body)}`);
     assert.equal((duringRevoke?.body as { status: string }).status, "running");
     assert.equal(await engine.stopOwnedForRevocation(), "confirmed");
     const deniedAfterRevoke = await invoke("start_process", {
