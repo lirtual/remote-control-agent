@@ -55,7 +55,8 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     const file=path.win32.join(root,name);
     writeFileSync(file,"{}",{flag:"wx"});
     try {
-      assert.equal(run("Check",root).status,0,"Inherited private lifecycle ACL");
+      const inherited=run("Check",root);
+      assert.equal(inherited.status,0,"Inherited private lifecycle ACL: "+String(inherited.stderr||"").slice(0,900));
       assert.equal(run("Seal",root,name).status,0);
       assert.equal(run("Check",root).status,0);
     } finally {rmSync(file,{force:true});}
@@ -68,7 +69,8 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     for(const name of ["browser-handoff-child.json","browser-handoff-pending.json","browser-handoff-tunnel.yml"]) {
       const file=path.win32.join(receipts,name);
       writeFileSync(file,"{}",{flag:"wx"});
-      try {assert.equal(run("Check",root).status,0,"Actual runtime marker inherits private ACL");}
+      try {const current=run("Check",root);
+        assert.equal(current.status,0,"Actual runtime marker ACL: "+String(current.stderr||"").slice(0,900));}
       finally {rmSync(file);}
     }
   } finally {if(createdReceipts)rmSync(receipts,{recursive:true});}
