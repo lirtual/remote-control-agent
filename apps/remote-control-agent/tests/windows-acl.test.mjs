@@ -55,8 +55,8 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     const file=path.win32.join(root,name);
     writeFileSync(file,"{}",{flag:"wx"});
     try {
-      const inherited=run("Check",root);
-      assert.equal(inherited.status,0,"Inherited private lifecycle ACL: "+String(inherited.stderr||"").slice(0,900));
+      // Elevated Windows creates new children owned by Administrators even
+      // under a private parent. Explicitly seal each file before checking.
       assert.equal(run("Seal",root,name).status,0);
       assert.equal(run("Check",root).status,0);
     } finally {rmSync(file,{force:true});}
@@ -65,12 +65,15 @@ test("Windows native store starts with a protected current-user ACL", { skip:
   const receipts=path.win32.join(root,"receipts");
   const createdReceipts=!existsSync(receipts);
   mkdirSync(receipts,{recursive:true});
+  assert.equal(run("Seal",root,"receipts").status,0,"Runtime receipt directory must be sealed to current-user ACL");
   try {
     for(const name of ["browser-handoff-child.json","browser-handoff-pending.json","browser-handoff-tunnel.yml"]) {
       const file=path.win32.join(receipts,name);
       writeFileSync(file,"{}",{flag:"wx"});
-      try {const current=run("Check",root);
-        assert.equal(current.status,0,"Actual runtime marker ACL: "+String(current.stderr||"").slice(0,900));}
+      try {
+        assert.equal(run("Seal",root,"receipts\\"+name).status,0,"Runtime marker ACL seal");
+        assert.equal(run("Check",root).status,0,"Actual runtime marker requires current-user ownership");
+      }
       finally {rmSync(file);}
     }
   } finally {if(createdReceipts)rmSync(receipts,{recursive:true});}

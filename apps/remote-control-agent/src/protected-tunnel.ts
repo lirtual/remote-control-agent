@@ -49,6 +49,32 @@ export function verifyWindowsHandoffPrerequisites(directory: string, aclCheck: (
   // No download, installation, config rewrite, or unprotected fallback here.
 }
 
+export type HandoffEvidenceKind = "directory" | "pending" | "child" | "tunnel";
+
+/** Seal only fixed Agent-owned receipt paths through the existing private-store ACL contract. */
+export function sealWindowsRuntimeMarker(receiptsDirectory: string, kind: HandoffEvidenceKind): void {
+  if (process.platform !== "win32" || !process.env.LOCALAPPDATA || !process.env.SystemRoot) {
+    throw Error("native_windows_required");
+  }
+  const root = path.win32.join(process.env.LOCALAPPDATA, "mcp-workers", "remote-control");
+  const expected = path.win32.join(root, "receipts");
+  if (path.win32.normalize(receiptsDirectory).toLowerCase() !== expected.toLowerCase())
+    throw Error("unexpected_handoff_store");
+  const names: Record<HandoffEvidenceKind,string> = {
+    directory: "receipts",
+    pending: "receipts\\browser-handoff-pending.json",
+    child: "receipts\\browser-handoff-child.json",
+    tunnel: "receipts\\browser-handoff-tunnel.yml",
+  };
+  const script = fileURLToPath(new URL("../scripts/windows-private-store.ps1", import.meta.url));
+  const ps = path.win32.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const result = spawnSync(ps, ["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass",
+    "-File",script,"-Action","Seal","-Directory",root,"-FileName",names[kind]], {
+      encoding:"utf8", windowsHide:true, timeout:12_000, maxBuffer:8192,
+    });
+  if (result.error || result.status !== 0) throw Error("handoff_private_acl_unverified");
+}
+
 export const CHILD_MARKER = "browser-handoff-child.json";
 interface ChildIdentity { pid: number; executable: string; started: string; commandHash: string }
 function durableRecord(file: string, value: unknown, exclusive = false): void {
@@ -226,10 +252,12 @@ export function createManagedHandoff(options: {
     // Persist intent BEFORE spawn: even a crash between spawn and recording PID stays blocked.
     durableRecord(file,{spawn_pending:true},true);
     ownsMarker=true;
+    if (runtime === nativeRuntime) sealWindowsRuntimeMarker(options.directory,"child");
     // An explicit empty configuration prevents default ingress/logging overrides.
     const emptyConfig=path.join(options.directory,"browser-handoff-tunnel.yml");
     const configFd=openSync(emptyConfig,"wx",0o600);
     try {writeFileSync(configFd,"{}\n");fsyncSync(configFd);} finally {closeSync(configFd);}
+    if (runtime === nativeRuntime) sealWindowsRuntimeMarker(options.directory,"tunnel");
     launchAttempted=true;
     child=runtime.launch(options.config.cloudflared_path,["tunnel","--config",emptyConfig,"--no-autoupdate","--output","json","--url",`http://127.0.0.1:${controller.port}`,
       "--allowed-mail",options.config.email],{stdio:["ignore","pipe","pipe"],windowsHide:true,

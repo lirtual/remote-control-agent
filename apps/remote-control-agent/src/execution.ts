@@ -28,6 +28,8 @@ export interface AgentExecutionOptions {
   verifyHandoffPrerequisites?: () => ProtectedTunnelConfig | void;
   /** Bound only after signed device authentication. */
   handoffDeviceId?: () => string | undefined;
+  /** Windows-only private receipt ACL sealing; never controlled by MCP. */
+  sealHandoffEvidence?: (kind: "directory" | "pending") => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
   shellPath?: string;
@@ -85,7 +87,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
-  const handoff = new BrowserHandoff(receipts.directory);
+  const handoff = new BrowserHandoff(receipts.directory, options.sealHandoffEvidence);
   let activeCalls = 0;
   let upgradeFrozen = false;
   let stopped = false;

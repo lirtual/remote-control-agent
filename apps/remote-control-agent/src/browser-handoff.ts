@@ -33,8 +33,10 @@ export class BrowserHandoff {
   private preparing = false;
   private returning = false;
   private readonly directory: string;
-  constructor(directory: string) {
+  private readonly sealEvidence?: (kind: "directory" | "pending") => void;
+  constructor(directory: string, sealEvidence?: (kind: "directory" | "pending") => void) {
     this.directory = directory;
+    this.sealEvidence = sealEvidence;
     this.marker = path.join(directory, "browser-handoff-pending.json");
     // On Windows, lstat(file\\child) may report ENOENT rather than ENOTDIR.
     // Validate the parent itself before interpreting missing markers as clean.
@@ -79,11 +81,13 @@ export class BrowserHandoff {
     this.blocked = true; this.epoch++; this.state = "preparing"; this.preparing = true;
     try {
       mkdirSync(this.directory, {recursive:true,mode:0o700});
+      this.sealEvidence?.("directory");
       const fd = openSync(this.marker, "wx", 0o600);
       try {
         writeFileSync(fd, JSON.stringify({handoff_id:randomUUID(), session_id:sessionId, created_at:Date.now()}));
         fsyncSync(fd);
       } finally { closeSync(fd); }
+      this.sealEvidence?.("pending");
       if (process.platform !== "win32") {
         const directoryFd = openSync(this.directory,"r");
         try { fsyncSync(directoryFd); } finally { closeSync(directoryFd); }

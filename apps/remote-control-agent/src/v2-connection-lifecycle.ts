@@ -364,6 +364,7 @@ export async function maintainAuthenticatedDeviceSession(
     /** Optional, locally created browser. Absent by default; never from remote frames. */
     browser?: BrowserBackend;
     verifyHandoffPrerequisites?: () => import("./protected-tunnel.ts").ProtectedTunnelConfig | void;
+    sealHandoffEvidence?: (kind: "directory" | "pending") => void;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -384,6 +385,7 @@ export async function maintainAuthenticatedDeviceSession(
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory, browser: options.browser,
     verifyHandoffPrerequisites: options.verifyHandoffPrerequisites,
+    sealHandoffEvidence: options.sealHandoffEvidence,
     handoffDeviceId: () => authenticatedDeviceId,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;

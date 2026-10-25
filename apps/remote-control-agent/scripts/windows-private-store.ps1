@@ -4,7 +4,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
   [Parameter(Mandatory=$true)][string]$Directory,
-  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','browser-handoff-config.json','browser-handoff-child.json','browser-handoff-tunnel.yml','browser-handoff-pending.json')][string]$FileName
+  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','browser-handoff-config.json','browser-handoff-child.json','browser-handoff-tunnel.yml','browser-handoff-pending.json','receipts','receipts\browser-handoff-child.json','receipts\browser-handoff-tunnel.yml','receipts\browser-handoff-pending.json')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -84,6 +84,26 @@ if ($Action -eq 'Seal') {
   # arbitrary files or rotate/correct an existing identity silently.
   if (-not $FileName) { throw 'A newly created identity filename is required' }
   $file = [IO.Path]::Combine($expected, $FileName)
+  if ($FileName -eq 'receipts') {
+    $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw 'Unsafe receipts directory'
+    }
+    $dirAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $dirAcl.SetOwner($userSid)
+    $dirAcl.SetAccessRuleProtection($true, $false)
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    foreach ($sid in @($userSid, $systemSid)) {
+      $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+        $sid, [Security.AccessControl.FileSystemRights]::FullControl, $inherit,
+        [Security.AccessControl.PropagationFlags]::None,
+        [Security.AccessControl.AccessControlType]::Allow)
+      $dirAcl.AddAccessRule($rule)
+    }
+    [IO.Directory]::SetAccessControl($file, $dirAcl)
+    Assert-PrivateAcl $file $true
+    return
+  }
   $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
   if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Identity is not a regular local file'
