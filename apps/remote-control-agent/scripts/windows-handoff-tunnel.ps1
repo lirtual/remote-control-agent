@@ -111,21 +111,27 @@ public static class HandoffJob {
   # Re-read the single protected deployment configuration, never arbitrary argv.
   $phase = 'config_validation'
   $config = [IO.File]::ReadAllText([IO.Path]::Combine($x.config_directory,'browser-handoff-config.json')) | ConvertFrom-Json
+  $phase = 'config_schema'
   if ((($config.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'cloudflared_path,cloudflared_sha256,email' -or
       $config.email -cnotmatch '^[A-Za-z0-9.!#$%&''+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' -or $config.email.Length -gt 254 -or
       $config.cloudflared_path -notmatch '^[A-Za-z]:\\' -or $config.cloudflared_path.Contains('"') -or
       $config.cloudflared_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
       $x.port -lt 1 -or $x.port -gt 65535 -or $x.directory.Contains('"')) { throw 'Invalid deployment configuration' }
+  $phase = 'config_consistency'
   if ($config.cloudflared_path -cne $x.config.cloudflared_path -or $config.email -cne $x.config.email -or
       $config.cloudflared_sha256 -cne $x.config.cloudflared_sha256) { throw 'Deployment configuration changed' }
+  $phase = 'config_extra'
   $x | Add-Member executable $config.cloudflared_path
   $x | Add-Member sha256 $config.cloudflared_sha256
   $empty = [IO.Path]::Combine($x.directory,'browser-handoff-tunnel.yml')
+  $phase = 'config_empty'
   if ([IO.File]::ReadAllText($empty) -cne "{}`n") { throw 'Invalid tunnel configuration' }
   $arguments = 'tunnel --config "'+$empty+'" --no-autoupdate --output json --url http://127.0.0.1:'+$x.port+' --allowed-mail '+$config.email
+  $phase = 'config_deadline'
   $remaining = [long]$x.expires_at - [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   if ($remaining -le 0 -or $remaining -gt 900000) { throw 'Invalid deadline' }
   # SHA rechecked immediately before CreateProcess; deployment config is read-only.
+  $phase = 'config_hash'
   $binaryLock = [IO.File]::Open($x.executable,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
   if ((Get-FileHash -LiteralPath $x.executable -Algorithm SHA256).Hash.ToLowerInvariant() -cne $x.sha256) { throw 'Executable changed' }
   $phase = 'native_launch'
