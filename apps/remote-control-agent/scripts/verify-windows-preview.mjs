@@ -61,7 +61,7 @@ export function inspectWindowsPreview(root) {
         "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32") {
     throw Error("Incomplete or unknown Windows preview files.");
   }
-  if (expected.get("apps/remote-control-agent/scripts/windows-handoff-tunnel.ps1") !== "8c5e2110eba11e135357d16278488669df45cbd4e6ffb72d4431989e95c03154")
+  if (expected.get("apps/remote-control-agent/scripts/windows-handoff-tunnel.ps1") !== "cddb0bbcb9b4a51f6b6c0418deacbcf2e98d563c26172f4712df57580c1d9070")
     throw Error("Unreviewed handoff supervisor.");
   const names=Object.keys(PINNED_WINDOWS_PLAYWRIGHT_FILES);
   const candidate=Object.keys(manifest.hashes).filter(k=>Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,k));
