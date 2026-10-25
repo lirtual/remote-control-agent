@@ -148,7 +148,7 @@ jobs:
           Set-Location apps/remote-control-agent
           # Match the already validated Windows Release gate: native ACL probes
           # must not contend with concurrently running full-tool Shell tests.
-          node --experimental-strip-types --test tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/browser-handoff.test.ts tests/handoff-controller.test.ts tests/protected-tunnel.test.ts tests/windows-handoff.test.ts tests/browser-tabs.test.ts
+          node --experimental-strip-types --test --test-concurrency=4 tests/windows-v2.test.ts tests/windows-full-tools.test.ts tests/windows-log.test.ts tests/browser-handoff.test.ts tests/handoff-controller.test.ts tests/protected-tunnel.test.ts tests/windows-handoff.test.ts tests/browser-tabs.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows full-tool tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }

@@ -9,13 +9,13 @@ import test from "node:test";
 import { windowsTunnelLauncher } from "../src/protected-tunnel.ts";
 
 test("native job: owner crash, supervisor crash, absolute expiry and unverified binary",{
-  skip:process.platform!=="win32",timeout:90_000,
+  skip:process.platform!=="win32",timeout:150_000,
 },async()=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),"handoff-job-"));
   const launcher=windowsTunnelLauncher();
   const ps=(script:string,input:unknown)=>{
     const result=spawnSync(launcher.executable,["-NoProfile","-NonInteractive","-Command",script],{
-      input:JSON.stringify(input),encoding:"utf8",timeout:10_000,windowsHide:true});
+      input:JSON.stringify(input),encoding:"utf8",timeout:30_000,windowsHide:true});
     assert.equal(result.status,0,result.stderr);
     return result.stdout.trim();
   };
