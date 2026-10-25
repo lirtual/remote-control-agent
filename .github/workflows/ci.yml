@@ -152,6 +152,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows full-tool tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
+      - name: Real protected Quick Tunnel challenge on native Windows (manual candidate gate)
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'spec280-cloudflared-pinned'
+          New-Item -ItemType Directory -Force -Path $folder | Out-Null
+          $binary = Join-Path $folder 'cloudflared.exe'
+          try {
+            $url = 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.3/cloudflared-windows-amd64.exe'
+            Invoke-WebRequest -Uri $url -OutFile $binary -MaximumRedirection 5
+            $sha = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($sha -cne '76b2805253d0d6ffacb092a7acfbee99e7af6917835c0c5410e23f3ef5052da2') {
+              throw 'Official cloudflared Windows binary hash mismatch'
+            }
+            $env:RCA_WIN_CLOUDFLARED_CANDIDATE = $binary
+            node --experimental-strip-types --test apps/remote-control-agent/tests/windows-quick-tunnel-live.test.ts
+            if ($LASTEXITCODE -ne 0) { throw 'Live Cloudflare anonymous readiness proof failed' }
+          } finally {
+            Remove-Item -LiteralPath $folder -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - name: New public PowerShell installer parses under Windows without executing
         shell: pwsh
         run: |
