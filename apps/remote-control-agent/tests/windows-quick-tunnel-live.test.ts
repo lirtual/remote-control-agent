@@ -96,7 +96,7 @@ test("real Windows Quick Tunnel blocks anonymous GET and POST before reporting L
     });
     let proven = false;
     let result = "no-response";
-    for (let attempt = 0; attempt < 6 && !proven; attempt++) {
+    for (let attempt = 0; attempt < 25 && !proven; attempt++) {
       if (child.exitCode !== null || child.signalCode !== null) break;
       try {
         const get = await fetch(origin + probePath, {
@@ -114,10 +114,13 @@ test("real Windows Quick Tunnel blocks anonymous GET and POST before reporting L
           result += `, POST ${post.status}`;
           await post.body?.cancel();
         }
-      } catch {
-        result = "HTTPS transport unavailable";
+      } catch (error) {
+        // Only a fixed transport code is reported: never log URL, email, cookies or headers.
+        const cause = error && typeof error === "object" && "cause" in error ? error.cause : undefined;
+        const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
+        result = "HTTPS transport unavailable (" + (typeof code === "string" && /^[A-Z_0-9]+$/.test(code) ? code : "unknown") + ")";
       }
-      if (!proven) await new Promise(resolve => setTimeout(resolve, 400));
+      if (!proven) await new Promise(resolve => setTimeout(resolve, 1000));
     }
     assert.ok(proven, "Fail closed: live anonymous GET 302 / POST 401 not verified (" + result + ")");
     console.log("Native Windows live Quick Tunnel: anonymous GET 302 + POST 401 verified.");
