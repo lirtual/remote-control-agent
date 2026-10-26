@@ -35,6 +35,8 @@ export interface AgentExecutionOptions {
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
+  /** Test-only managed Tunnel factory; production always uses createManagedHandoff. */
+  handoffFactory?: typeof createManagedHandoff;
   /** Local-only test seam: production uses the 60-minute deadline. */
   sessionMaxLifetimeMs?: number;
   /** Local-only storage error probe, never routed through MCP. */
@@ -554,40 +556,52 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       if (stopped || upgradeFrozen) return {status:503,body:{status:"unavailable"}};
       if (!options.browser && !handoff.isBlocked()) return {status:503,body:{status:"unavailable"}};
       const sessionId = (body.arguments as {session_id:string}).session_id;
-      if (!handoff.begin(sessionId)) return {status:200,body:handoff.status()};
-      // Block first, then allow already admitted work to settle. Never cancel or
-      // replay a browser effect just because the WSS response budget elapsed.
-      const drainDeadline = Date.now() + 10_000;
-      while ((activeCalls || browser?.hasPending() || inFlight.size) && Date.now() < drainDeadline)
-        await new Promise(resolve => setTimeout(resolve,20));
-      const current = options.browser?.status();
-      if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
-        handoff.failed("in_flight_effect_unknown");
-      } else if (!current || current.session_id !== sessionId) {
-        handoff.failed("browser_session_unavailable");
-      } else {
-        try {
-          await ensureReceipts();
-          if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
-            handoff.failed("browser_receipt_unknown");
-            return {status:200,body:handoff.status()};
-          }
-          const config = options.verifyHandoffPrerequisites?.();
-          const deviceId = options.handoffDeviceId?.();
-          if (!config || !deviceId || !options.browser || stopped) throw Error("handoff_prerequisites_unverified");
-          const access = createManagedHandoff({directory:receipts.directory,config,browser:options.browser,
-            deviceId,sessionId,connected:()=>handoff.connected(),
-            explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal)});
-          handoff.attach(access);
-          const ready = await access.start();
-          if (stopped) { await handoff.stopAccess(); throw Error("handoff_stopped"); }
-          handoff.ready(access,ready.expiresAt);
-          return {status:200,body:{...handoff.status(),url:ready.url,expires_at:ready.expiresAt}};
-        } catch {
-          const cleanup = await handoff.stopAccess();
-          handoff.failed(cleanup === "confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
-        }
+      // Same authorized owner/session may claim an already prepared URL only once.
+      // A claim never spawns another Tunnel and consumes the in-memory link
+      // synchronously before the WSS response is sent.
+      if (!handoff.begin(sessionId)) {
+        const link=handoff.claim(sessionId);
+        return {status:200,body:{...handoff.status(),...(link ?? {})}};
       }
+      // First call must return immediately: ChatGPT/MCP ingress may time out
+      // before the bounded 90s Cloudflare challenge finishes. The device-wide
+      // barrier and durable marker were written synchronously by begin().
+      void (async () => {
+        try {
+          // Block first, then allow previously admitted work to settle. Never
+          // replay an external browser effect after a transport timeout.
+          const drainDeadline=Date.now()+10_000;
+          while ((activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
+            await new Promise(resolve=>setTimeout(resolve,20));
+          const current=options.browser?.status();
+          if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
+            handoff.failed("in_flight_effect_unknown"); return;
+          }
+          if (!current || current.session_id!==sessionId) {
+            handoff.failed("browser_session_unavailable"); return;
+          }
+          await ensureReceipts();
+          if (stopped) throw Error("handoff_stopped");
+          if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
+            handoff.failed("browser_receipt_unknown"); return;
+          }
+          const config=options.verifyHandoffPrerequisites?.();
+          const deviceId=options.handoffDeviceId?.();
+          if (!config || !deviceId || !options.browser || stopped) throw Error("handoff_prerequisites_unverified");
+          const access=(options.handoffFactory ?? createManagedHandoff)({
+            directory:receipts.directory,config,browser:options.browser,deviceId,sessionId,
+            connected:()=>handoff.connected(),
+            explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal),
+          });
+          handoff.attach(access);
+          const ready=await access.start();
+          if (stopped) { await handoff.stopAccess(); throw Error("handoff_stopped"); }
+          handoff.ready(access,ready.expiresAt,{sessionId,url:ready.url});
+        } catch {
+          const cleanup=await handoff.stopAccess();
+          handoff.failed(cleanup==="confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
+        }
+      })().catch(()=>handoff.failed("cleanup_unknown"));
       return {status:200,body:handoff.status()};
     }
     if (stopped) return {status:503,body:{status:"failed"}};
