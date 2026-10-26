@@ -177,7 +177,17 @@ export async function startHandoffController(options: {
         req.resume(); reply(res,200,{probe:options.readinessProbe,device_id:options.deviceId,session_id:options.sessionId}); return;
       }
       const origin = options.origin();
-      if (!origin || new URL(origin).protocol !== "https:" || new URL(origin).origin !== origin || req.headers.host !== new URL(origin).host || !valid()) { req.resume(); reply(res,403,{}); return; }
+      // A Quick Tunnel can forward the public request to its local --url with
+      // the loopback Host rather than the public Host. The controller accepts
+      // only those two exact authorities; never a forwarded-header override.
+      // Every POST still requires the exact browser Origin below, plus the
+      // one-time exchange token or the bound cookie and CSRF as appropriate.
+      const listener = server.address() as import("node:net").AddressInfo;
+      const loopbackHost = `127.0.0.1:${listener.port}`;
+      if (!origin || new URL(origin).protocol !== "https:" || new URL(origin).origin !== origin ||
+          (req.headers.host !== new URL(origin).host && req.headers.host !== loopbackHost) || !valid()) {
+        req.resume(); reply(res,403,{}); return;
+      }
       // Query credentials survive Cloudflare's OTP POST/callback via its signed return_path.
       // Strip immediately in the browser; no external resources or referrers are allowed.
       const controllerPage = req.url === "/" || /^\/\?handoff_token=[A-Za-z0-9_-]{43}$/.test(req.url ?? "");
