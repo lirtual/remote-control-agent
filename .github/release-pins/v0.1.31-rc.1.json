@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.31-rc.1",
+  "source_sha": "ab3278770171453b6edc68ceb03fc0aab3065011",
+  "candidate_run_id": 40340038344,
+  "release_title": "Remote Control Agent v0.1.31-rc.1 — bounded iPhone OTP return query",
+  "release_notes": "docs/releases/v0.1.31-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.31-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.31-rc.1-ubuntu-24.04",
+      "sha256": "df0b49c07e7985d33941ad304f690f9ebf384784a8571e61d32f002b6dc9b6ff"
+    },
+    {
+      "name": "remote-control-agent-v0.1.31-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.31-rc.1-ubuntu-24.04-arm",
+      "sha256": "b93336b33d13c1613b6369e09140b351124c8a3f9e9f87a6c6acfaf1bb34accd"
+    },
+    {
+      "name": "remote-control-agent-v0.1.31-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.31-rc.1-windows-x64",
+      "sha256": "48a5a1ef6935413269705bf5149e2d7c7c1edbbffb25629855eac2f0788d2c21"
+    }
+  ]
+}
