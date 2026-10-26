@@ -13,7 +13,7 @@ export function parseHandoffArguments(tool: string, value: unknown): boolean {
     : (tool === "browser_handoff_status" || tool === "browser_handoff_return") && Object.keys(args).length === 0;
 }
 export type ControllerDiagnostic =
-  | "awaiting_document" | "document_denied_host" | "document_denied_inactive"
+  | "awaiting_document" | "document_denied_host" | "document_denied_inactive" | "document_denied_token_missing"
   | "document_denied_path" | "document_served" | "script_served"
   | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed"
   | "callback_path_received"
