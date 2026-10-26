@@ -554,40 +554,52 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       if (stopped || upgradeFrozen) return {status:503,body:{status:"unavailable"}};
       if (!options.browser && !handoff.isBlocked()) return {status:503,body:{status:"unavailable"}};
       const sessionId = (body.arguments as {session_id:string}).session_id;
+      // A ready URL is delivered only in a fresh, bounded request. Preparation
+      // never keeps the first MCP call open until the tunnel finishes.
+      if (handoff.isBlocked()) return {status:200,body:handoff.claim(sessionId)};
       if (!handoff.begin(sessionId)) return {status:200,body:handoff.status()};
-      // Block first, then allow already admitted work to settle. Never cancel or
-      // replay a browser effect just because the WSS response budget elapsed.
-      const drainDeadline = Date.now() + 10_000;
-      while ((activeCalls || browser?.hasPending() || inFlight.size) && Date.now() < drainDeadline)
-        await new Promise(resolve => setTimeout(resolve,20));
-      const current = options.browser?.status();
-      if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
-        handoff.failed("in_flight_effect_unknown");
-      } else if (!current || current.session_id !== sessionId) {
-        handoff.failed("browser_session_unavailable");
-      } else {
+      const prepare = (async () => {
         try {
+          // Block before draining pre-admitted effects. Owner return may cancel
+          // preparation, but cannot release admission while effects remain.
+          const drainDeadline = Date.now() + 10_000;
+          while (handoff.isPreparing() &&
+            (activeCalls || browser?.hasPending() || inFlight.size) && Date.now() < drainDeadline)
+            await new Promise(resolve => setTimeout(resolve,20));
+          if (!handoff.isPreparing()) return;
+          const current = options.browser?.status();
+          if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
+            handoff.failed("in_flight_effect_unknown");
+            return;
+          }
+          if (!current || current.session_id !== sessionId) {
+            handoff.failed("browser_session_unavailable");
+            return;
+          }
           await ensureReceipts();
+          if (!handoff.isPreparing()) return;
           if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
             handoff.failed("browser_receipt_unknown");
-            return {status:200,body:handoff.status()};
+            return;
           }
           const config = options.verifyHandoffPrerequisites?.();
           const deviceId = options.handoffDeviceId?.();
           if (!config || !deviceId || !options.browser || stopped) throw Error("handoff_prerequisites_unverified");
+          if (!handoff.isPreparing()) return;
           const access = createManagedHandoff({directory:receipts.directory,config,browser:options.browser,
             deviceId,sessionId,connected:()=>handoff.connected(),
             explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal)});
           handoff.attach(access);
           const ready = await access.start();
-          if (stopped) { await handoff.stopAccess(); throw Error("handoff_stopped"); }
-          handoff.ready(access,ready.expiresAt);
-          return {status:200,body:{...handoff.status(),url:ready.url,expires_at:ready.expiresAt}};
+          if (!handoff.isPreparing() || stopped) { await handoff.stopAccess(); return; }
+          handoff.ready(access,ready.expiresAt,ready.url);
         } catch {
           const cleanup = await handoff.stopAccess();
-          handoff.failed(cleanup === "confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
+          if (handoff.isPreparing())
+            handoff.failed(cleanup === "confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
         }
-      }
+      })();
+      handoff.trackPreparation(prepare);
       return {status:200,body:handoff.status()};
     }
     if (stopped) return {status:503,body:{status:"failed"}};
