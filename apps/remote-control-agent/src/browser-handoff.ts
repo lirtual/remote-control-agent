@@ -139,6 +139,10 @@ export class BrowserHandoff {
   }
   stopAccess(): Promise<"confirmed" | "uncertain"> {
     this.unclaimedLink = undefined;
+    if (this.state === "link_ready" || this.state === "interactive") {
+      this.state = "pending_return";
+      this.reason = "access_revoked";
+    }
     if (!this.cleanup) {
       try { this.cleanup = (this.access?.close() ?? cleanupOrphanTunnel(this.directory)).catch(() => "uncertain"); }
       catch { this.cleanup = Promise.resolve("uncertain"); }
