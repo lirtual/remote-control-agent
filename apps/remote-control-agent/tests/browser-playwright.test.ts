@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { BrowserType } from "playwright-core";
 import { PlaywrightBrowserManager } from "../candidates/browser-playwright.ts";
 
-function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void>; contextCloseWait?: Promise<void> } = {}) {
+function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string; snapshot?: string; navigationWait?: Promise<void>; launchWait?: Promise<void>; contextCloseWait?: Promise<void>; humanInputFails?: boolean } = {}) {
   const calls: string[] = [];
   let proxyEndpoint: string | undefined;
   const contextCloseListeners: Array<() => void> = [];
@@ -19,6 +19,11 @@ function fakeBrowser(options: { navigationFails?: boolean; restoredUrl?: string;
   const page = {
     setDefaultTimeout: (ms: number) => { calls.push("timeout:"+ms); },
     isClosed: () => false,
+    viewportSize: () => ({width:800,height:600}),
+    mouse: {click: async () => {
+      calls.push("human-click");
+      if (options.humanInputFails) throw Error("Human click outcome unknown.");
+    }},
     goto: async (url: string) => {
       calls.push("goto:"+url);
       if (options.navigationWait) await options.navigationWait;
@@ -167,6 +172,33 @@ test("uncertain navigation cannot be replayed, but can be inspected then closed"
     assert.equal(browser.status()?.tab_id,null);
     assert.ok(browser.status()!.snapshot_version > priorVersion);
     assert.equal(fake.calls.filter(x=>x.startsWith("goto:")).length,1);
+    await browser.close(session_id);
+  } finally { await rm(tmp,{recursive:true,force:true}); }
+});
+
+test("failed human click preserves unknown effect until explicit return re-observes",async()=>{
+  const tmp=await mkdtemp(path.join(os.tmpdir(),"rca-human-unknown-"));
+  const fake=fakeBrowser({humanInputFails:true});
+  const browser=new PlaywrightBrowserManager({agentStore:tmp,chromiumForTests:fake.driver});
+  try {
+    const {session_id,tab_id}=await browser.start();
+    assert.ok(tab_id);
+    await assert.rejects(
+      browser.humanInput(session_id,{kind:"click",tab_id:tab_id!,x:10,y:20},()=>true),
+      /Human click outcome unknown/
+    );
+    assert.equal(browser.status()?.uncertain,true);
+    assert.equal(fake.calls.filter(x=>x==="human-click").length,1);
+    await assert.rejects(
+      browser.humanInput(session_id,{kind:"click",tab_id:tab_id!,x:10,y:20},()=>true),
+      /Human input unavailable/
+    );
+    // After credential revocation the owner's explicit return invalidates all
+    // old tab references and requires a new observation, never a click replay.
+    await browser.invalidateHandoffReferences();
+    assert.equal(browser.status()?.uncertain,false);
+    assert.equal(browser.status()?.tab_id,null);
+    assert.equal(fake.calls.filter(x=>x==="human-click").length,1);
     await browser.close(session_id);
   } finally { await rm(tmp,{recursive:true,force:true}); }
 });
