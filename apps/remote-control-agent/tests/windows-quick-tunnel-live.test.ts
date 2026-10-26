@@ -25,7 +25,7 @@ async function hashFile(filename: string): Promise<string> {
 
 test("real Windows Quick Tunnel blocks anonymous GET and POST before reporting Link Ready", {
   skip: process.platform !== "win32",
-  timeout: 120_000,
+  timeout: 160_000,
 }, async () => {
   const executable = process.env.RCA_WIN_CLOUDFLARED_CANDIDATE;
   assert.ok(executable, "Pinned cloudflared candidate path required");
@@ -95,8 +95,10 @@ test("real Windows Quick Tunnel blocks anonymous GET and POST before reporting L
       tunnel.once("exit", () => finish(Error("Quick Tunnel exited before ready")));
     });
     let proven = false;
+    // Public DNS may initially return NXDOMAIN even after cloudflared emits a URL.
+    const readinessDeadline = Date.now() + 90_000;
     let result = "no-response";
-    for (let attempt = 0; attempt < 25 && !proven; attempt++) {
+    for (let attempt = 0; attempt < 90 && !proven && Date.now() < readinessDeadline; attempt++) {
       if (child.exitCode !== null || child.signalCode !== null) break;
       try {
         const get = await fetch(origin + probePath, {
