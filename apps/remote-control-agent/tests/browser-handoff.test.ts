@@ -18,7 +18,7 @@ function browserFixture() {
   return {id,state,invalidated:()=>invalidated, browser:{
     status:()=>state,
     snapshot:async()=>({text:"PRIVATE PAGE",truncated:false,snapshot_version:3}),
-    invalidateHandoffReferences:async()=>{invalidated++;state.snapshot_version++;state.tab_id=null;},
+    invalidateHandoffReferences:async()=>{invalidated++;state.snapshot_version++;state.tab_id=null;state.uncertain=false;},
     close:async()=>{},
   } as unknown as BrowserBackend};
 }
@@ -83,6 +83,27 @@ test("in-flight browser observation drains but its result is discarded; return i
     assert.equal(f.invalidated(),1);
     assert.equal(f.state.tab_id,null);
   } finally {release();await engine.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("explicit owner return reconciles a settled unknown human input without replay",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-human-unknown-"));
+  const f=browserFixture();
+  const engine=createAgentExecutionEngine({receiptDirectory:root,browser:f.browser});
+  const call=(tool:string,args:unknown={})=>engine.executeTool({tool,arguments:args},signal());
+  try {
+    const requested=await call("browser_handoff_request",{session_id:f.id});
+    assert.notEqual((requested?.body as {state:string}).state,"ai");
+    assert.equal(engine.handoffBlocked(),true);
+    // A Playwright human input already settled with an unknown external effect.
+    // Owner return MUST NOT issue a second browser input.
+    f.state.uncertain=true;
+    const result=await call("browser_handoff_return");
+    assert.equal((result?.body as {state:string}).state,"ai");
+    assert.equal(f.invalidated(),1);
+    assert.equal(f.state.uncertain,false);
+    assert.equal(f.state.tab_id,null);
+    assert.equal(engine.handoffBlocked(),false);
+  } finally {await engine.close();await rm(root,{recursive:true,force:true});}
 });
 
 test("expiry, reconnect and unknown cleanup never implicitly return AI admission",async()=>{
