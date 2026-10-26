@@ -50,14 +50,14 @@ function forwardedGet(port: number, route: string, host?: string): Promise<Respo
 }
 
 test("iOS OTP return renders the controller through a strictly bounded loopback Host",async()=>{
-  const sessionId=randomUUID();let connected=0;
+  const sessionId=randomUUID();let connected=0;const diagnostics:string[]=[];
   const browser={status:()=>({session_id:sessionId}),
     tabs:async()=>({selected_tab_id:"tab-1",tabs:[{tab_id:"tab-1",url:"about:blank",title:""}]}),
     humanInput:async()=>{},humanScreenshot:async()=>Buffer.from("frame"),
   } as unknown as BrowserBackend;
   const controller=await startHandoffController({browser,deviceId:randomUUID(),sessionId,
     expiresAt:Date.now()+60_000,origin:()=>origin,active:()=>true,
-    connected:()=>{connected++;},explicitReturn:async()=>{}});
+    connected:()=>{connected++;},explicitReturn:async()=>{},diagnostic:code=>diagnostics.push(code)});
   try {
     const url="/?handoff_token="+controller.token;
     for(const authority of [new URL(origin).host,`127.0.0.1:${controller.port}`]){
@@ -65,24 +65,33 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
       assert.equal(page.status,200,"valid public or local tunnel authority must render HTML");
       assert.match(page.headers.get("content-type")??"",/^text\/html/);
       assert.match(await page.text(),/Browser handoff/);
+      assert.equal(diagnostics.at(-1),"document_served");
       const script=await forwardedGet(controller.port,"/controller.js",authority);
       assert.equal(script.status,200);
       assert.match(await script.text(),/\/(?:exchange|resume)/);
+      assert.equal(diagnostics.at(-1),"script_served");
     }
     assert.equal((await forwardedGet(controller.port,url,"untrusted.example.test")).status,403);
+    assert.equal(diagnostics.at(-1),"document_denied_host");
     assert.equal((await forwardedGet(controller.port,"/bad?handoff_token="+controller.token)).status,403);
     assert.equal((await forwardedGet(controller.port,"/?handoff_token=WRONG")).status,403);
+    assert.equal(diagnostics.at(-1),"document_denied_path");
     // An untrusted POST Origin may never exchange the token even via localhost.
     const localHost={host:`127.0.0.1:${controller.port}`};
     assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token},
       {...localHost,origin:"https://evil.example.test"})).status,403);
+    assert.equal(diagnostics.at(-1),"exchange_denied_origin");
     const exchanged=await forwardedPost(controller.port,"/exchange",{token:controller.token},localHost);
     assert.equal(exchanged.status,200);
     assert.equal(connected,1);
+    assert.equal(diagnostics.at(-1),"exchange_completed");
     const cookie=exchanged.headers.get("set-cookie")?.split(";")[0];
     const csrf=(await exchanged.json() as {csrf:string}).csrf;
     assert.ok(cookie);
     assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token},localHost)).status,403);
+    assert.equal(diagnostics.at(-1),"exchange_denied_token");
+    // The external status projection is a fixed enum, never request secrets.
+    assert.ok(diagnostics.every(code=>!code.includes(controller.token) && !code.includes("handoff.example")));
     assert.equal((await forwardedPost(controller.port,"/tabs",{},
       {...localHost,cookie:cookie!,"x-handoff-csrf":csrf})).status,200);
     assert.equal((await forwardedPost(controller.port,"/tabs",{},
