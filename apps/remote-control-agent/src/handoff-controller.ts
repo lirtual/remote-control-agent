@@ -220,7 +220,14 @@ export async function startHandoffController(options: {
         req.resume(); res.writeHead(200,{...headers,"content-type":controllerPage ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8"});
         res.end(controllerPage ? html : js); return;
       }
-      if (documentGet) options.diagnostic?.("document_denied_path");
+      if (documentGet) {
+        // A fixed result identifies whether the OTP return lost the bearer token.
+        // Never disclose the actual query, path, credentials or tracking values.
+        let tokenMissing=false;
+        try { tokenMissing=!new URL(req.url!, "https://handoff.invalid").searchParams.has("handoff_token"); }
+        catch { /* Preserve generic denial for an invalid request target. */ }
+        options.diagnostic?.(tokenMissing ? "document_denied_token_missing" : "document_denied_path");
+      }
       if (req.method !== "POST" || req.headers.origin !== origin ||
           req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") {
         if (req.method === "POST" && req.url === "/exchange") options.diagnostic?.("exchange_denied_origin");
