@@ -4,6 +4,8 @@
  * transport with an explicit capability grant may invoke executeTool().
  * T02 intentionally does not connect this engine to unauthenticated v2 WSS.
  */
+import { createManagedHandoff, type ProtectedTunnelConfig } from "./protected-tunnel.ts";
+import { BrowserHandoff, HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
 import { appendFile, link, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -22,6 +24,12 @@ import {
 
 export interface AgentExecutionOptions {
   log?: (event: string) => void;
+  /** Native deployment validation, never selected through MCP. */
+  verifyHandoffPrerequisites?: () => ProtectedTunnelConfig | void;
+  /** Bound only after signed device authentication. */
+  handoffDeviceId?: () => string | undefined;
+  /** Windows-only private receipt ACL sealing; never controlled by MCP. */
+  sealHandoffEvidence?: (kind: "directory" | "pending") => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
   shellPath?: string;
@@ -43,7 +51,10 @@ export interface AgentExecutionEngine {
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined>;
-  getReceipt(id: string): Promise<OperationReceipt | null>;
+  getReceipt(id: string): Promise<(Partial<OperationReceipt> & Pick<OperationReceipt,"operation_id" | "state">) | null>;
+  handoffGeneration(): number;
+  handoffBlocked(): boolean;
+  resetReadSessions(): Promise<void>;
   stopOwnedForRevocation(): Promise<"confirmed" | "uncertain">;
   freezeForUpgrade(): boolean;
   releaseUpgradeFreeze(): void;
@@ -76,8 +87,10 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
+  const handoff = new BrowserHandoff(receipts.directory, options.sealHandoffEvidence);
+  let activeCalls = 0;
   let upgradeFrozen = false;
-  let admittingMutations = 0;
+  let stopped = false;
   const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
@@ -524,27 +537,85 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined> {
-    const mutation = [
-      "write_file", "create_directory", "edit_block", "move_file", "delete_file",
-      "start_process", "interact_with_process", "force_terminate",
-      "browser_start", "browser_navigate", "browser_close", "browser_tabs",
-      "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
-    ].includes(String(body.tool));
-    if (!mutation || body.tool === "browser_tabs" && browserToolIsRead("browser_tabs", body.arguments))
-      return executeToolCore(body, signal);
-    if (upgradeFrozen) return { status: 503, body: { status: "unavailable" } };
-    admittingMutations++;
-    try { return await executeToolCore(body, signal); }
-    finally { admittingMutations--; }
+    if ((HANDOFF_TOOLS as readonly unknown[]).includes(body.tool)) {
+      if (!parseHandoffArguments(String(body.tool),body.arguments)) return {status:400,body:{status:"bad_request"}};
+      if (body.tool === "browser_handoff_status") return {status:200,body:handoff.status()};
+      if (body.tool === "browser_handoff_return") {
+        return {status:200,body:await handoff.explicitReturn(async () => {
+          if (activeCalls || browser?.hasPending() || inFlight.size) throw Error("Effects still pending.");
+          // Once the human controller has been revoked and all input has settled,
+          // explicit owner return may reconcile an uncertain human input without
+          // replaying it. Invalidation forces a new tab list and fresh snapshot.
+          if (options.browser?.status() && !options.browser.invalidateHandoffReferences) throw Error("Reference invalidation unavailable.");
+          await options.browser?.invalidateHandoffReferences?.();
+          await searches.close();
+        })};
+      }
+      if (stopped || upgradeFrozen) return {status:503,body:{status:"unavailable"}};
+      if (!options.browser && !handoff.isBlocked()) return {status:503,body:{status:"unavailable"}};
+      const sessionId = (body.arguments as {session_id:string}).session_id;
+      if (!handoff.begin(sessionId)) return {status:200,body:handoff.status()};
+      // Block first, then allow already admitted work to settle. Never cancel or
+      // replay a browser effect just because the WSS response budget elapsed.
+      const drainDeadline = Date.now() + 10_000;
+      while ((activeCalls || browser?.hasPending() || inFlight.size) && Date.now() < drainDeadline)
+        await new Promise(resolve => setTimeout(resolve,20));
+      const current = options.browser?.status();
+      if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
+        handoff.failed("in_flight_effect_unknown");
+      } else if (!current || current.session_id !== sessionId) {
+        handoff.failed("browser_session_unavailable");
+      } else {
+        try {
+          await ensureReceipts();
+          if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
+            handoff.failed("browser_receipt_unknown");
+            return {status:200,body:handoff.status()};
+          }
+          const config = options.verifyHandoffPrerequisites?.();
+          const deviceId = options.handoffDeviceId?.();
+          if (!config || !deviceId || !options.browser || stopped) throw Error("handoff_prerequisites_unverified");
+          const access = createManagedHandoff({directory:receipts.directory,config,browser:options.browser,
+            deviceId,sessionId,connected:()=>handoff.connected(),
+            explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal)});
+          handoff.attach(access);
+          const ready = await access.start();
+          if (stopped) { await handoff.stopAccess(); throw Error("handoff_stopped"); }
+          handoff.ready(access,ready.expiresAt);
+          return {status:200,body:{...handoff.status(),url:ready.url,expires_at:ready.expiresAt}};
+        } catch {
+          const cleanup = await handoff.stopAccess();
+          handoff.failed(cleanup === "confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
+        }
+      }
+      return {status:200,body:handoff.status()};
+    }
+    if (stopped) return {status:503,body:{status:"failed"}};
+    if (handoff.isBlocked()) return {status:423,body:{status:"handoff_blocked"}};
+    const generation = handoff.generation();
+    if (upgradeFrozen) return {status:503,body:{status:"unavailable"}};
+    activeCalls++;
+    try {
+      const result = await executeToolCore(body, signal);
+      // A call admitted before handoff can never return its old sensitive payload,
+      // even if explicit return completed while the result was being computed.
+      return generation !== handoff.generation() || handoff.isBlocked()
+        ? {status:423,body:{status:"handoff_blocked",
+          ...(typeof body.operation_id === "string" ? {operation_id:body.operation_id} : {})}}
+        : result;
+    } finally { activeCalls--; }
   }
 
   return {
     executeTool,
+    handoffGeneration: () => handoff.generation(),
+    handoffBlocked: () => handoff.isBlocked(),
+    resetReadSessions: () => searches.close(),
     freezeForUpgrade: () => {
-      if (upgradeFrozen) return false;
+      if (upgradeFrozen || handoff.isBlocked()) return false;
       // Setting this first excludes any new admission in the same JS event loop.
       upgradeFrozen = true;
-      if (admittingMutations > 0 || inFlight.size > 0 ||
+      if (activeCalls > 0 || inFlight.size > 0 ||
           (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
           !sessions.isQuiescentForUpgrade()) {
         upgradeFrozen = false;
@@ -554,13 +625,18 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     },
     releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
+      const generation = handoff.generation();
       await ensureReceipts();
-      return receipts.get(id);
+      const receipt = await receipts.get(id);
+      return receipt && (handoff.isBlocked() || generation !== handoff.generation())
+        ? {operation_id:receipt.operation_id,state:receipt.state} : receipt;
     },
     stopOwnedForRevocation: async () => {
+      stopped = true;
       // Operations already admitted before the tombstone may still be
       // starting a supervised process: never overclaim complete cleanup.
-      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false);
+      const accessOutcome = await handoff.stopAccess();
+      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false) || accessOutcome !== "confirmed";
       let browserOutcome: "confirmed" | "uncertain" = "confirmed";
       const active = options.browser?.status();
       if (options.browser?.stopOwnedForRevocation) {
@@ -574,6 +650,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       return pendingEffects || browserOutcome === "uncertain" ? "uncertain" : result;
     },
     close: async () => {
+      stopped = true;
+      await handoff.stopAccess();
       await searches.close();
       // Agent shutdown must not leave an owned Chromium behind merely because
       // a page navigation holds the ordinary browser operation mutex.

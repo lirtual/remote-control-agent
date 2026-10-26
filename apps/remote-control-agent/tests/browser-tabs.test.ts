@@ -42,7 +42,10 @@ function fakeContext(options: {closeFails?: boolean} = {}) {
           selectOption:async(value:string)=>{calls.push("selected:"+value);return [];},
         };
       },
-      keyboard:{press:async(key:string)=>{calls.push("key:"+key);}},
+      viewportSize:()=>({width:1280,height:720}),
+      screenshot:async()=>Buffer.from("selected page screenshot"),
+      mouse:{click:async(x:number,y:number)=>{calls.push(`click:${x},${y}`);},wheel:async(x:number,y:number)=>{calls.push(`scroll:${x},${y}`);}},
+      keyboard:{press:async(key:string)=>{calls.push("key:"+key);},insertText:async(text:string)=>{calls.push("text:"+text);}},
     };
   }
   const context = {
@@ -239,4 +242,52 @@ test("human navigation during locator resolution must reject the stale action",a
     await manager.stopOwnedForRevocation();
     await rm(dir,{recursive:true,force:true});
   }
+});
+
+test("explicit handoff return replaces old tab IDs and requires a fresh selection/observation",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec280-tabs-"));
+  const fake=fakeContext();
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver,browserChannelForTests:"msedge"});
+  try {
+    const start=await manager.start();
+    const before=await manager.snapshot(start.session_id);
+    await manager.invalidateHandoffReferences();
+    assert.equal(manager.status()?.session_id,start.session_id,"keep the same Profile/context");
+    assert.equal(manager.status()?.tab_id,null);
+    await assert.rejects(manager.tabs(start.session_id,"select",start.tab_id!),/Unknown or closed tab/);
+    await assert.rejects(manager.snapshot(start.session_id),/No selected live tab/);
+    const fresh=await manager.tabs(start.session_id,"list");
+    assert.ok(fresh.tabs.length>0);
+    assert.ok(fresh.tabs.every(tab=>tab.tab_id!==start.tab_id));
+    await manager.tabs(start.session_id,"select",fresh.tabs[0]!.tab_id);
+    await assert.rejects(manager.click(start.session_id,{role:"button",name:"Search",snapshot_version:before.snapshot_version}),/Stale snapshot/);
+    const after=await manager.snapshot(start.session_id);
+    assert.ok(after.snapshot_version>before.snapshot_version);
+  } finally {const state=manager.status();if(state)await manager.close(state.session_id);await rm(dir,{recursive:true,force:true});}
+});
+
+test("human screenshot and input stay in the owned selected page and reject revoked authority",async()=>{
+  const dir=await mkdtemp(path.join(os.tmpdir(),"spec280-human-page-"));
+  const fake=fakeContext();
+  const manager=new PlaywrightBrowserManager({agentStore:dir,chromiumForTests:fake.driver,browserChannelForTests:"msedge"});
+  try {
+    const start=await manager.start();
+    const tab_id=start.tab_id!;
+    assert.equal((await manager.humanScreenshot(start.session_id,tab_id,()=>true)).toString(),"selected page screenshot");
+    for(const action of [{kind:"click" as const,x:10,y:20},{kind:"scroll" as const,x:0,y:500},
+      {kind:"key" as const,key:"Enter"},{kind:"text" as const,text:"private input"}])
+      await manager.humanInput(start.session_id,{...action,tab_id},()=>true);
+    assert.ok(fake.calls.includes("click:10,20"));assert.ok(fake.calls.includes("text:private input"));
+    const count=fake.calls.length;
+    await assert.rejects(manager.humanInput(start.session_id,{kind:"text",tab_id,text:"blocked"},()=>false),/unavailable/);
+    await assert.rejects(manager.humanScreenshot(start.session_id,tab_id,()=>false),/unavailable/);
+    assert.equal(fake.calls.length,count);
+    await assert.rejects(manager.humanInput(start.session_id,{kind:"click",tab_id,x:2000,y:0},()=>true),/outside viewport/);
+    assert.equal(manager.status()?.uncertain,false,"rejected coordinates have no uncertain browser effect");
+    await fake.manualOpen("https://example.com/oauth-popup");
+    const popup=(await manager.tabs(start.session_id,"list")).tabs.find(t=>t.tab_id!==tab_id)!;
+    await assert.rejects(manager.humanInput(start.session_id,{kind:"key",tab_id:popup.tab_id,key:"Enter"},()=>true),/unavailable/);
+    await manager.tabs(start.session_id,"select",popup.tab_id);
+    await manager.humanInput(start.session_id,{kind:"key",tab_id:popup.tab_id,key:"Enter"},()=>true);
+  } finally {const state=manager.status();if(state)await manager.close(state.session_id);await rm(dir,{recursive:true,force:true});}
 });

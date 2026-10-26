@@ -10,7 +10,7 @@ import path from "node:path";
 import { chromium, type BrowserContext, type BrowserType, type Page } from "playwright-core";
 import { startCandidateBrowserEgressProxy } from "./browser-egress-proxy.ts";
 import type {
-  BrowserBackend, BrowserStatus, BrowserTabAction, BrowserTabsResult, BrowserTarget,
+  BrowserBackend, BrowserStatus, BrowserTabAction, BrowserTabsResult, BrowserTarget, HumanBrowserAction,
 } from "../src/browser-backend.ts";
 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -385,6 +385,56 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       await page.keyboard.press(key);
       if (this.revoked) throw Error("Browser ownership revoked during key action.");
       this.uncertain = false;
+    });
+  }
+
+  async humanScreenshot(id: string, tabId: string, authorized: () => boolean): Promise<Buffer> {
+    return this.exclusive(async () => {
+      this.requireContext(id);
+      const page = this.pages.get(tabId);
+      if (!authorized() || !page || page.isClosed()) throw Error("Human control unavailable.");
+      const image = await page.screenshot({type:"jpeg",quality:65,fullPage:false,timeout:5000});
+      if (!authorized() || image.length > 2_000_000) throw Error("Human control unavailable.");
+      return image;
+    });
+  }
+
+  async humanInput(id: string, action: HumanBrowserAction, authorized: () => boolean): Promise<void> {
+    return this.exclusive(async () => {
+      this.requireContext(id);
+      const page = this.pages.get(action.tab_id);
+      if (!authorized() || !page || page.isClosed() || this.uncertain ||
+          action.tab_id !== this.selectedTabId) throw Error("Human input unavailable.");
+      this.version++;
+      if (action.kind === "click") {
+        const size = page.viewportSize() ?? await page.locator("body").boundingBox({timeout:1000});
+        if (!authorized() || !size || action.x! >= size.width || action.y! >= size.height)
+          throw Error("Input outside viewport.");
+        this.uncertain = true;
+        await page.mouse.click(action.x!,action.y!);
+      } else {
+        this.uncertain = true;
+        if (action.kind === "scroll") await page.mouse.wheel(action.x!,action.y!);
+        else if (action.kind === "text") await page.keyboard.insertText(action.text!);
+        else await page.keyboard.press(action.key!);
+      }
+      this.uncertain = false;
+    });
+  }
+
+  async invalidateHandoffReferences(): Promise<void> {
+    return this.exclusive(async () => {
+      // Preserve the BrowserContext/Profile, replace every public tab reference.
+      this.version++;
+      const pages = [...this.pages.values()].filter(page => !page.isClosed());
+      this.ids.clear(); this.pages.clear(); this.selectedTabId = null;
+      for (const page of pages) this.register(page);
+      // Explicit owner return occurs only after the human controller has been
+      // revoked and its input has settled. An unsuccessful Playwright input may
+      // have changed the page; acknowledge its uncertainty WITHOUT replaying it.
+      // Require the AI to re-list tabs and take a fresh observation instead.
+      this.uncertain = false;
+      // A caller must explicitly list/select tabs and obtain a fresh snapshot.
     });
   }
 

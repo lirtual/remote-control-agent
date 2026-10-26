@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, rmSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,41 @@ test("Windows native store starts with a protected current-user ACL", { skip:
   } finally {
     rmSync(key);
   }
+
+  // Deployment configuration is sealed independently of pairing and Portal secrets.
+  const config = path.win32.join(root, "browser-handoff-config.json");
+  writeFileSync(config, '{"email":"fixture@example.test"}', {flag:"wx"});
+  try {
+    assert.equal(run("Seal",root,"browser-handoff-config.json").status,0);
+    assert.equal(run("Check",root).status,0);
+  } finally {rmSync(config,{force:true});}
+
+  for (const name of ["browser-handoff-child.json","browser-handoff-pending.json","browser-handoff-tunnel.yml"]) {
+    const file=path.win32.join(root,name);
+    writeFileSync(file,"{}",{flag:"wx"});
+    try {
+      // Elevated Windows creates new children owned by Administrators even
+      // under a private parent. Explicitly seal each file before checking.
+      assert.equal(run("Seal",root,name).status,0);
+      assert.equal(run("Check",root).status,0);
+    } finally {rmSync(file,{force:true});}
+  }
+
+  const receipts=path.win32.join(root,"receipts");
+  const createdReceipts=!existsSync(receipts);
+  mkdirSync(receipts,{recursive:true});
+  assert.equal(run("Seal",root,"receipts").status,0,"Runtime receipt directory must be sealed to current-user ACL");
+  try {
+    for(const name of ["browser-handoff-child.json","browser-handoff-pending.json","browser-handoff-tunnel.yml"]) {
+      const file=path.win32.join(receipts,name);
+      writeFileSync(file,"{}",{flag:"wx"});
+      try {
+        assert.equal(run("Seal",root,"receipts\\"+name).status,0,"Runtime marker ACL seal");
+        assert.equal(run("Check",root).status,0,"Actual runtime marker requires current-user ownership");
+      }
+      finally {rmSync(file);}
+    }
+  } finally {if(createdReceipts)rmSync(receipts,{recursive:true});}
 
   // Actual native Windows rename behavior with the same ACL helper that the
   // interactive re-pair CLI will use. No cloud traffic, identity or task.

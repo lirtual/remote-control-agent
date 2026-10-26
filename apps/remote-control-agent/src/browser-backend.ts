@@ -22,6 +22,11 @@ export interface BrowserTarget {
   name: string;
   snapshot_version: number;
 }
+export interface HumanBrowserAction {
+  kind: "click" | "scroll" | "key" | "text";
+  tab_id: string;
+  x?: number; y?: number; text?: string; key?: string;
+}
 export interface BrowserBackend {
   start(): Promise<BrowserStatus>;
   status(): BrowserStatus | null;
@@ -33,6 +38,10 @@ export interface BrowserBackend {
   pressKey(sessionId: string, key: string, snapshotVersion: number): Promise<void>;
   selectOption(sessionId: string, target: BrowserTarget, value: string): Promise<void>;
   close(sessionId: string): Promise<void>;
+  /** Human-only methods, never dispatched as MCP tools. */
+  humanScreenshot?(sessionId: string, tabId: string, authorized: () => boolean): Promise<Buffer>;
+  humanInput?(sessionId: string, action: HumanBrowserAction, authorized: () => boolean): Promise<void>;
+  invalidateHandoffReferences?(): Promise<void>;
   /** Locally trusted revocation: cancel owned browser, including in-flight page work. */
   stopOwnedForRevocation?(): Promise<"confirmed" | "uncertain">;
 }
