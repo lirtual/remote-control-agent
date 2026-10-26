@@ -12,6 +12,13 @@ import { executeV2FileOperation, executeV2SessionRead, monitorDeviceSocket } fro
 import type { BrowserBackend, BrowserStatus } from "../src/browser-backend.ts";
 
 const signal = () => new AbortController().signal;
+async function waitFor(check: () => Promise<boolean> | boolean): Promise<void> {
+  for (let i=0;i<100;i++) {
+    if (await check()) return;
+    await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.fail("bounded state transition did not complete");
+}
 function browserFixture() {
   const id = randomUUID();
   let invalidated = 0;
@@ -34,7 +41,9 @@ test("whole-device barrier survives restart; receipts retain ID/state without se
     await call("write_file",{path:file,mode:"rewrite",content:"PRIVATE FILE"},"original-intent");
     assert.equal((await engine.getReceipt("original-intent"))?.state,"completed");
     const requested=await call("browser_handoff_request",{session_id:f.id});
-    assert.equal((requested?.body as {state:string}).state,"pending_return");
+    assert.equal((requested?.body as {state:string}).state,"preparing");
+    // Preparation now runs detached from the one-shot MCP response.
+    await waitFor(async()=>((await call("browser_handoff_status"))?.body as {state:string}).state==="pending_return");
     const firstEpoch=engine.handoffGeneration();
     const marker=await readFile(path.join(root,"browser-handoff-pending.json"),"utf8");
     assert.ok(!/PRIVATE|token|cookie|email/.test(marker));
@@ -197,7 +206,8 @@ test("a browser effect outliving its running reply drains before handoff; unknow
     assert.equal(engine.handoffBlocked(),true);
     release();
     const result=await handoff;
-    assert.equal((result?.body as {reason:string}).reason,"browser_receipt_unknown");
+    assert.equal((result?.body as {state:string}).state,"preparing");
+    await waitFor(async()=>((await engine.executeTool({tool:"browser_handoff_status",arguments:{}},signal()))?.body as {reason?:string}).reason==="browser_receipt_unknown");
     assert.equal(checked,0,"never start external access while a receipt is unresolved");
     assert.deepEqual(await engine.getReceipt("uncertain-browser-intent"),{operation_id:"uncertain-browser-intent",state:"unknown"});
   } finally {release();await engine.close();await rm(root,{recursive:true,force:true});}
@@ -240,4 +250,81 @@ test("one device's handoff never blocks a separate device engine",async()=>{
     assert.equal((await one.executeTool({tool:"list_sessions",arguments:{}},signal()))?.status,423);
     assert.equal((await two.executeTool({tool:"list_sessions",arguments:{}},signal()))?.status,200);
   } finally {await one.close();await two.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("two-phase handoff returns immediately; correct session claims URL once, never via status or receipts",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-two-phase-"));
+  const f=browserFixture();
+  const token="OTP_ONE_SHOT_TEST_SECRET";
+  const link="https://test-quick-tunnel.trycloudflare.com/?handoff_token="+token;
+  let resolveReady!: (value:{url:string;expiresAt:number})=>void;
+  let started!:()=>void;
+  const startedPromise=new Promise<void>(r=>{started=r;});
+  const readiness=new Promise<{url:string;expiresAt:number}>(r=>{resolveReady=r;});
+  let closes=0;
+  const engine=createAgentExecutionEngine({
+    receiptDirectory:root,browser:f.browser,
+    verifyHandoffPrerequisites:()=>({}) as never,
+    handoffDeviceId:()=>randomUUID(),
+    // Only local test injection; real production always uses pinned cloudflared.
+    handoffFactory:(()=>({
+      start:()=>{started();return readiness;},
+      close:async()=>{closes++;return "confirmed" as const;},
+    })) as never,
+  });
+  const call=(tool:string,args:unknown={})=>engine.executeTool({tool,arguments:args},signal());
+  try {
+    const first=await call("browser_handoff_request",{session_id:f.id});
+    assert.equal((first?.body as {state:string}).state,"preparing");
+    assert.equal(JSON.stringify(first).includes(token),false);
+    assert.equal(engine.handoffBlocked(),true);
+    assert.equal((await call("browser_snapshot",{session_id:f.id}))?.status,423);
+    await startedPromise;
+    assert.equal((await call("browser_handoff_request",{session_id:f.id}))?.body != null,true);
+    assert.equal(JSON.stringify((await call("browser_handoff_status"))?.body).includes(token),false);
+    const deadline=Date.now()+120_000;
+    resolveReady({url:link,expiresAt:deadline});
+    await waitFor(async()=>((await call("browser_handoff_status"))?.body as {state:string}).state==="link_ready");
+    const wrong=await call("browser_handoff_request",{session_id:randomUUID()});
+    assert.equal(JSON.stringify(wrong).includes(token),false,"other browser session cannot steal a link");
+    const status=await call("browser_handoff_status");
+    assert.equal(JSON.stringify(status).includes(token),false);
+    const claimed=await call("browser_handoff_request",{session_id:f.id});
+    assert.equal((claimed?.body as {url?:string}).url,link);
+    assert.equal((claimed?.body as {expires_at?:number}).expires_at,deadline);
+    const replay=await call("browser_handoff_request",{session_id:f.id});
+    assert.equal((replay?.body as {url?:string}).url,undefined,"one-shot link cannot be replayed");
+    assert.equal(JSON.stringify(await call("browser_handoff_status")).includes(token),false);
+    const returned=await call("browser_handoff_return");
+    assert.equal((returned?.body as {state:string}).state,"ai");
+    assert.equal(closes,1);
+    assert.equal((await call("browser_handoff_request",{session_id:f.id}))?.body != null,true);
+    assert.equal(JSON.stringify(await call("browser_handoff_status")).includes(token),false);
+  } finally {await engine.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("unclaimed link never survives expiry, cleanup or process restart",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-claim-lifetime-"));
+  const id=randomUUID();
+  try {
+    const session=new BrowserHandoff(root);
+    assert.equal(session.begin(id),true);
+    const access={close:async()=>"confirmed" as const};
+    const expiry=Date.now()+15_000;
+    session.ready(access,expiry,{sessionId:id,url:"https://safe.trycloudflare.com/?handoff_token=SECRET"});
+    assert.equal(session.claim(randomUUID()),undefined);
+    assert.equal(session.claim(id)?.url?.includes("SECRET"),true);
+    assert.equal(session.claim(id),undefined);
+    session.stopAccess();
+    assert.equal(session.claim(id),undefined,"revocation destroys unclaimed/claimed links");
+    const cleared=await session.explicitReturn(async()=>{});
+    assert.equal(cleared.state,"ai");
+    assert.equal(session.claim(id),undefined);
+    assert.equal(session.begin(id),true);
+    session.ready(access,Date.now()-1);
+    assert.equal(session.claim(id),undefined,"expired link must never be delivered");
+    const restored=new BrowserHandoff(root);
+    assert.equal(restored.isBlocked(),true,"a restarted Agent must not restore the link");
+    assert.equal(restored.claim(id),undefined);
+  } finally {await rm(root,{recursive:true,force:true});}
 });
