@@ -15,6 +15,9 @@ export function parseHandoffArguments(tool: string, value: unknown): boolean {
 export type ControllerDiagnostic =
   | "awaiting_document" | "document_denied_host" | "document_denied_inactive" | "document_denied_token_missing"
   | "document_denied_path" | "document_served" | "script_served"
+  | "tabs_served" | "screenshot_requested" | "screenshot_served"
+  | "screenshot_denied_precheck" | "screenshot_denied_session" | "screenshot_denied_csrf"
+  | "screenshot_denied_output" | "screenshot_failed"
   | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed"
   | "callback_path_received"
   | "tunnel_callback_state_cookie_missing" | "tunnel_callback_state_rejected"
