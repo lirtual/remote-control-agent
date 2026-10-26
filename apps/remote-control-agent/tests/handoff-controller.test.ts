@@ -31,6 +31,65 @@ function forwardedPost(port: number, route: string, data: unknown, headers: Reco
   });
 }
 
+// Exercise the HTTP GET that Safari performs after Cloudflare's OTP redirect.
+// Node's default Host is the loopback forwarding target, not the public name.
+function forwardedGet(port: number, route: string, host?: string): Promise<Response> {
+  return new Promise((resolve,reject) => {
+    const req=request({hostname:"127.0.0.1",port,path:route,method:"GET",
+      ...(host?{headers:{host}}:{})},res=>{
+      const chunks:Buffer[]=[];
+      res.on("data",chunk=>chunks.push(Buffer.from(chunk)));
+      res.on("error",reject);
+      res.on("end",()=>resolve(new Response(Buffer.concat(chunks),{
+        status:res.statusCode??500,
+        headers:{"content-type":String(res.headers["content-type"]??"")},
+      })));
+    });
+    req.on("error",reject);req.end();
+  });
+}
+
+test("iOS OTP return renders the controller through a strictly bounded loopback Host",async()=>{
+  const sessionId=randomUUID();let connected=0;
+  const browser={status:()=>({session_id:sessionId}),
+    tabs:async()=>({selected_tab_id:"tab-1",tabs:[{tab_id:"tab-1",url:"about:blank",title:""}]}),
+    humanInput:async()=>{},humanScreenshot:async()=>Buffer.from("frame"),
+  } as unknown as BrowserBackend;
+  const controller=await startHandoffController({browser,deviceId:randomUUID(),sessionId,
+    expiresAt:Date.now()+60_000,origin:()=>origin,active:()=>true,
+    connected:()=>{connected++;},explicitReturn:async()=>{}});
+  try {
+    const url="/?handoff_token="+controller.token;
+    for(const authority of [new URL(origin).host,`127.0.0.1:${controller.port}`]){
+      const page=await forwardedGet(controller.port,url,authority);
+      assert.equal(page.status,200,"valid public or local tunnel authority must render HTML");
+      assert.match(page.headers.get("content-type")??"",/^text\/html/);
+      assert.match(await page.text(),/Browser handoff/);
+      const script=await forwardedGet(controller.port,"/controller.js",authority);
+      assert.equal(script.status,200);
+      assert.match(await script.text(),/\/(?:exchange|resume)/);
+    }
+    assert.equal((await forwardedGet(controller.port,url,"untrusted.example.test")).status,403);
+    assert.equal((await forwardedGet(controller.port,"/bad?handoff_token="+controller.token)).status,403);
+    assert.equal((await forwardedGet(controller.port,"/?handoff_token=WRONG")).status,403);
+    // An untrusted POST Origin may never exchange the token even via localhost.
+    const localHost={host:`127.0.0.1:${controller.port}`};
+    assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token},
+      {...localHost,origin:"https://evil.example.test"})).status,403);
+    const exchanged=await forwardedPost(controller.port,"/exchange",{token:controller.token},localHost);
+    assert.equal(exchanged.status,200);
+    assert.equal(connected,1);
+    const cookie=exchanged.headers.get("set-cookie")?.split(";")[0];
+    const csrf=(await exchanged.json() as {csrf:string}).csrf;
+    assert.ok(cookie);
+    assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token},localHost)).status,403);
+    assert.equal((await forwardedPost(controller.port,"/tabs",{},
+      {...localHost,cookie:cookie!,"x-handoff-csrf":csrf})).status,200);
+    assert.equal((await forwardedPost(controller.port,"/tabs",{},
+      {...localHost,cookie:cookie!,"x-handoff-csrf":csrf,origin:"https://evil.example.test"})).status,403);
+  }finally{await controller.close();}
+});
+
 test("human HTTP controller: one exchange, strict origin/CSRF, bounded content, session binding and expiry",async()=>{
   const sessionId=randomUUID();let active=true,inputs=0,connected=0,returned=0;
   let liveSession=sessionId;
