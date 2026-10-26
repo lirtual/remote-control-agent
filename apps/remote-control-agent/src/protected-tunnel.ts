@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHandoffController } from "./handoff-controller.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
-import type { HumanAccess } from "./browser-handoff.ts";
+import type { ControllerDiagnostic, HumanAccess } from "./browser-handoff.ts";
 
 export interface ProtectedTunnelConfig { configurationDirectory: string; email: string; cloudflared_path: string; cloudflared_sha256: string }
 
@@ -199,6 +199,7 @@ const nativeRuntime = {
 export function createManagedHandoff(options: {
   directory: string; config: ProtectedTunnelConfig; browser: BrowserBackend; deviceId: string; sessionId: string;
   connected: () => void; explicitReturn: () => Promise<unknown>;
+  diagnostic?: (code: ControllerDiagnostic) => void;
 }, runtime = nativeRuntime): HumanAccess & { start(): Promise<{url:string;expiresAt:number}> } {
   let closed=false, enabled=false, ownsMarker=false, launchAttempted=false, child: ChildProcess | undefined;
   let controller: Awaited<ReturnType<typeof startHandoffController>> | undefined;
@@ -243,7 +244,7 @@ export function createManagedHandoff(options: {
     const probe=Buffer.from(randomBytes(32)).toString("base64url"), probePath="/__handoff_probe/"+probe;
     controller=await runtime.controller({browser:options.browser,deviceId:options.deviceId,sessionId:options.sessionId,
       expiresAt,readinessProbe:probe,origin:()=>origin,active:()=>enabled && !closed && child?.exitCode===null && child?.signalCode===null,
-      connected:options.connected,explicitReturn:options.explicitReturn});
+      connected:options.connected,explicitReturn:options.explicitReturn,diagnostic:options.diagnostic});
     if (closed) throw Error("handoff_closed");
     const local=await runtime.send(`http://127.0.0.1:${controller.port}${probePath}`,{redirect:"manual",signal:AbortSignal.timeout(3000)});
     const proof=await local.json() as Record<string,unknown>;
