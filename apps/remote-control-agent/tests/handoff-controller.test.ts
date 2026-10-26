@@ -124,6 +124,16 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
     assert.ok(diagnostics.every(code=>!code.includes(controller.token) && !code.includes("handoff.example")));
     assert.equal((await forwardedPost(controller.port,"/tabs",{},
       {...localHost,cookie:cookie!,"x-handoff-csrf":csrf})).status,200);
+    assert.equal(diagnostics.at(-1),"tabs_served");
+    assert.equal((await forwardedPost(controller.port,"/screenshot",{tab_id:"tab-1"},
+      {...localHost,cookie:cookie!,"x-handoff-csrf":csrf})).status,200);
+    assert.equal(diagnostics.at(-1),"screenshot_served");
+    assert.equal((await forwardedPost(controller.port,"/screenshot",{tab_id:"tab-1"},
+      {...localHost,"x-handoff-csrf":csrf})).status,403);
+    assert.equal(diagnostics.at(-1),"screenshot_denied_session");
+    assert.equal((await forwardedPost(controller.port,"/screenshot",{tab_id:"tab-1"},
+      {...localHost,cookie:cookie!,"x-handoff-csrf":"wrong"})).status,403);
+    assert.equal(diagnostics.at(-1),"screenshot_denied_csrf");
     assert.equal((await forwardedPost(controller.port,"/tabs",{},
       {...localHost,cookie:cookie!,"x-handoff-csrf":csrf,origin:"https://evil.example.test"})).status,403);
   }finally{await controller.close();}
@@ -221,4 +231,33 @@ test("controller return-path parser is rooted, bounded, and tied to one exact to
     "/?handoff_token="+token+"&a=1&b=2&c=3&d=4",
     "/?handoff_token="+token+"&a="+("x".repeat(501)),
   ]) assert.equal(isControllerDocumentPath(target,token),false,String(target));
+});
+
+test("failed Playwright screenshot becomes only a fixed diagnostic, never raw error",async()=>{
+  const id=randomUUID();const diagnostics:string[]=[];
+  const browser={status:()=>({session_id:id}),
+    tabs:async()=>({selected_tab_id:"tab-1",tabs:[{tab_id:"tab-1",url:"about:blank",title:""}]}),
+    humanInput:async()=>{},
+    humanScreenshot:async()=>{throw Error("PRIVATE frame/path/host must never reach status");},
+  } as unknown as BrowserBackend;
+  const controller=await startHandoffController({browser,deviceId:randomUUID(),sessionId:id,
+    expiresAt:Date.now()+60_000,origin:()=>origin,active:()=>true,
+    connected:()=>{},explicitReturn:async()=>{},diagnostic:code=>diagnostics.push(code)});
+  try {
+    const exchanged=await forwardedPost(controller.port,"/exchange",{token:controller.token});
+    assert.equal(exchanged.status,200);
+    const cookie=exchanged.headers.get("set-cookie")!.split(";")[0]!;
+    const csrf=(await exchanged.json() as {csrf:string}).csrf;
+    const h={cookie,"x-handoff-csrf":csrf};
+    const tabs=await forwardedPost(controller.port,"/tabs",{},h);
+    assert.equal(tabs.status,200);
+    assert.equal(diagnostics.at(-1),"tabs_served");
+    const shot=await forwardedPost(controller.port,"/screenshot",{tab_id:"tab-1"},h);
+    assert.equal(shot.status,400);
+    assert.equal(diagnostics.at(-1),"screenshot_failed");
+    assert.doesNotMatch(diagnostics.join(","),/PRIVATE|frame|host|http|\/screenshot|handoff_token/);
+    const script=await forwardedGet(controller.port,"/controller.js",new URL(origin).host);
+    assert.equal(script.status,200);
+    assert.match(await script.text(),/Controller request failed \(HTTP /);
+  } finally {await controller.close();}
 });

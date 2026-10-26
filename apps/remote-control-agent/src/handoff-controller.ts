@@ -57,7 +57,7 @@ async function api(route, body) {
   });
   if (!response.ok) {
     const error = Error(response.status === 429 ? 'Please wait before sending another request.' :
-      'Controller unavailable, expired, or already claimed. Explicit return is still required.');
+      'Controller request failed (HTTP ' + response.status + '). Explicit return is still required.');
     error.denied = response.status === 403;
     throw error;
   }
@@ -209,6 +209,7 @@ export async function startHandoffController(options: {
       const hostValid = originValid && (req.headers.host === new URL(origin).host || req.headers.host === loopbackHost);
       const active = valid();
       if (!originValid || !hostValid || !active) {
+        if (req.method === "POST" && req.url === "/screenshot") options.diagnostic?.("screenshot_denied_precheck");
         if (documentGet) options.diagnostic?.(!hostValid ? "document_denied_host" : "document_denied_inactive");
         req.resume(); reply(res,403,{}); return;
       }
@@ -231,10 +232,14 @@ export async function startHandoffController(options: {
       if (req.method !== "POST" || req.headers.origin !== origin ||
           req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") {
         if (req.method === "POST" && req.url === "/exchange") options.diagnostic?.("exchange_denied_origin");
+        if (req.method === "POST" && req.url === "/screenshot") options.diagnostic?.("screenshot_denied_precheck");
         req.resume(); reply(res,403,{}); return;
       }
       const args = await body(req);
-      if (!valid()) { reply(res,403,{}); return; }
+      if (!valid()) {
+        if (req.url === "/screenshot") options.diagnostic?.("screenshot_denied_precheck");
+        reply(res,403,{}); return;
+      }
       const authenticated = exchanged && typeof req.headers.cookie === "string" &&
         req.headers.cookie.split(";").some(c => equal(c.trim(),"__Host-handoff="+cookie));
       if (req.url === "/exchange") {
@@ -243,9 +248,15 @@ export async function startHandoffController(options: {
         res.setHeader("set-cookie",`__Host-handoff=${cookie}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.max(0,Math.floor((options.expiresAt-Date.now())/1000))}`);
         options.connected(); options.diagnostic?.("exchange_completed"); reply(res,200,{csrf}); return;
       }
-      if (!authenticated) { reply(res,403,{}); return; }
+      if (!authenticated) {
+        if (req.url === "/screenshot") options.diagnostic?.("screenshot_denied_session");
+        reply(res,403,{}); return;
+      }
       if (req.url === "/resume" && Object.keys(args).length === 0) { reply(res,200,{csrf}); return; }
-      if (!equal(req.headers["x-handoff-csrf"],csrf)) { reply(res,403,{}); return; }
+      if (!equal(req.headers["x-handoff-csrf"],csrf)) {
+        if (req.url === "/screenshot") options.diagnostic?.("screenshot_denied_csrf");
+        reply(res,403,{}); return;
+      }
       if (req.url === "/return" && Object.keys(args).length === 0) {
         closed = true; // Revoke before awaiting explicit-return cleanup.
         res.once("finish",()=>{void options.explicitReturn().catch(() => {});});
@@ -256,7 +267,9 @@ export async function startHandoffController(options: {
         if (!valid()) { reply(res,403,{}); return; }
         if (req.url === "/tabs" && Object.keys(args).length === 0) {
           const tabs = await options.browser.tabs(options.sessionId,"list");
-          reply(res,valid()?200:403,valid()?tabs:{}); return;
+          const sessionValid=valid();
+          if (sessionValid) options.diagnostic?.("tabs_served");
+          reply(res,sessionValid?200:403,sessionValid?tabs:{}); return;
         }
         if ((req.url === "/screenshot" || req.url === "/select") &&
             Object.keys(args).length === 1 && typeof args.tab_id === "string" && /^tab-[1-9]\d{0,6}$/.test(args.tab_id)) {
@@ -264,10 +277,12 @@ export async function startHandoffController(options: {
             await options.browser.tabs(options.sessionId,"select",args.tab_id);
             reply(res,valid()?200:403,{}); return;
           }
+          options.diagnostic?.("screenshot_requested");
           if (Date.now()-lastScreenshot < 500) { reply(res,429,{}); return; }
           lastScreenshot = Date.now();
           const image = await options.browser.humanScreenshot!(options.sessionId,args.tab_id,valid);
-          if (!valid() || image.length > 2_000_000) { reply(res,403,{}); return; }
+          if (!valid() || image.length > 2_000_000) { options.diagnostic?.("screenshot_denied_output"); reply(res,403,{}); return; }
+          options.diagnostic?.("screenshot_served");
           reply(res,200,{image:Buffer.from(image).toString("base64"),expires_at:options.expiresAt}); return;
         }
         const action = req.url === "/input" ? parseHumanAction(args) : null;
@@ -279,7 +294,12 @@ export async function startHandoffController(options: {
       };
       pending = work().finally(() => { pending = undefined; });
       await pending;
-    })().catch(() => { if (!res.headersSent) reply(res,400,{}); else res.destroy(); });
+    })().catch(() => {
+      // Only record a fixed enum when the local browser screenshot fails;
+      // never disclose the exception text, browser frame or request metadata.
+      if (req.method === "POST" && req.url === "/screenshot") options.diagnostic?.("screenshot_failed");
+      if (!res.headersSent) reply(res,400,{}); else res.destroy();
+    });
   });
   server.maxConnections = 8;
   await new Promise<void>((resolve,reject) => { server.once("error",reject); server.listen(0,"127.0.0.1",resolve); });
