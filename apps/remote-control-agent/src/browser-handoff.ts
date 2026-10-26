@@ -131,8 +131,11 @@ export class BrowserHandoff {
     return link;
   }
   connected(): void {
+    // A delayed local connect callback must never revive a revoked handoff.
+    if (!this.blocked || this.cancelRequested || this.cleanup || this.returning ||
+        !["link_ready","interactive"].includes(this.state) || Date.now() >= this.deadline) return;
     this.unclaimedLink = undefined;
-    if (this.blocked && Date.now() < this.deadline) this.state = "interactive";
+    this.state = "interactive";
   }
   stopAccess(): Promise<"confirmed" | "uncertain"> {
     this.unclaimedLink = undefined;
