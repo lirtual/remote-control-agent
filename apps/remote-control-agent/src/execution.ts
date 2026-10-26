@@ -594,6 +594,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           const access=(options.handoffFactory ?? createManagedHandoff)({
             directory:receipts.directory,config,browser:options.browser,deviceId,sessionId,
             connected:()=>handoff.connected(),
+            diagnostic:code=>handoff.reportControllerDiagnostic(code),
             explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal),
           });
           handoff.attach(access);
