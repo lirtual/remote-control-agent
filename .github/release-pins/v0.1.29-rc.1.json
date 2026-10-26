@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.29-rc.1",
+  "source_sha": "89d44561a4d904db55935a6cc898103513ee9fa9",
+  "candidate_run_id": 40324413445,
+  "release_title": "Remote Control Agent v0.1.29-rc.1 — protected iPhone handoff HTTP diagnostics",
+  "release_notes": "docs/releases/v0.1.29-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.29-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.29-rc.1-ubuntu-24.04",
+      "sha256": "109db1abb8644606633e6a27c59ab7b348a02fcc415af6ae7283b69a22ffa807"
+    },
+    {
+      "name": "remote-control-agent-v0.1.29-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.29-rc.1-ubuntu-24.04-arm",
+      "sha256": "8bc280bfc2b7626459e1bd0668b0d1a2a512426a8ce751d87e7c376a0152a233"
+    },
+    {
+      "name": "remote-control-agent-v0.1.29-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.29-rc.1-windows-x64",
+      "sha256": "a4c6d0b19f91b70e4c519c9e4e71b101b784153d91dff468898a94fa32e024e2"
+    }
+  ]
+}
