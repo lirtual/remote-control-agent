@@ -8,7 +8,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { CHILD_MARKER, createManagedHandoff, isProtectedChallenge, tunnelOriginFromLog, windowsTunnelLauncher } from "../src/protected-tunnel.ts";
+import { CHILD_MARKER, createManagedHandoff, isProtectedChallenge, tunnelOriginFromLog, tunnelAuthFailureFromLog, windowsTunnelLauncher } from "../src/protected-tunnel.ts";
 import { BrowserHandoff } from "../src/browser-handoff.ts";
 import type { BrowserBackend } from "../src/browser-backend.ts";
 import type { startHandoffController } from "../src/handoff-controller.ts";
@@ -56,9 +56,10 @@ async function fixture(controllerGate?: Promise<void>) {
       if(allowExit) {child.exitCode=0;child.emit("exit",0,null);} return true;
     }});
   let args:string[]=[];
+  const diagnostics:string[]=[];
   const config={configurationDirectory:directory,email:"owner@example.com",cloudflared_path:"C:\\trusted\\cloudflared.exe",cloudflared_sha256:"a".repeat(64)};
   const access=createManagedHandoff({directory,config,deviceId,sessionId,browser:{status:()=>({session_id:sessionId})} as BrowserBackend,
-    connected:()=>{},explicitReturn:async()=>{}},{platform:"win32",
+    connected:()=>{},explicitReturn:async()=>{},diagnostic:(code)=>{diagnostics.push(code);}},{platform:"win32",
     controller:async options=>{controllerOptions=options;assert.equal(options.active(),false);await controllerGate;return {port:3456,token:"secret",close:async()=>{localClosed=true;return "confirmed";}};},
     launch:(_exe:string,argv:string[],_options:SpawnOptions)=>{args=argv;queueMicrotask(()=>child.stdout.write(JSON.stringify({level:"info",message:`| ${origin} |`})+"\n"));return child as unknown as ChildProcess;},
     confirm:()=>confirmed ? "confirmed" : "uncertain",
@@ -74,6 +75,7 @@ async function fixture(controllerGate?: Promise<void>) {
     }) as typeof fetch,
   });
   return {directory,access,child,args:()=>args,controller:()=>controllerOptions,kills:()=>kills,localClosed:()=>localClosed,
+    diagnostics:()=>diagnostics.slice(), emit:(chunk:string,stream:"stdout"|"stderr"="stderr")=>{child[stream].write(chunk);},
     unknown:()=>{confirmed=false;},noExit:()=>{allowExit=false;},badProof:()=>{publicProof=false;},transient:(n:number)=>{networkFailures=n;}};
 }
 test("managed tunnel proves local and public protection before enabling; secrets never persist",async()=>{
@@ -166,4 +168,41 @@ test("launcher selects only the fixed pinned Windows supervisor, never cloudflar
     assert.match(launcher.args.at(-1)!,/scripts[\\/]windows-handoff-tunnel.ps1$/);
     assert.equal(launcher.args.includes("-Command"),false);
   } finally {if(systemRoot===undefined)delete process.env.SystemRoot;else process.env.SystemRoot=systemRoot;}
+});
+
+test("cloudflared 2026.10.3 WARN auth classes are fixed and do not expose raw details",()=>{
+  const msg="HTTP request authorization failed before origin selection";
+  const line=(error:string,level="warn",message=msg)=>JSON.stringify({level,message,error,time:"2026-10-26T13:00:00Z"});
+  assert.equal(tunnelAuthFailureFromLog(line("verify authentication-state cookie: request contains 0 authentication-state cookies, expected one")),"tunnel_callback_state_cookie_missing");
+  assert.equal(tunnelAuthFailureFromLog(line("verify authentication-state cookie: invalid authentication-state cookie signature")),"tunnel_callback_state_rejected");
+  assert.equal(tunnelAuthFailureFromLog(line("browser state does not match callback state")),"tunnel_callback_state_rejected");
+  assert.equal(tunnelAuthFailureFromLog(line("authentication state expired")),"tunnel_callback_state_expired");
+  assert.equal(tunnelAuthFailureFromLog(line("parse callback form: malformed callback form: got 0 fields, expected 2")),"tunnel_callback_request_rejected");
+  assert.equal(tunnelAuthFailureFromLog(line("validate callback request: callback method must be POST")),"tunnel_callback_request_rejected");
+  assert.equal(tunnelAuthFailureFromLog(line("validate authentication return path: private.example.com")),"tunnel_login_start_rejected");
+  assert.equal(tunnelAuthFailureFromLog(line("request hostname private.example.com does not match protected Quick Tunnel")),"tunnel_login_start_rejected");
+  for(const raw of [line("session invalid"),line("verify authentication-state cookie: 0","info"),
+    line("authentication state expired","warn","Unrecognized event"),"authentication state expired",
+    JSON.stringify({level:"warn",message:msg,authOutcome:"callback_rejected"}),
+    line("authentication state expired")+" ".repeat(8193)]) {
+    assert.equal(tunnelAuthFailureFromLog(raw),undefined);
+  }
+});
+test("running protected tunnel extracts only fixed WARN code from fragmented stderr, never raw auth data",async()=>{
+  const f=await fixture();
+  try {
+    await f.access.start();
+    const raw=JSON.stringify({level:"warn",message:"HTTP request authorization failed before origin selection",
+      error:"verify authentication-state cookie: request contains 0 authentication-state cookies, expected one",
+      private:"secret_token@example.com/?handoff_token=not-for-status"});
+    f.emit(raw.slice(0,31));
+    assert.deepEqual(f.diagnostics(),[]);
+    f.emit(raw.slice(31)+"\n");
+    assert.deepEqual(f.diagnostics(),["tunnel_callback_state_cookie_missing"]);
+    f.emit(JSON.stringify({level:"debug",message:"Quick Tunnel authentication decision",authOutcome:"callback_authorized"})+"\n","stdout");
+    assert.deepEqual(f.diagnostics(),["tunnel_callback_state_cookie_missing"]);
+    assert.doesNotMatch(JSON.stringify(f.diagnostics()),/secret_token|handoff_token|verify authentication-state cookie|@example/);
+    assert.doesNotMatch(await readFile(path.join(f.directory,CHILD_MARKER),"utf8"),/secret_token|handoff_token|callback|@example/);
+    assert.equal(f.args().includes("debug"),false,"never turn on raw debug traffic logs");
+  } finally {await f.access.close();await rm(f.directory,{recursive:true,force:true});}
 });

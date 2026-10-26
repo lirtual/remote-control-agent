@@ -153,6 +153,32 @@ export function tunnelOriginFromLog(line: string): string | undefined {
     return match[1];
   } catch { return undefined; }
 }
+/** Cloudflared 2026.10.3 emits this WARN for authorization failures without debug logging.
+ * Only allowlisted fixed classes leave this parser. Never forward its raw error field:
+ * the upstream message may contain a hostname, callback parameters or other private data.
+ */
+export function tunnelAuthFailureFromLog(line: string): ControllerDiagnostic | undefined {
+  if (line.length > 8192) return undefined;
+  try {
+    const record = JSON.parse(line) as {level?:unknown;message?:unknown;error?:unknown};
+    if (record.level !== "warn" ||
+        record.message !== "HTTP request authorization failed before origin selection" ||
+        typeof record.error !== "string") return undefined;
+    const error = record.error;
+    if (error === "authentication state expired") return "tunnel_callback_state_expired";
+    if (error === "verify authentication-state cookie: request contains 0 authentication-state cookies, expected one")
+      return "tunnel_callback_state_cookie_missing";
+    if (error.startsWith("verify authentication-state cookie:") ||
+        error === "browser state does not match callback state" ||
+        error === "callback state is not canonical") return "tunnel_callback_state_rejected";
+    if (error.startsWith("validate callback request:") || error.startsWith("parse callback form:"))
+      return "tunnel_callback_request_rejected";
+    if (error.startsWith("request hostname ") || error.startsWith("validate authentication return path:"))
+      return "tunnel_login_start_rejected";
+  } catch { /* Reject malformed or non-JSON logs without retaining them. */ }
+  return undefined;
+}
+
 /** Mirrors Cloudflare's quicktunnelauth/state.go; a generic redirect is never proof. */
 export function isProtectedChallenge(response: Pick<Response,"status" | "headers">, origin: string, probePath: string): boolean {
   try {
@@ -280,7 +306,10 @@ export function createManagedHandoff(options: {
           if(buffer.length>8192 && !buffer.includes("\n")) {finish(Error("tunnel_log_line_limit"));return;}
           let end:number;
           while((end=buffer.indexOf("\n"))>=0) {
-            const url=tunnelOriginFromLog(buffer.slice(0,end));buffer=buffer.slice(end+1);
+            const line=buffer.slice(0,end);buffer=buffer.slice(end+1);
+            const authFailure=tunnelAuthFailureFromLog(line);
+            if(authFailure) options.diagnostic?.(authFailure);
+            const url=tunnelOriginFromLog(line);
             if(url)finish(undefined,url);
           }
         });
