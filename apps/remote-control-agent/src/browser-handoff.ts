@@ -15,7 +15,8 @@ export function parseHandoffArguments(tool: string, value: unknown): boolean {
 export type ControllerDiagnostic =
   | "awaiting_document" | "document_denied_host" | "document_denied_inactive"
   | "document_denied_path" | "document_served" | "script_served"
-  | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed";
+  | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed"
+  | "callback_path_received";
 export type HandoffStatus = {
   diagnostic_code?: ControllerDiagnostic;
   state: "ai" | "preparing" | "pending_return" | "link_ready" | "interactive" | "expired";

@@ -81,6 +81,10 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
     assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token},
       {...localHost,origin:"https://evil.example.test"})).status,403);
     assert.equal(diagnostics.at(-1),"exchange_denied_origin");
+    // The OTP callback must be consumed upstream; a leaked POST is rejected.
+    assert.equal((await forwardedPost(controller.port,"/.cloudflared/qt-auth/callback",{},
+      {...localHost,origin:"https://login.trycloudflare.com"})).status,403);
+    assert.equal(diagnostics.at(-1),"callback_path_received");
     const exchanged=await forwardedPost(controller.port,"/exchange",{token:controller.token},localHost);
     assert.equal(exchanged.status,200);
     assert.equal(connected,1);

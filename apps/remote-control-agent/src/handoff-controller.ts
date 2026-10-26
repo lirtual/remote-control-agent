@@ -177,6 +177,13 @@ export async function startHandoffController(options: {
           !closed && Date.now() < options.expiresAt && options.browser.status()?.session_id === options.sessionId) {
         req.resume(); reply(res,200,{probe:options.readinessProbe,device_id:options.deviceId,session_id:options.sessionId}); return;
       }
+      // Quick Tunnel must consume its browser OTP callback before it reaches
+      // the Agent. Record only a fixed diagnostic if it unexpectedly arrives;
+      // normal Host/Origin checks continue to reject the POST.
+      if (req.method === "POST" && (req.url === "/.cloudflared/qt-auth/callback" ||
+          req.url?.startsWith("/.cloudflared/qt-auth/callback?"))) {
+        options.diagnostic?.("callback_path_received");
+      }
       const origin = options.origin();
       // Only a fixed diagnostic code may leave the Agent via status. Never
       // report/log Host, URL, token, cookies, headers or browser content.
