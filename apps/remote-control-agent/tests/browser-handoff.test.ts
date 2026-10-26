@@ -88,7 +88,9 @@ test("in-flight browser observation drains but its result is discarded; return i
     release();
     assert.equal((await delayed)?.status,423);
     await request;
-    await waitFor(async()=>((await engine.executeTool({tool:"browser_handoff_status",arguments:{}},signal()))?.body as {state:string}).state==="pending_return");
+    // The first return marks cancellation immediately; wait for the detached
+    // worker to finish cleanup before the second explicit return admits AI.
+    await waitFor(async()=>((await engine.executeTool({tool:"browser_handoff_status",arguments:{}},signal()))?.body as {reason?:string}).reason==="protected_tunnel_readiness_unverified");
     const returned=await engine.executeTool({tool:"browser_handoff_return",arguments:{}},signal());
     assert.equal((returned?.body as {state:string}).state,"ai");
     assert.equal(f.invalidated(),1);
