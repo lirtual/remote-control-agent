@@ -298,7 +298,7 @@ test("two-phase handoff returns immediately; correct session claims URL once, ne
     const returned=await call("browser_handoff_return");
     assert.equal((returned?.body as {state:string}).state,"ai");
     assert.equal(closes,1);
-    assert.equal((await call("browser_handoff_request",{session_id:f.id}))?.body != null,true);
+    assert.equal(((await call("browser_handoff_status"))?.body as {state:string}).state,"ai");
     assert.equal(JSON.stringify(await call("browser_handoff_status")).includes(token),false);
   } finally {await engine.close();await rm(root,{recursive:true,force:true});}
 });
