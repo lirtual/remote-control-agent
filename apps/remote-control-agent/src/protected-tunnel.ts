@@ -294,8 +294,8 @@ export function createManagedHandoff(options: {
     let proven=false;
     // Newly created trycloudflare.com names can take time to become reachable.
     // Wait only a bounded interval; never enable input before both protections prove.
-    const readinessDeadline=Math.min(expiresAt,Date.now()+35_000);
-    for (let attempt=0;attempt<30 && Date.now()<readinessDeadline;attempt++) {
+    const readinessDeadline=Math.min(expiresAt,Date.now()+90_000);
+    for (let attempt=0;attempt<90 && Date.now()<readinessDeadline;attempt++) {
       check();
       let unsafeProtection=false;
       try {
