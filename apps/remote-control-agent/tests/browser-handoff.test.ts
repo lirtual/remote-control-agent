@@ -34,7 +34,7 @@ test("whole-device barrier survives restart; receipts retain ID/state without se
     await call("write_file",{path:file,mode:"rewrite",content:"PRIVATE FILE"},"original-intent");
     assert.equal((await engine.getReceipt("original-intent"))?.state,"completed");
     const requested=await call("browser_handoff_request",{session_id:f.id});
-    assert.equal((requested?.body as {state:string}).state,"pending_return");
+    assert.equal((requested?.body as {state:string}).state,"preparing","the first call must not await the tunnel");
     const firstEpoch=engine.handoffGeneration();
     const marker=await readFile(path.join(root,"browser-handoff-pending.json"),"utf8");
     assert.ok(!/PRIVATE|token|cookie|email/.test(marker));
@@ -107,13 +107,51 @@ test("explicit owner return reconciles a settled unknown human input without rep
   } finally {await engine.close();await rm(root,{recursive:true,force:true});}
 });
 
+test("handoff URL is claimed once, only by the original browser session; status stays redacted",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-once-"));
+  const handoff=new BrowserHandoff(root);
+  const sessionId=randomUUID(), otherId=randomUUID();
+  const link="https://protected.example.test/?handoff_token=synthetic";
+  try {
+    assert.equal(handoff.begin(sessionId),true);
+    const expiresAt=Date.now()+60_000;
+    handoff.ready({close:async()=> "confirmed"},expiresAt,link);
+    assert.equal(JSON.stringify(handoff.status()).includes("handoff_token"),false);
+    assert.equal(handoff.claim(otherId).url,undefined);
+    const claimed=handoff.claim(sessionId);
+    assert.equal(claimed.url,link);
+    assert.equal(claimed.expires_at,expiresAt);
+    assert.equal(handoff.claim(sessionId).url,undefined);
+    assert.equal(JSON.stringify(handoff.status()).includes(link),false);
+    assert.equal((await handoff.explicitReturn(async()=>{})).state,"ai");
+    assert.equal(handoff.claim(sessionId).url,undefined);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("owner return during preparation revokes admission and waits for preparation to settle",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-prepare-return-"));
+  const handoff=new BrowserHandoff(root);
+  let finish!:()=>void;
+  const preparing=new Promise<void>(resolve=>{finish=resolve;});
+  try {
+    assert.equal(handoff.begin(randomUUID()),true);
+    handoff.trackPreparation(preparing);
+    const returning=handoff.explicitReturn(async()=>{});
+    assert.equal(handoff.isPreparing(),false);
+    assert.equal(handoff.isBlocked(),true);
+    finish();
+    assert.equal((await returning).state,"ai");
+    assert.equal(handoff.isBlocked(),false);
+  } finally {finish();await rm(root,{recursive:true,force:true});}
+});
+
 test("expiry, reconnect and unknown cleanup never implicitly return AI admission",async()=>{
   const root=await mkdtemp(path.join(os.tmpdir(),"handoff-expiry-"));
   try {
     const handoff=new BrowserHandoff(root);
     assert.equal(handoff.begin(randomUUID()),true);
     let closes=0;
-    handoff.ready({close:async()=>{closes++;return "uncertain";}},Date.now()-1);
+    handoff.ready({close:async()=>{closes++;return "uncertain";}},Date.now()-1,"https://protected.example.test/?handoff_token=unused");
     assert.equal(handoff.status().state,"expired");
     assert.equal(handoff.isBlocked(),true);
     assert.equal(closes,1);
