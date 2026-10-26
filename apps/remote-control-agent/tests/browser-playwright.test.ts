@@ -159,6 +159,14 @@ test("uncertain navigation cannot be replayed, but can be inspected then closed"
     await assert.rejects(browser.navigate(session_id,"https://example.com",browser.status()!.tab_id!,browser.status()!.snapshot_version),/Uncertain browser navigation/);
     assert.equal(fake.calls.filter(x=>x.startsWith("goto:")).length,1);
     assert.equal((await browser.snapshot(session_id)).truncated,false);
+    // Explicit owner return reconciles a settled, uncertain browser effect
+    // without repeating it. The old tab and observation are invalidated.
+    const priorVersion = browser.status()!.snapshot_version;
+    await browser.invalidateHandoffReferences();
+    assert.equal(browser.status()?.uncertain,false);
+    assert.equal(browser.status()?.tab_id,null);
+    assert.ok(browser.status()!.snapshot_version > priorVersion);
+    assert.equal(fake.calls.filter(x=>x.startsWith("goto:")).length,1);
     await browser.close(session_id);
   } finally { await rm(tmp,{recursive:true,force:true}); }
 });
