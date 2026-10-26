@@ -98,6 +98,8 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
     ]) {
       assert.equal((await forwardedGet(controller.port,rejected)).status,403,
         "extra query cannot bypass exact one-token, count, and length constraints");
+      if (rejected === "/?utm_source=chatgpt.com")
+        assert.equal(diagnostics.at(-1),"document_denied_token_missing","detect token stripped by OTP return");
     }
     assert.equal(diagnostics.at(-1),"document_denied_path");
     // An untrusted POST Origin may never exchange the token even via localhost.
