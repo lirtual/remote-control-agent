@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.32-rc.1",
+  "source_sha": "8b9eb25aadeb06b7c59b102d75a749ac8fa0c54e",
+  "candidate_run_id": 40404070615,
+  "release_title": "Remote Control Agent v0.1.32-rc.1 — iPhone post-exchange screenshot diagnostics",
+  "release_notes": "docs/releases/v0.1.32-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.32-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.32-rc.1-ubuntu-24.04",
+      "sha256": "281ca347c26d985429b6f9d4bc893ca73b80abcc921c3e2b34c599e5902297f5"
+    },
+    {
+      "name": "remote-control-agent-v0.1.32-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.32-rc.1-ubuntu-24.04-arm",
+      "sha256": "3964fd93fe1909b6f2bcc67bd86bd91da24c107ff48c255f18c14b8b3197d968"
+    },
+    {
+      "name": "remote-control-agent-v0.1.32-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.32-rc.1-windows-x64",
+      "sha256": "7b7bb8331caed2a84a32437e700ec6f8341de9e90aae949e38f1581bf7545ad2"
+    }
+  ]
+}
