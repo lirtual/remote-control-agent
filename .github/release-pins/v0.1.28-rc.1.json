@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.28-rc.1",
+  "source_sha": "b7d95da55ea16ae94ff4ececfacabc704d9b15cd",
+  "candidate_run_id": 40305619815,
+  "release_title": "Remote Control Agent v0.1.28-rc.1 — iOS OTP Controller Host Compatibility",
+  "release_notes": "docs/releases/v0.1.28-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.28-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.28-rc.1-ubuntu-24.04",
+      "sha256": "03521be7434cf1638d7fc5a97c2e9e048d8be81741eeab5c989467c55af215e3"
+    },
+    {
+      "name": "remote-control-agent-v0.1.28-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.28-rc.1-ubuntu-24.04-arm",
+      "sha256": "d2c79e517db9dc9732657944f46153d9f55b09f3360b350fbb5bb06792f91180"
+    },
+    {
+      "name": "remote-control-agent-v0.1.28-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.28-rc.1-windows-x64",
+      "sha256": "542a42044d56f2062d735a4f0ecde2a964ab2f9f3be6f996c878095443e4ffd2"
+    }
+  ]
+}
