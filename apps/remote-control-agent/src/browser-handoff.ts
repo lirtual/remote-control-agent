@@ -16,7 +16,10 @@ export type ControllerDiagnostic =
   | "awaiting_document" | "document_denied_host" | "document_denied_inactive"
   | "document_denied_path" | "document_served" | "script_served"
   | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed"
-  | "callback_path_received";
+  | "callback_path_received"
+  | "tunnel_callback_state_cookie_missing" | "tunnel_callback_state_rejected"
+  | "tunnel_callback_state_expired" | "tunnel_callback_request_rejected"
+  | "tunnel_login_start_rejected";
 export type HandoffStatus = {
   diagnostic_code?: ControllerDiagnostic;
   state: "ai" | "preparing" | "pending_return" | "link_ready" | "interactive" | "expired";

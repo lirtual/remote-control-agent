@@ -441,6 +441,8 @@ test("controller diagnostics are scoped to the active handoff and cleared on exp
     assert.equal(handoff.status().diagnostic_code,"awaiting_document");
     handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
     assert.equal(handoff.status().diagnostic_code,"document_denied_host");
+    handoff.reportControllerDiagnostic("tunnel_callback_state_cookie_missing",generation);
+    assert.equal(handoff.status().diagnostic_code,"tunnel_callback_state_cookie_missing");
     handoff.reportControllerDiagnostic("exchange_completed",firstGeneration);
     assert.equal(handoff.status().diagnostic_code,"exchange_completed");
     const returned=await handoff.explicitReturn(async()=>{});
