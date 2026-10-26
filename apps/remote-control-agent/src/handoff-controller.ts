@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { BrowserBackend, HumanBrowserAction } from "./browser-backend.ts";
-import type { HumanAccess } from "./browser-handoff.ts";
+import type { ControllerDiagnostic, HumanAccess } from "./browser-handoff.ts";
 
 const secret = () => Buffer.from(randomBytes(32)).toString("base64url");
 function equal(a: unknown, b: string): boolean {
@@ -138,6 +138,7 @@ export async function startHandoffController(options: {
   active: () => boolean;
   connected: () => void;
   explicitReturn: () => Promise<unknown>;
+  diagnostic?: (code: ControllerDiagnostic) => void;
 }): Promise<HumanAccess & {port: number; token: string}> {
   if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(options.deviceId) ||
       !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(options.sessionId) ||
@@ -176,27 +177,38 @@ export async function startHandoffController(options: {
           !closed && Date.now() < options.expiresAt && options.browser.status()?.session_id === options.sessionId) {
         req.resume(); reply(res,200,{probe:options.readinessProbe,device_id:options.deviceId,session_id:options.sessionId}); return;
       }
+      // Quick Tunnel must consume its browser OTP callback before it reaches
+      // the Agent. Record only a fixed diagnostic if it unexpectedly arrives;
+      // normal Host/Origin checks continue to reject the POST.
+      if (req.method === "POST" && (req.url === "/.cloudflared/qt-auth/callback" ||
+          req.url?.startsWith("/.cloudflared/qt-auth/callback?"))) {
+        options.diagnostic?.("callback_path_received");
+      }
       const origin = options.origin();
-      // A Quick Tunnel can forward the public request to its local --url with
-      // the loopback Host rather than the public Host. The controller accepts
-      // only those two exact authorities; never a forwarded-header override.
-      // Every POST still requires the exact browser Origin below, plus the
-      // one-time exchange token or the bound cookie and CSRF as appropriate.
+      // Only a fixed diagnostic code may leave the Agent via status. Never
+      // report/log Host, URL, token, cookies, headers or browser content.
+      const documentGet = req.method === "GET" && (req.url === "/" || req.url?.startsWith("/?"));
       const listener = server.address() as import("node:net").AddressInfo;
       const loopbackHost = `127.0.0.1:${listener.port}`;
-      if (!origin || new URL(origin).protocol !== "https:" || new URL(origin).origin !== origin ||
-          (req.headers.host !== new URL(origin).host && req.headers.host !== loopbackHost) || !valid()) {
+      const originValid = !!origin && new URL(origin).protocol === "https:" && new URL(origin).origin === origin;
+      const hostValid = originValid && (req.headers.host === new URL(origin).host || req.headers.host === loopbackHost);
+      const active = valid();
+      if (!originValid || !hostValid || !active) {
+        if (documentGet) options.diagnostic?.(!hostValid ? "document_denied_host" : "document_denied_inactive");
         req.resume(); reply(res,403,{}); return;
       }
       // Query credentials survive Cloudflare's OTP POST/callback via its signed return_path.
       // Strip immediately in the browser; no external resources or referrers are allowed.
       const controllerPage = req.url === "/" || /^\/\?handoff_token=[A-Za-z0-9_-]{43}$/.test(req.url ?? "");
       if (req.method === "GET" && (controllerPage || req.url === "/controller.js")) {
+        options.diagnostic?.(controllerPage ? "document_served" : "script_served");
         req.resume(); res.writeHead(200,{...headers,"content-type":controllerPage ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8"});
         res.end(controllerPage ? html : js); return;
       }
+      if (documentGet) options.diagnostic?.("document_denied_path");
       if (req.method !== "POST" || req.headers.origin !== origin ||
           req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") {
+        if (req.method === "POST" && req.url === "/exchange") options.diagnostic?.("exchange_denied_origin");
         req.resume(); reply(res,403,{}); return;
       }
       const args = await body(req);
@@ -204,10 +216,10 @@ export async function startHandoffController(options: {
       const authenticated = exchanged && typeof req.headers.cookie === "string" &&
         req.headers.cookie.split(";").some(c => equal(c.trim(),"__Host-handoff="+cookie));
       if (req.url === "/exchange") {
-        if (exchanged || Object.keys(args).length !== 1 || !equal(args.token,token)) { reply(res,403,{}); return; }
+        if (exchanged || Object.keys(args).length !== 1 || !equal(args.token,token)) { options.diagnostic?.("exchange_denied_token"); reply(res,403,{}); return; }
         exchanged = true;
         res.setHeader("set-cookie",`__Host-handoff=${cookie}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.max(0,Math.floor((options.expiresAt-Date.now())/1000))}`);
-        options.connected(); reply(res,200,{csrf}); return;
+        options.connected(); options.diagnostic?.("exchange_completed"); reply(res,200,{csrf}); return;
       }
       if (!authenticated) { reply(res,403,{}); return; }
       if (req.url === "/resume" && Object.keys(args).length === 0) { reply(res,200,{csrf}); return; }

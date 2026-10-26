@@ -12,7 +12,13 @@ export function parseHandoffArguments(tool: string, value: unknown): boolean {
     ? Object.keys(args).length === 1 && typeof args.session_id === "string" && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(args.session_id)
     : (tool === "browser_handoff_status" || tool === "browser_handoff_return") && Object.keys(args).length === 0;
 }
+export type ControllerDiagnostic =
+  | "awaiting_document" | "document_denied_host" | "document_denied_inactive"
+  | "document_denied_path" | "document_served" | "script_served"
+  | "exchange_denied_origin" | "exchange_denied_token" | "exchange_completed"
+  | "callback_path_received";
 export type HandoffStatus = {
+  diagnostic_code?: ControllerDiagnostic;
   state: "ai" | "preparing" | "pending_return" | "link_ready" | "interactive" | "expired";
   remaining_ms: number;
   reason?: string;
@@ -27,6 +33,7 @@ export class BrowserHandoff {
   private epoch = 0;
   private state: HandoffStatus["state"] = "ai";
   private reason?: string;
+  private diagnosticCode?: ControllerDiagnostic;
   private deadline = 0;
   // The URL is never persisted, exposed by status, or returned twice.
   private preparingSessionId?: string;
@@ -71,19 +78,24 @@ export class BrowserHandoff {
     if (this.blocked) void this.stopAccess();
   }
   isBlocked(): boolean { return this.blocked; }
+  /** Only fixed, non-sensitive HTTP lifecycle codes; never Host, path, token or page data. */
+  reportControllerDiagnostic(code: ControllerDiagnostic, generation: number): void {
+    // Delayed responses from a returned controller must never label a new handoff.
+    if (this.epoch === generation && this.blocked && (this.state === "link_ready" || this.state === "interactive")) this.diagnosticCode = code;
+  }
   generation(): number { return this.epoch; }
   status(): HandoffStatus {
     if (this.deadline && Date.now() >= this.deadline && this.blocked) {
       this.state = "expired";
       void this.stopAccess();
     }
-    return { state: this.state, remaining_ms: Math.max(0, this.deadline - Date.now()), ...(this.reason ? {reason:this.reason} : {}) };
+    return { state: this.state, remaining_ms: Math.max(0, this.deadline - Date.now()), ...(this.reason ? {reason:this.reason} : {}), ...(this.blocked && this.diagnosticCode ? {diagnostic_code:this.diagnosticCode} : {}) };
   }
   /** Synchronous entry, before the first await or browser state inspection. */
   begin(sessionId: string): boolean {
     if (this.blocked || this.returning) return false;
     this.blocked = true; this.epoch++; this.state = "preparing"; this.preparing = true;
-    this.preparingSessionId = sessionId; this.unclaimedLink = undefined; this.cancelRequested = false;
+    this.preparingSessionId = sessionId; this.unclaimedLink = undefined; this.cancelRequested = false; this.diagnosticCode = undefined;
     try {
       mkdirSync(this.directory, {recursive:true,mode:0o700});
       this.sealEvidence?.("directory");
@@ -121,7 +133,7 @@ export class BrowserHandoff {
       // Only in-memory, never receipt/marker/Agent logs.
       this.unclaimedLink = { url: link.url, expires_at: deadline };
     }
-    this.access = access; this.deadline = deadline; this.state = "link_ready"; this.reason = undefined; this.preparing = false;
+    this.access = access; this.deadline = deadline; this.state = "link_ready"; this.reason = undefined; this.preparing = false; this.diagnosticCode = "awaiting_document";
   }
   claim(sessionId: string): { url: string; expires_at: number } | undefined {
     // Read status first to expire/close the Tunnel before considering delivery.
@@ -171,7 +183,7 @@ export class BrowserHandoff {
       try { unlinkSync(this.marker); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       this.epoch++; this.blocked = false; this.state = "ai"; this.reason = undefined; this.deadline = 0;
-      this.preparingSessionId = undefined; this.unclaimedLink = undefined; this.cancelRequested = false;
+      this.preparingSessionId = undefined; this.unclaimedLink = undefined; this.cancelRequested = false; this.diagnosticCode = undefined;
       this.access = undefined; this.cleanup = undefined;
     } catch { this.failed("return_unknown"); }
     finally { this.returning = false; }

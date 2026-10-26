@@ -424,3 +424,37 @@ test("explicit return during asynchronous Tunnel setup revokes controller and re
     await engine.close();await rm(root,{recursive:true,force:true});
   }
 });
+
+test("controller diagnostics are scoped to the active handoff and cleared on explicit return",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-diag-"));
+  const handoff=new BrowserHandoff(root);
+  const access={close:async()=> "confirmed" as const};
+  const expires=()=>Date.now()+60_000;
+  try {
+    assert.equal(handoff.status().state,"ai");
+    assert.equal(handoff.status().diagnostic_code,undefined);
+    assert.equal(handoff.begin(randomUUID()),true);
+    const firstGeneration=handoff.generation();
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
+    assert.equal(handoff.status().diagnostic_code,undefined,"not exposed while preparing");
+    handoff.ready(access,expires());
+    assert.equal(handoff.status().diagnostic_code,"awaiting_document");
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
+    assert.equal(handoff.status().diagnostic_code,"document_denied_host");
+    handoff.reportControllerDiagnostic("exchange_completed",firstGeneration);
+    assert.equal(handoff.status().diagnostic_code,"exchange_completed");
+    const returned=await handoff.explicitReturn(async()=>{});
+    assert.equal(returned.state,"ai");
+    assert.equal(returned.diagnostic_code,undefined,"not carried into AI control");
+    assert.equal(handoff.status().diagnostic_code,undefined);
+    assert.equal(handoff.begin(randomUUID()),true);
+    handoff.ready(access,expires());
+    assert.equal(handoff.status().diagnostic_code,"awaiting_document","new handoff has no stale event");
+    const nextGeneration=handoff.generation();
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
+    assert.equal(handoff.status().diagnostic_code,"awaiting_document","late event from prior controller is ignored");
+    handoff.reportControllerDiagnostic("script_served",nextGeneration);
+    assert.equal(handoff.status().diagnostic_code,"script_served");
+    assert.equal((await handoff.explicitReturn(async()=>{})).state,"ai");
+  } finally {await rm(root,{recursive:true,force:true});}
+});
