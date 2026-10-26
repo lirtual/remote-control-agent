@@ -323,6 +323,9 @@ test("unclaimed link never survives expiry, cleanup or process restart",async()=
     assert.equal(session.claim(id)?.url?.includes("SECRET"),true);
     assert.equal(session.claim(id),undefined);
     session.stopAccess();
+    assert.equal(session.status().state,"pending_return","revoked link must not appear ready");
+    session.connected();
+    assert.equal(session.status().state,"pending_return","late local connection cannot re-enable human input");
     assert.equal(session.claim(id),undefined,"revocation destroys unclaimed/claimed links");
     const cleared=await session.explicitReturn(async()=>{});
     assert.equal(cleared.state,"ai");
