@@ -573,8 +573,9 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           // Block first, then allow previously admitted work to settle. Never
           // replay an external browser effect after a transport timeout.
           const drainDeadline=Date.now()+10_000;
-          while (!stopped && (activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
+          while (!stopped && !handoff.preparationCancelled() && (activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
             await new Promise(resolve=>setTimeout(resolve,20));
+          if (stopped || handoff.preparationCancelled()) throw Error("handoff_cancelled");
           const current=options.browser?.status();
           if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
             handoff.failed("in_flight_effect_unknown"); return;
@@ -583,13 +584,13 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
             handoff.failed("browser_session_unavailable"); return;
           }
           await ensureReceipts();
-          if (stopped) throw Error("handoff_stopped");
+          if (stopped || handoff.preparationCancelled()) throw Error("handoff_cancelled");
           if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
             handoff.failed("browser_receipt_unknown"); return;
           }
           const config=options.verifyHandoffPrerequisites?.();
           const deviceId=options.handoffDeviceId?.();
-          if (!config || !deviceId || !options.browser || stopped) throw Error("handoff_prerequisites_unverified");
+          if (!config || !deviceId || !options.browser || stopped || handoff.preparationCancelled()) throw Error("handoff_prerequisites_unverified");
           const access=(options.handoffFactory ?? createManagedHandoff)({
             directory:receipts.directory,config,browser:options.browser,deviceId,sessionId,
             connected:()=>handoff.connected(),
@@ -597,7 +598,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           });
           handoff.attach(access);
           const ready=await access.start();
-          if (stopped) { await handoff.stopAccess(); throw Error("handoff_stopped"); }
+          if (stopped || handoff.preparationCancelled()) { await handoff.stopAccess(); throw Error("handoff_cancelled"); }
           handoff.ready(access,ready.expiresAt,{sessionId,url:ready.url});
         } catch {
           const cleanup=await handoff.stopAccess();
