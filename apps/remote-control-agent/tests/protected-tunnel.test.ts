@@ -48,7 +48,7 @@ async function fixture(controllerGate?: Promise<void>) {
   const directory=await mkdtemp(path.join(os.tmpdir(),"managed-handoff-"));
   const sessionId=randomUUID(),deviceId=randomUUID();
   let controllerOptions!:Parameters<typeof startHandoffController>[0];
-  let localClosed=false,kills=0,allowExit=true,publicProof=true,confirmed=true;
+  let localClosed=false,kills=0,allowExit=true,publicProof=true,confirmed=true,networkFailures=0;
   const child=Object.assign(new EventEmitter(),{pid:1234,exitCode:null as number|null,signalCode:null as string|null,
     stdout:new PassThrough(),stderr:new PassThrough(),kill:()=>{
       kills++;
@@ -68,12 +68,13 @@ async function fixture(controllerGate?: Promise<void>) {
       const parsed=new URL(String(url));
       if(parsed.protocol==="http:")return Response.json({probe:controllerOptions.readinessProbe,device_id:deviceId,session_id:sessionId});
       assert.equal(init?.credentials,"omit");
+      if(networkFailures>0) {networkFailures--;throw Error("temporary DNS propagation failure");}
       if(!publicProof)return new Response(null,{status:302,headers:{location:"https://evil.test/login"}});
       return init?.method==="POST" ? new Response(null,{status:401}) : challenge(parsed.pathname);
     }) as typeof fetch,
   });
   return {directory,access,child,args:()=>args,controller:()=>controllerOptions,kills:()=>kills,localClosed:()=>localClosed,
-    unknown:()=>{confirmed=false;},noExit:()=>{allowExit=false;},badProof:()=>{publicProof=false;}};
+    unknown:()=>{confirmed=false;},noExit:()=>{allowExit=false;},badProof:()=>{publicProof=false;},transient:(n:number)=>{networkFailures=n;}};
 }
 test("managed tunnel proves local and public protection before enabling; secrets never persist",async()=>{
   const f=await fixture();
@@ -88,6 +89,16 @@ test("managed tunnel proves local and public protection before enabling; secrets
     const closed=f.access.close();assert.equal(f.controller().active(),false);assert.equal(f.localClosed(),true);
     assert.equal(await closed,"confirmed");assert.equal(f.kills(),1);assert.equal(await f.access.close(),"confirmed");
     await assert.rejects(readFile(path.join(f.directory,CHILD_MARKER)));
+  } finally {await f.access.close();await rm(f.directory,{recursive:true,force:true});}
+});
+test("new Quick Tunnel tolerates initial DNS failures but still requires protected GET and POST",async()=>{
+  const f=await fixture();f.transient(8);
+  try {
+    const result=await f.access.start();
+    assert.equal(result.url,origin+"/?handoff_token=secret");
+    assert.equal(f.controller().active(),true);
+    assert.equal(await f.access.close(),"confirmed");
+    assert.equal(f.kills(),1);
   } finally {await f.access.close();await rm(f.directory,{recursive:true,force:true});}
 });
 test("untrusted public redirects never enable the controller and cleanup confirms child exit",async()=>{

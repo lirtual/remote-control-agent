@@ -292,20 +292,29 @@ export function createManagedHandoff(options: {
     if (!child.pid) throw Error("tunnel_spawn_failed");
     origin=await found; check();
     let proven=false;
-    for (let attempt=0;attempt<6;attempt++) {
+    // Newly created trycloudflare.com names can take time to become reachable.
+    // Wait only a bounded interval; never enable input before both protections prove.
+    const readinessDeadline=Math.min(expiresAt,Date.now()+35_000);
+    for (let attempt=0;attempt<30 && Date.now()<readinessDeadline;attempt++) {
       check();
+      let unsafeProtection=false;
       try {
-        const response=await runtime.send(origin+probePath,{redirect:"manual",credentials:"omit",signal:AbortSignal.timeout(5000)});
+        const timeout=()=>AbortSignal.timeout(Math.max(1,Math.min(5000,readinessDeadline-Date.now())));
+        const response=await runtime.send(origin+probePath,{redirect:"manual",credentials:"omit",signal:timeout()});
         proven=isProtectedChallenge(response,origin,probePath);
+        // An actual unauthenticated HTTP response is not a DNS propagation error.
+        if (!proven && response.status<500) unsafeProtection=true;
         if (proven) {
-          const unsafe=await runtime.send(origin+probePath,{method:"POST",redirect:"manual",credentials:"omit",signal:AbortSignal.timeout(5000)});
+          const unsafe=await runtime.send(origin+probePath,{method:"POST",redirect:"manual",credentials:"omit",signal:timeout()});
           proven=unsafe.status===401;
+          if (!proven && unsafe.status<500) unsafeProtection=true;
           await unsafe.body?.cancel();
         }
         await response.body?.cancel();
       } catch { proven=false; }
-      if(proven)break;
-      await new Promise(resolve=>setTimeout(resolve,500));
+      if (proven || unsafeProtection) break;
+      const remaining=readinessDeadline-Date.now();
+      if (remaining>0) await new Promise(resolve=>setTimeout(resolve,Math.min(1000,remaining)));
     }
     check();
     if (!proven || options.browser.status()?.session_id !== options.sessionId || Date.now()>=expiresAt) throw Error("protected_tunnel_challenge_unverified");
