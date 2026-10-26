@@ -79,8 +79,9 @@ export class BrowserHandoff {
   }
   isBlocked(): boolean { return this.blocked; }
   /** Only fixed, non-sensitive HTTP lifecycle codes; never Host, path, token or page data. */
-  reportControllerDiagnostic(code: ControllerDiagnostic): void {
-    if (this.blocked && (this.state === "link_ready" || this.state === "interactive")) this.diagnosticCode = code;
+  reportControllerDiagnostic(code: ControllerDiagnostic, generation: number): void {
+    // Delayed responses from a returned controller must never label a new handoff.
+    if (this.epoch === generation && this.blocked && (this.state === "link_ready" || this.state === "interactive")) this.diagnosticCode = code;
   }
   generation(): number { return this.epoch; }
   status(): HandoffStatus {

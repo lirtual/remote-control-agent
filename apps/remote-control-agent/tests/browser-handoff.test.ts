@@ -434,13 +434,14 @@ test("controller diagnostics are scoped to the active handoff and cleared on exp
     assert.equal(handoff.status().state,"ai");
     assert.equal(handoff.status().diagnostic_code,undefined);
     assert.equal(handoff.begin(randomUUID()),true);
-    handoff.reportControllerDiagnostic("document_denied_host");
+    const firstGeneration=handoff.generation();
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
     assert.equal(handoff.status().diagnostic_code,undefined,"not exposed while preparing");
     handoff.ready(access,expires());
     assert.equal(handoff.status().diagnostic_code,"awaiting_document");
-    handoff.reportControllerDiagnostic("document_denied_host");
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
     assert.equal(handoff.status().diagnostic_code,"document_denied_host");
-    handoff.reportControllerDiagnostic("exchange_completed");
+    handoff.reportControllerDiagnostic("exchange_completed",firstGeneration);
     assert.equal(handoff.status().diagnostic_code,"exchange_completed");
     const returned=await handoff.explicitReturn(async()=>{});
     assert.equal(returned.state,"ai");
@@ -449,6 +450,11 @@ test("controller diagnostics are scoped to the active handoff and cleared on exp
     assert.equal(handoff.begin(randomUUID()),true);
     handoff.ready(access,expires());
     assert.equal(handoff.status().diagnostic_code,"awaiting_document","new handoff has no stale event");
+    const nextGeneration=handoff.generation();
+    handoff.reportControllerDiagnostic("document_denied_host",firstGeneration);
+    assert.equal(handoff.status().diagnostic_code,"awaiting_document","late event from prior controller is ignored");
+    handoff.reportControllerDiagnostic("script_served",nextGeneration);
+    assert.equal(handoff.status().diagnostic_code,"script_served");
     assert.equal((await handoff.explicitReturn(async()=>{})).state,"ai");
   } finally {await rm(root,{recursive:true,force:true});}
 });

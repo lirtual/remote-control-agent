@@ -565,6 +565,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         const link=handoff.claim(sessionId);
         return {status:200,body:{...handoff.status(),...(link ?? {})}};
       }
+      const handoffGeneration = handoff.generation();
       // First call must return immediately: ChatGPT/MCP ingress may time out
       // before the bounded 90s Cloudflare challenge finishes. The device-wide
       // barrier and durable marker were written synchronously by begin().
@@ -594,7 +595,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           const access=(options.handoffFactory ?? createManagedHandoff)({
             directory:receipts.directory,config,browser:options.browser,deviceId,sessionId,
             connected:()=>handoff.connected(),
-            diagnostic:code=>handoff.reportControllerDiagnostic(code),
+            diagnostic:code=>handoff.reportControllerDiagnostic(code,handoffGeneration),
             explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal),
           });
           handoff.attach(access);
