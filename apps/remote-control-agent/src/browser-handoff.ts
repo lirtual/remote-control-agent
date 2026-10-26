@@ -155,7 +155,10 @@ export class BrowserHandoff {
       this.epoch++; this.blocked = false; this.state = "ai"; this.reason = undefined; this.deadline = 0;
       this.access = undefined; this.cleanup = undefined; this.preparation = undefined;
       this.sessionId = undefined; this.unclaimedUrl = undefined;
-    } catch { this.failed("return_unknown"); }
+    } catch {
+      this.reason = "return_unknown"; this.state = "pending_return";
+      this.unclaimedUrl = undefined;
+    }
     finally { this.returning = false; }
     return this.status();
   }
