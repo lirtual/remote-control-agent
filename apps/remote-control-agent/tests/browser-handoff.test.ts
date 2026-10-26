@@ -292,11 +292,13 @@ test("two-phase handoff returns immediately; correct session claims URL once, ne
     assert.equal(JSON.stringify(wrong).includes(token),false,"other browser session cannot steal a link");
     const status=await call("browser_handoff_status");
     assert.equal(JSON.stringify(status).includes(token),false);
-    const claimed=await call("browser_handoff_request",{session_id:f.id});
+    const [claimed,replay]=await Promise.all([
+      call("browser_handoff_request",{session_id:f.id}),
+      call("browser_handoff_request",{session_id:f.id}),
+    ]);
     assert.equal((claimed?.body as {url?:string}).url,link);
     assert.equal((claimed?.body as {expires_at?:number}).expires_at,deadline);
-    const replay=await call("browser_handoff_request",{session_id:f.id});
-    assert.equal((replay?.body as {url?:string}).url,undefined,"one-shot link cannot be replayed");
+    assert.equal((replay?.body as {url?:string}).url,undefined,"concurrent claim cannot replay the one-shot link");
     assert.equal(JSON.stringify(await call("browser_handoff_status")).includes(token),false);
     const returned=await call("browser_handoff_return");
     assert.equal((returned?.body as {state:string}).state,"ai");
@@ -330,4 +332,24 @@ test("unclaimed link never survives expiry, cleanup or process restart",async()=
     assert.equal(restored.isBlocked(),true,"a restarted Agent must not restore the link");
     assert.equal(restored.claim(id),undefined);
   } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("shutdown during detached setup joins all background work before deleting the receipt store",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-prepare-shutdown-"));
+  const f=browserFixture();
+  let factoryCalled=0;
+  const engine=createAgentExecutionEngine({
+    receiptDirectory:root,browser:f.browser,
+    verifyHandoffPrerequisites:()=>({}) as never,
+    handoffDeviceId:()=>randomUUID(),
+    handoffFactory:(()=>{factoryCalled++;throw Error("start after shutdown");}) as never,
+  });
+  try {
+    const initial=await engine.executeTool({tool:"browser_handoff_request",arguments:{session_id:f.id}},signal());
+    assert.equal((initial?.body as {state:string}).state,"preparing");
+    await engine.close();
+    assert.equal(factoryCalled,0,"shutdown must stop async preparation before it spawns a Tunnel");
+    const restarted=new BrowserHandoff(root);
+    assert.equal(restarted.isBlocked(),true,"restarted Agent still requires explicit cleanup");
+  } finally {await engine.close();await rm(root,{recursive:true,force:true});}
 });
