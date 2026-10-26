@@ -353,3 +353,69 @@ test("shutdown during detached setup joins all background work before deleting t
     assert.equal(restarted.isBlocked(),true,"restarted Agent still requires explicit cleanup");
   } finally {await engine.close();await rm(root,{recursive:true,force:true});}
 });
+
+test("explicit return while preparing cancels before startup; no new link can appear",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-cancel-before-launch-"));
+  const f=browserFixture();
+  let release!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(r=>{release=r;});
+  const started=new Promise<void>(r=>{entered=r;});
+  f.browser.snapshot=async()=>{entered();await gate;return {text:"PRIVATE",truncated:false,snapshot_version:3};};
+  let factoryStarts=0;
+  const engine=createAgentExecutionEngine({
+    receiptDirectory:root,browser:f.browser,
+    verifyHandoffPrerequisites:()=>({}) as never,
+    handoffDeviceId:()=>randomUUID(),
+    handoffFactory:(()=>{factoryStarts++;throw Error("cancelled preparation created a tunnel");}) as never,
+  });
+  const call=(tool:string,args:unknown={})=>engine.executeTool({tool,arguments:args},signal());
+  try{
+    const reading=call("browser_snapshot",{session_id:f.id});await started;
+    const first=await call("browser_handoff_request",{session_id:f.id});
+    assert.equal((first?.body as {state:string}).state,"preparing");
+    const cancel=await call("browser_handoff_return");
+    assert.equal((cancel?.body as {state:string}).state,"pending_return");
+    assert.equal(engine.handoffBlocked(),true);
+    release();await reading;
+    await waitFor(async()=>((await call("browser_handoff_status"))?.body as {reason?:string}).reason==="protected_tunnel_readiness_unverified");
+    assert.equal(factoryStarts,0,"owner cancellation before launch must not spawn a tunnel");
+    assert.equal((await call("browser_handoff_request",{session_id:f.id}))?.body != null,true);
+    assert.equal((await call("browser_handoff_return"))?.body != null,true);
+    assert.equal(((await call("browser_handoff_status"))?.body as {state:string}).state,"ai");
+  } finally{release();await engine.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("explicit return during asynchronous Tunnel setup revokes controller and rejects late readiness",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-cancel-after-launch-"));
+  const f=browserFixture();
+  let resolveSetup!: (value:{url:string;expiresAt:number})=>void,entered!:()=>void;
+  const setup=new Promise<{url:string;expiresAt:number}>(r=>{resolveSetup=r;});
+  const started=new Promise<void>(r=>{entered=r;});
+  let closes=0;
+  const engine=createAgentExecutionEngine({
+    receiptDirectory:root,browser:f.browser,
+    verifyHandoffPrerequisites:()=>({}) as never,
+    handoffDeviceId:()=>randomUUID(),
+    handoffFactory:(()=>({
+      start:()=>{entered();return setup;},
+      close:async()=>{closes++;return "confirmed" as const;}
+    })) as never,
+  });
+  const call=(tool:string,args:unknown={})=>engine.executeTool({tool,arguments:args},signal());
+  try{
+    assert.equal(((await call("browser_handoff_request",{session_id:f.id}))?.body as {state:string}).state,"preparing");
+    await started;
+    const cancelled=await call("browser_handoff_return");
+    assert.equal((cancelled?.body as {state:string}).state,"pending_return");
+    assert.equal(closes,1,"cancel must immediately revoke attached local controller");
+    resolveSetup({url:"https://fake.trycloudflare.com/?handoff_token=DO_NOT_LEAK",expiresAt:Date.now()+90000});
+    await waitFor(async()=>((await call("browser_handoff_status"))?.body as {reason?:string}).reason==="protected_tunnel_readiness_unverified");
+    assert.equal(JSON.stringify(await call("browser_handoff_request",{session_id:f.id})).includes("DO_NOT_LEAK"),false);
+    const result=await call("browser_handoff_return");
+    assert.equal((result?.body as {state:string}).state,"ai");
+    assert.equal(closes,1);
+  } finally{
+    resolveSetup({url:"https://invalid.trycloudflare.com/",expiresAt:Date.now()+5000});
+    await engine.close();await rm(root,{recursive:true,force:true});
+  }
+});
