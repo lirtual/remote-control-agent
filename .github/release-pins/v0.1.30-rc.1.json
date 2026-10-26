@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.30-rc.1",
+  "source_sha": "6a8c76907441d97cf69aebfbeb78194712fcdbfd",
+  "candidate_run_id": 40331866688,
+  "release_title": "Remote Control Agent v0.1.30-rc.1 — Quick Tunnel OTP callback failure diagnostics",
+  "release_notes": "docs/releases/v0.1.30-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.30-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.30-rc.1-ubuntu-24.04",
+      "sha256": "487e120fb563e6f5b4ca4aa078df99e46e11ef80d0d4ac74222c05db1cba973c"
+    },
+    {
+      "name": "remote-control-agent-v0.1.30-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.30-rc.1-ubuntu-24.04-arm",
+      "sha256": "84f9a3230ea2881569fc02ce3f61f8fb07c28d942b829f4997e8c8cb2ea55349"
+    },
+    {
+      "name": "remote-control-agent-v0.1.30-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.30-rc.1-windows-x64",
+      "sha256": "ddeb12e87e56ca1b43141df1da9b6d52af5fda53cc3233d7cb288cdba5084da6"
+    }
+  ]
+}
