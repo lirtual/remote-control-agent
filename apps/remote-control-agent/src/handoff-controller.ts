@@ -150,7 +150,7 @@ export async function startHandoffController(options: {
   let pending: Promise<void> | undefined;
   const valid = () => {
     if (Date.now() >= options.expiresAt || performance.now() >= expiresMonotonic ||
-        options.browser.status()?.session_id !== options.sessionId || (options.browser.status()?.uncertain && !pending)) closed=true;
+        options.browser.status()?.session_id !== options.sessionId) closed=true;
     return !closed && options.active();
   };
   const headers = {
