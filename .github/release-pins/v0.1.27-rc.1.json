@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.27-rc.1",
+  "source_sha": "fb82fb4bb6ce06873059c00d5619ff78080a67c2",
+  "candidate_run_id": 40298877278,
+  "release_title": "Remote Control Agent v0.1.27-rc.1 — Two-Phase Protected Browser Handoff",
+  "release_notes": "docs/releases/v0.1.27-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.27-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.27-rc.1-ubuntu-24.04",
+      "sha256": "3e838dfeb5ceb6970bbeb9f70dadf0817a37b4bf6daa46c930bbaa37e25681f6"
+    },
+    {
+      "name": "remote-control-agent-v0.1.27-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.27-rc.1-ubuntu-24.04-arm",
+      "sha256": "d0dab0ed5e9c2df2fbdca1ed20c09259426a3cfae94f6dcedce14fa80948f9fc"
+    },
+    {
+      "name": "remote-control-agent-v0.1.27-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.27-rc.1-windows-x64",
+      "sha256": "5aa1a2061c615eb646a055a208e176924519e08ee6586dd73ebc5f2b08156267"
+    }
+  ]
+}
