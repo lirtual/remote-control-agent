@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.26-rc.1",
+  "source_sha": "98fa47e9b1e3a54f86b09a7fb875956e7f1dc5d9",
+  "candidate_run_id": 40291200572,
+  "release_title": "Remote Control Agent v0.1.26-rc.1 — Protected Browser Handoff",
+  "release_notes": "docs/releases/v0.1.26-rc.1.md",
+  "assets": [
+    {
+      "name": "remote-control-agent-v0.1.26-rc.1-linux-x64-glibc.tar.gz",
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.26-rc.1-ubuntu-24.04",
+      "sha256": "5e6193005ffe59bb01eeb66705426ccbc97e551cfe235ea09c9b41bb73d9c1da"
+    },
+    {
+      "name": "remote-control-agent-v0.1.26-rc.1-linux-arm64-glibc.tar.gz",
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.26-rc.1-ubuntu-24.04-arm",
+      "sha256": "9270f05ca0de2184a249ecca18496e900fb221e9af0bbc5bb2e779d31fc1b1b7"
+    },
+    {
+      "name": "remote-control-agent-v0.1.26-rc.1-windows-x64.zip",
+      "target": "windows-x64",
+      "artifact": "v0.1.26-rc.1-windows-x64",
+      "sha256": "d532d97cd8f22c622809b562e8622d5de1eecb5271cf2d6e7cfe65782a04657b"
+    }
+  ]
+}
