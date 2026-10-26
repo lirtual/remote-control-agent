@@ -93,6 +93,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   let activeCalls = 0;
   let upgradeFrozen = false;
   let stopped = false;
+  // Detached preparation must join shutdown before SQLite receipts are closed.
+  let handoffPreparation: Promise<void> | undefined;
   const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
@@ -566,12 +568,12 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       // First call must return immediately: ChatGPT/MCP ingress may time out
       // before the bounded 90s Cloudflare challenge finishes. The device-wide
       // barrier and durable marker were written synchronously by begin().
-      void (async () => {
+      const preparation=(async () => {
         try {
           // Block first, then allow previously admitted work to settle. Never
           // replay an external browser effect after a transport timeout.
           const drainDeadline=Date.now()+10_000;
-          while ((activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
+          while (!stopped && (activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
             await new Promise(resolve=>setTimeout(resolve,20));
           const current=options.browser?.status();
           if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
@@ -602,6 +604,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           handoff.failed(cleanup==="confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
         }
       })().catch(()=>handoff.failed("cleanup_unknown"));
+      handoffPreparation=preparation;
+      void preparation.then(()=>{ if (handoffPreparation===preparation) handoffPreparation=undefined; });
       return {status:200,body:handoff.status()};
     }
     if (stopped) return {status:503,body:{status:"failed"}};
@@ -650,6 +654,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       // Operations already admitted before the tombstone may still be
       // starting a supervised process: never overclaim complete cleanup.
       const accessOutcome = await handoff.stopAccess();
+      await handoffPreparation;
       const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false) || accessOutcome !== "confirmed";
       let browserOutcome: "confirmed" | "uncertain" = "confirmed";
       const active = options.browser?.status();
@@ -666,6 +671,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     close: async () => {
       stopped = true;
       await handoff.stopAccess();
+      await handoffPreparation;
       await searches.close();
       // Agent shutdown must not leave an owned Chromium behind merely because
       // a page navigation holds the ordinary browser operation mutex.
