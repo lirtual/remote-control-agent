@@ -9,6 +9,21 @@ const secret = () => Buffer.from(randomBytes(32)).toString("base64url");
 function equal(a: unknown, b: string): boolean {
   return typeof a === "string" && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
+/** A protected OTP return may append inert query metadata to the original
+ * path. Serve the document only for the exact, active 256-bit handoff token;
+ * extra bounded parameters are discarded client-side before any resource loads.
+ */
+export function isControllerDocumentPath(target: string | undefined, expectedToken: string): boolean {
+  if (target === "/") return true; // Existing cookie-authenticated resume page.
+  if (!target || target.length > 512 || !target.startsWith("/?")) return false;
+  try {
+    const url = new URL(target, "https://handoff.invalid");
+    if (url.pathname !== "/" || url.hash || url.searchParams.size > 4) return false;
+    const tokens = url.searchParams.getAll("handoff_token");
+    return tokens.length === 1 && equal(tokens[0], expectedToken);
+  } catch { return false; }
+}
+
 export function parseHumanAction(raw: unknown): HumanBrowserAction | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const a = raw as Record<string, unknown>;
@@ -199,13 +214,20 @@ export async function startHandoffController(options: {
       }
       // Query credentials survive Cloudflare's OTP POST/callback via its signed return_path.
       // Strip immediately in the browser; no external resources or referrers are allowed.
-      const controllerPage = req.url === "/" || /^\/\?handoff_token=[A-Za-z0-9_-]{43}$/.test(req.url ?? "");
+      const controllerPage = req.method === "GET" && isControllerDocumentPath(req.url, token);
       if (req.method === "GET" && (controllerPage || req.url === "/controller.js")) {
         options.diagnostic?.(controllerPage ? "document_served" : "script_served");
         req.resume(); res.writeHead(200,{...headers,"content-type":controllerPage ? "text/html; charset=utf-8" : "text/javascript; charset=utf-8"});
         res.end(controllerPage ? html : js); return;
       }
-      if (documentGet) options.diagnostic?.("document_denied_path");
+      if (documentGet) {
+        // A fixed result identifies whether the OTP return lost the bearer token.
+        // Never disclose the actual query, path, credentials or tracking values.
+        let tokenMissing=false;
+        try { tokenMissing=!new URL(req.url!, "https://handoff.invalid").searchParams.has("handoff_token"); }
+        catch { /* Preserve generic denial for an invalid request target. */ }
+        options.diagnostic?.(tokenMissing ? "document_denied_token_missing" : "document_denied_path");
+      }
       if (req.method !== "POST" || req.headers.origin !== origin ||
           req.headers["sec-fetch-site"] && req.headers["sec-fetch-site"] !== "same-origin") {
         if (req.method === "POST" && req.url === "/exchange") options.diagnostic?.("exchange_denied_origin");

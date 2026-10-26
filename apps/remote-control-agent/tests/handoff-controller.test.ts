@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { request } from "node:http";
 import test from "node:test";
-import { parseHumanAction, startHandoffController } from "../src/handoff-controller.ts";
+import { isControllerDocumentPath, parseHumanAction, startHandoffController } from "../src/handoff-controller.ts";
 import type { BrowserBackend } from "../src/browser-backend.ts";
 
 const origin="https://handoff.example.test";
@@ -66,6 +66,20 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
       assert.match(page.headers.get("content-type")??"",/^text\/html/);
       assert.match(await page.text(),/Browser handoff/);
       assert.equal(diagnostics.at(-1),"document_served");
+      for (const postOtpReturn of [
+        url+"&utm_source=chatgpt.com",
+        "/?utm_source=chatgpt.com&handoff_token="+controller.token,
+        "/?handoff_token="+controller.token+"&tracking=opaque",
+      ]) {
+        const redirected=await forwardedGet(controller.port,postOtpReturn,authority);
+        assert.equal(redirected.status,200,"valid current token must survive inert OTP return query metadata");
+        assert.match(redirected.headers.get("content-type")??"",/^text\/html/);
+        const html=await redirected.text();
+        assert.match(html,/Browser handoff/);
+        assert.doesNotMatch(html,/chatgpt\.com|tracking=opaque|handoff_token=/,
+          "HTML must never reflect return query metadata or the bearer token");
+        assert.equal(diagnostics.at(-1),"document_served");
+      }
       const script=await forwardedGet(controller.port,"/controller.js",authority);
       assert.equal(script.status,200);
       assert.match(await script.text(),/\/(?:exchange|resume)/);
@@ -75,6 +89,18 @@ test("iOS OTP return renders the controller through a strictly bounded loopback 
     assert.equal(diagnostics.at(-1),"document_denied_host");
     assert.equal((await forwardedGet(controller.port,"/bad?handoff_token="+controller.token)).status,403);
     assert.equal((await forwardedGet(controller.port,"/?handoff_token=WRONG")).status,403);
+    for (const rejected of [
+      "/?utm_source=chatgpt.com",
+      "/?handoff_token="+controller.token+"&handoff_token="+controller.token,
+      "/?handoff%5Ftoken="+controller.token+"&handoff_token="+controller.token,
+      "/?handoff_token="+controller.token+"&q="+("z".repeat(500)),
+      "/?handoff_token="+controller.token+"&a=1&b=2&c=3&d=4",
+    ]) {
+      assert.equal((await forwardedGet(controller.port,rejected)).status,403,
+        "extra query cannot bypass exact one-token, count, and length constraints");
+      if (rejected === "/?utm_source=chatgpt.com")
+        assert.equal(diagnostics.at(-1),"document_denied_token_missing","detect token stripped by OTP return");
+    }
     assert.equal(diagnostics.at(-1),"document_denied_path");
     // An untrusted POST Origin may never exchange the token even via localhost.
     const localHost={host:`127.0.0.1:${controller.port}`};
@@ -179,4 +205,20 @@ test("absolute expiry latches even if the wall clock moves backwards",async()=>{
     Date.now=now;
     assert.equal((await forwardedPost(controller.port,"/exchange",{token:controller.token})).status,403);
   } finally {Date.now=now;await controller.close();}
+});
+
+test("controller return-path parser is rooted, bounded, and tied to one exact token",()=>{
+  const token="A".repeat(42)+"_";
+  assert.equal(isControllerDocumentPath("/",token),true);
+  assert.equal(isControllerDocumentPath("/?handoff_token="+token,token),true);
+  assert.equal(isControllerDocumentPath("/?utm_source=chatgpt.com&handoff_token="+token,token),true);
+  assert.equal(isControllerDocumentPath("/?handoff_token="+token+"&utm_medium=chat",token),true);
+  for (const target of [
+    undefined, "", "/subpath?handoff_token="+token,
+    "//evil.test/?handoff_token="+token, "https://evil.test/?handoff_token="+token,
+    "/?utm_source=chatgpt.com", "/?handoff_token="+("B".repeat(43)),
+    "/?handoff_token="+token+"&handoff_token="+token,
+    "/?handoff_token="+token+"&a=1&b=2&c=3&d=4",
+    "/?handoff_token="+token+"&a="+("x".repeat(501)),
+  ]) assert.equal(isControllerDocumentPath(target,token),false,String(target));
 });
