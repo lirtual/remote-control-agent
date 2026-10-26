@@ -542,7 +542,10 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       if (body.tool === "browser_handoff_status") return {status:200,body:handoff.status()};
       if (body.tool === "browser_handoff_return") {
         return {status:200,body:await handoff.explicitReturn(async () => {
-          if (activeCalls || browser?.hasPending() || inFlight.size || options.browser?.status()?.uncertain) throw Error("Effects still pending or unknown.");
+          if (activeCalls || browser?.hasPending() || inFlight.size) throw Error("Effects still pending.");
+          // Once the human controller has been revoked and all input has settled,
+          // explicit owner return may reconcile an uncertain human input without
+          // replaying it. Invalidation forces a new tab list and fresh snapshot.
           if (options.browser?.status() && !options.browser.invalidateHandoffReferences) throw Error("Reference invalidation unavailable.");
           await options.browser?.invalidateHandoffReferences?.();
           await searches.close();
