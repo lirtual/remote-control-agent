@@ -88,6 +88,7 @@ test("in-flight browser observation drains but its result is discarded; return i
     release();
     assert.equal((await delayed)?.status,423);
     await request;
+    await waitFor(async()=>((await engine.executeTool({tool:"browser_handoff_status",arguments:{}},signal()))?.body as {state:string}).state==="pending_return");
     const returned=await engine.executeTool({tool:"browser_handoff_return",arguments:{}},signal());
     assert.equal((returned?.body as {state:string}).state,"ai");
     assert.equal(f.invalidated(),1);
@@ -107,6 +108,7 @@ test("explicit owner return reconciles a settled unknown human input without rep
     // A Playwright human input already settled with an unknown external effect.
     // Owner return MUST NOT issue a second browser input.
     f.state.uncertain=true;
+    await waitFor(async()=>((await call("browser_handoff_status"))?.body as {state:string}).state==="pending_return");
     const result=await call("browser_handoff_return");
     assert.equal((result?.body as {state:string}).state,"ai");
     assert.equal(f.invalidated(),1);
@@ -181,6 +183,7 @@ test("signed WSS public seam blocks files/processes and redacts delayed replies 
     assert.equal(mutation.result.status,"unavailable");
     assert.equal(await engine.getReceipt("handoff-denied-command"),null);
     assert.equal((await socket.call({kind:"read",tool:"browser_handoff_status",arguments:{}})).status,"completed");
+    await waitFor(async()=>((await engine.executeTool({tool:"browser_handoff_status",arguments:{}},signal()))?.body as {state:string}).state==="pending_return");
     assert.equal((await socket.call({kind:"read",tool:"browser_handoff_return",arguments:{}})).status,"completed");
     assert.equal(engine.handoffBlocked(),false);
   } finally {release();abort.abort();await monitored;await engine.close();await rm(root,{recursive:true,force:true});}
