@@ -429,6 +429,11 @@ export class PlaywrightBrowserManager implements BrowserBackend {
       const pages = [...this.pages.values()].filter(page => !page.isClosed());
       this.ids.clear(); this.pages.clear(); this.selectedTabId = null;
       for (const page of pages) this.register(page);
+      // Explicit owner return occurs only after the human controller has been
+      // revoked and its input has settled. An unsuccessful Playwright input may
+      // have changed the page; acknowledge its uncertainty WITHOUT replaying it.
+      // Require the AI to re-list tabs and take a fresh observation instead.
+      this.uncertain = false;
       // A caller must explicitly list/select tabs and obtain a fresh snapshot.
     });
   }
