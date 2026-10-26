@@ -32,6 +32,9 @@ export class BrowserHandoff {
   private cleanup?: Promise<"confirmed" | "uncertain">;
   private preparing = false;
   private returning = false;
+  private sessionId?: string;
+  private unclaimedUrl?: string;
+  private preparation?: Promise<void>;
   private readonly directory: string;
   private readonly sealEvidence?: (kind: "directory" | "pending") => void;
   constructor(directory: string, sealEvidence?: (kind: "directory" | "pending") => void) {
@@ -71,6 +74,7 @@ export class BrowserHandoff {
   status(): HandoffStatus {
     if (this.deadline && Date.now() >= this.deadline && this.blocked) {
       this.state = "expired";
+      this.unclaimedUrl = undefined;
       void this.stopAccess();
     }
     return { state: this.state, remaining_ms: Math.max(0, this.deadline - Date.now()), ...(this.reason ? {reason:this.reason} : {}) };
@@ -79,6 +83,7 @@ export class BrowserHandoff {
   begin(sessionId: string): boolean {
     if (this.blocked || this.returning) return false;
     this.blocked = true; this.epoch++; this.state = "preparing"; this.preparing = true;
+    this.sessionId = sessionId; this.unclaimedUrl = undefined;
     try {
       mkdirSync(this.directory, {recursive:true,mode:0o700});
       this.sealEvidence?.("directory");
@@ -100,13 +105,33 @@ export class BrowserHandoff {
     }
     return true;
   }
-  failed(reason: string): void { this.reason = reason; this.state = "pending_return"; this.preparing = false; }
-  attach(access: HumanAccess): void { this.access = access; }
-  ready(access: HumanAccess, deadline: number): void {
-    this.access = access; this.deadline = deadline; this.state = "link_ready"; this.reason = undefined; this.preparing = false;
+  isPreparing(): boolean { return this.blocked && this.preparing && !this.returning; }
+  trackPreparation(work: Promise<void>): void { this.preparation = work; }
+  failed(reason: string): void {
+    if (this.returning || !this.blocked) return;
+    this.reason = reason; this.state = "pending_return"; this.preparing = false;
+    this.unclaimedUrl = undefined;
+  }
+  attach(access: HumanAccess): void {
+    if (!this.isPreparing()) throw Error("handoff_cancelled");
+    this.access = access;
+  }
+  ready(access: HumanAccess, deadline: number, url: string): void {
+    if (!this.isPreparing()) throw Error("handoff_cancelled");
+    this.access = access; this.deadline = deadline; this.unclaimedUrl = url;
+    this.state = "link_ready"; this.reason = undefined; this.preparing = false;
+  }
+  /** Claim is one-shot, bound to the originally requested browser session. */
+  claim(sessionId: string): HandoffStatus & {url?: string; expires_at?: number} {
+    const status = this.status();
+    if (status.state !== "link_ready" || this.sessionId !== sessionId || !this.unclaimedUrl) return status;
+    const url = this.unclaimedUrl;
+    this.unclaimedUrl = undefined; // Consume before any WSS/connector await.
+    return {...status,url,expires_at:this.deadline};
   }
   connected(): void { if (this.blocked && Date.now() < this.deadline) this.state = "interactive"; }
   stopAccess(): Promise<"confirmed" | "uncertain"> {
+    this.unclaimedUrl = undefined;
     if (!this.cleanup) {
       try { this.cleanup = (this.access?.close() ?? cleanupOrphanTunnel(this.directory)).catch(() => "uncertain"); }
       catch { this.cleanup = Promise.resolve("uncertain"); }
@@ -115,16 +140,21 @@ export class BrowserHandoff {
   }
   async explicitReturn(invalidate: () => Promise<void>): Promise<HandoffStatus> {
     if (!this.blocked) return this.status();
-    if (this.preparing || this.returning) { this.reason = "lifecycle_busy"; return this.status(); }
-    this.returning = true;
+    if (this.returning) { this.reason = "lifecycle_busy"; return this.status(); }
+    // Synchronously revoke pending admission. Background preparation observes
+    // this flag after every await and cannot subsequently publish an entry URL.
+    this.returning = true; this.preparing = false; this.unclaimedUrl = undefined;
     try {
-      if (await this.stopAccess() !== "confirmed") { this.failed("cleanup_unknown"); return this.status(); }
+      const stopped = this.stopAccess();
+      await this.preparation?.catch(() => {});
+      if (await stopped !== "confirmed") { this.reason = "cleanup_unknown"; this.state = "pending_return"; return this.status(); }
       await invalidate();
       // A damaged store is never treated as a successful explicit return.
       try { unlinkSync(this.marker); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       this.epoch++; this.blocked = false; this.state = "ai"; this.reason = undefined; this.deadline = 0;
-      this.access = undefined; this.cleanup = undefined;
+      this.access = undefined; this.cleanup = undefined; this.preparation = undefined;
+      this.sessionId = undefined; this.unclaimedUrl = undefined;
     } catch { this.failed("return_unknown"); }
     finally { this.returning = false; }
     return this.status();
