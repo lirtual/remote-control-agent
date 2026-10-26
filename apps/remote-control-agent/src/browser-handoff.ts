@@ -28,9 +28,13 @@ export class BrowserHandoff {
   private state: HandoffStatus["state"] = "ai";
   private reason?: string;
   private deadline = 0;
+  // The URL is never persisted, exposed by status, or returned twice.
+  private preparingSessionId?: string;
+  private unclaimedLink?: { url: string; expires_at: number };
   private access?: HumanAccess;
   private cleanup?: Promise<"confirmed" | "uncertain">;
   private preparing = false;
+  private cancelRequested = false;
   private returning = false;
   private readonly directory: string;
   private readonly sealEvidence?: (kind: "directory" | "pending") => void;
@@ -79,6 +83,7 @@ export class BrowserHandoff {
   begin(sessionId: string): boolean {
     if (this.blocked || this.returning) return false;
     this.blocked = true; this.epoch++; this.state = "preparing"; this.preparing = true;
+    this.preparingSessionId = sessionId; this.unclaimedLink = undefined; this.cancelRequested = false;
     try {
       mkdirSync(this.directory, {recursive:true,mode:0o700});
       this.sealEvidence?.("directory");
@@ -100,13 +105,44 @@ export class BrowserHandoff {
     }
     return true;
   }
-  failed(reason: string): void { this.reason = reason; this.state = "pending_return"; this.preparing = false; }
-  attach(access: HumanAccess): void { this.access = access; }
-  ready(access: HumanAccess, deadline: number): void {
+  failed(reason: string): void {
+    this.unclaimedLink = undefined;
+    this.reason = reason; this.state = "pending_return"; this.preparing = false;
+  }
+  attach(access: HumanAccess): void {
+    this.access = access;
+    if (this.cancelRequested) throw Error("handoff_preparation_cancelled");
+  }
+  preparationCancelled(): boolean { return this.cancelRequested; }
+  ready(access: HumanAccess, deadline: number, link?: { sessionId: string; url: string }): void {
+    if (link) {
+      if (!this.blocked || !this.preparing || this.cancelRequested || this.preparingSessionId !== link.sessionId ||
+          this.cleanup || Date.now() >= deadline) throw Error("handoff_state_changed");
+      // Only in-memory, never receipt/marker/Agent logs.
+      this.unclaimedLink = { url: link.url, expires_at: deadline };
+    }
     this.access = access; this.deadline = deadline; this.state = "link_ready"; this.reason = undefined; this.preparing = false;
   }
-  connected(): void { if (this.blocked && Date.now() < this.deadline) this.state = "interactive"; }
+  claim(sessionId: string): { url: string; expires_at: number } | undefined {
+    // Read status first to expire/close the Tunnel before considering delivery.
+    if (this.cancelRequested || this.status().state !== "link_ready" || this.preparingSessionId !== sessionId) return undefined;
+    const link = this.unclaimedLink;
+    this.unclaimedLink = undefined; // consume synchronously, before any network await
+    return link;
+  }
+  connected(): void {
+    // A delayed local connect callback must never revive a revoked handoff.
+    if (!this.blocked || this.cancelRequested || this.cleanup || this.returning ||
+        !["link_ready","interactive"].includes(this.state) || Date.now() >= this.deadline) return;
+    this.unclaimedLink = undefined;
+    this.state = "interactive";
+  }
   stopAccess(): Promise<"confirmed" | "uncertain"> {
+    this.unclaimedLink = undefined;
+    if (this.state === "link_ready" || this.state === "interactive") {
+      this.state = "pending_return";
+      this.reason = "access_revoked";
+    }
     if (!this.cleanup) {
       try { this.cleanup = (this.access?.close() ?? cleanupOrphanTunnel(this.directory)).catch(() => "uncertain"); }
       catch { this.cleanup = Promise.resolve("uncertain"); }
@@ -115,7 +151,18 @@ export class BrowserHandoff {
   }
   async explicitReturn(invalidate: () => Promise<void>): Promise<HandoffStatus> {
     if (!this.blocked) return this.status();
-    if (this.preparing || this.returning) { this.reason = "lifecycle_busy"; return this.status(); }
+    if (this.returning) { this.reason = "lifecycle_busy"; return this.status(); }
+    if (this.preparing) {
+      // Explicit owner cancellation during background preparation must win:
+      // immediately revoke an already attached local controller, never mint
+      // a claimable link later. A separate explicit return confirms cleanup.
+      this.cancelRequested = true;
+      this.unclaimedLink = undefined;
+      this.state = "pending_return";
+      this.reason = "preparation_cancel_requested";
+      if (this.access) void this.stopAccess();
+      return this.status();
+    }
     this.returning = true;
     try {
       if (await this.stopAccess() !== "confirmed") { this.failed("cleanup_unknown"); return this.status(); }
@@ -124,6 +171,7 @@ export class BrowserHandoff {
       try { unlinkSync(this.marker); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       this.epoch++; this.blocked = false; this.state = "ai"; this.reason = undefined; this.deadline = 0;
+      this.preparingSessionId = undefined; this.unclaimedLink = undefined; this.cancelRequested = false;
       this.access = undefined; this.cleanup = undefined;
     } catch { this.failed("return_unknown"); }
     finally { this.returning = false; }
