@@ -183,8 +183,22 @@ export class ReceiptStore {
     await chmod(backup, 0o600);
   }
 
-  hasUnresolvedBrowserOperations(): boolean {
-    return Boolean(this.db().prepare("SELECT 1 FROM receipts WHERE tool_name LIKE 'browser_%' AND state IN ('admitted','running','unknown') LIMIT 1").get());
+  hasUnresolvedBrowserOperations(currentSessionId: string): boolean {
+    // A successfully established BrowserContext has a new, stable session ID.
+    // Historical unknown effects remain immutable and non-replayable, but cannot
+    // be in flight in this newly established context. Never rewrite receipts.
+    const firstStart = this.db().prepare(
+      "SELECT MIN(created_at) AS started_at FROM receipts WHERE tool_name = 'browser_start' AND state = 'completed' AND session_id = ?",
+    ).get(currentSessionId) as {started_at: string | null};
+    // If we cannot prove this session's first completed start, fail closed.
+    const since = firstStart?.started_at;
+    return Boolean(since
+      ? this.db().prepare(
+          "SELECT 1 FROM receipts WHERE tool_name LIKE 'browser_%' AND state IN ('admitted','running','unknown') AND (created_at >= ? OR session_id = ?) LIMIT 1",
+        ).get(since, currentSessionId)
+      : this.db().prepare(
+          "SELECT 1 FROM receipts WHERE tool_name LIKE 'browser_%' AND state IN ('admitted','running','unknown') LIMIT 1",
+        ).get());
   }
 
   async open(): Promise<void> {

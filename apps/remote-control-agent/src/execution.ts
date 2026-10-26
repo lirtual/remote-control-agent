@@ -568,7 +568,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       } else {
         try {
           await ensureReceipts();
-          if (receipts.hasUnresolvedBrowserOperations()) {
+          if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
             handoff.failed("browser_receipt_unknown");
             return {status:200,body:handoff.status()};
           }

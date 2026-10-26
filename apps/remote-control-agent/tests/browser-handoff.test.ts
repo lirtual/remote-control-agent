@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { createAgentExecutionEngine } from "../src/execution.ts";
 import { BrowserHandoff } from "../src/browser-handoff.ts";
+import { ReceiptStore, operationDigest } from "../src/operations.ts";
 import { supportsProtectedQuickTunnel } from "../src/protected-tunnel.ts";
 import { executeV2FileOperation, executeV2SessionRead, monitorDeviceSocket } from "../src/v2-connection-lifecycle.ts";
 import type { BrowserBackend, BrowserStatus } from "../src/browser-backend.ts";
@@ -200,6 +201,33 @@ test("a browser effect outliving its running reply drains before handoff; unknow
     assert.equal(checked,0,"never start external access while a receipt is unresolved");
     assert.deepEqual(await engine.getReceipt("uncertain-browser-intent"),{operation_id:"uncertain-browser-intent",state:"unknown"});
   } finally {release();await engine.close();await rm(root,{recursive:true,force:true});}
+});
+
+test("fresh browser session may hand off despite historical unknown receipts without replay or rewriting them",async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"handoff-receipt-scope-"));
+  const store=new ReceiptStore(root);
+  const first=browserFixture().id,second=browserFixture().id;
+  const put=async(id:string,tool:"browser_start"|"browser_click"|"browser_navigate",state:"completed"|"unknown",session?:string)=>{
+    assert.equal((await store.admit(id,tool,operationDigest(tool,{operation_id:id}))).kind,"new");
+    return store.update(id,state,"Browser action outcome is uncertain.",session);
+  };
+  try {
+    await store.open();
+    await put("historic-unknown-click","browser_click","unknown");
+    assert.equal(store.hasUnresolvedBrowserOperations(first),true,"no proven session start must fail closed");
+    await put("fresh-proven-start","browser_start","completed",first);
+    assert.equal(store.hasUnresolvedBrowserOperations(first),false,"old session effects cannot be in flight in new context");
+    assert.equal((await store.get("historic-unknown-click"))?.state,"unknown","old receipt and replay guard retained");
+    await put("current-unknown-navigate","browser_navigate","unknown");
+    assert.equal(store.hasUnresolvedBrowserOperations(first),true,"unknown effect in current context must block");
+    await put("second-proven-start","browser_start","completed",second);
+    assert.equal(store.hasUnresolvedBrowserOperations(second),false,"a genuinely new context can proceed");
+    assert.equal((await store.get("current-unknown-navigate"))?.state,"unknown","unresolved result never overwritten");
+    await store.close();
+    await store.open();
+    assert.equal(store.hasUnresolvedBrowserOperations(first),true,"restart must not silently reconcile original session");
+    assert.equal(store.hasUnresolvedBrowserOperations(second),false,"historical effects must not permanently deny fresh session");
+  } finally {await store.close();await rm(root,{recursive:true,force:true});}
 });
 
 test("one device's handoff never blocks a separate device engine",async()=>{
