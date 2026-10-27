@@ -115,6 +115,7 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
  */
 export async function acknowledgeAuthenticatedUpgrade(
   receiptDir:string, runningVersion:string | undefined,
+  isAdmitted:(operationId:string)=>Promise<boolean>,
 ):Promise<number> {
   if(process.platform!=="win32" || !runningVersion ||
      !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(runningVersion))return 0;
@@ -129,7 +130,8 @@ export async function acknowledgeAuthenticatedUpgrade(
       if(!st.isFile() || st.isSymbolicLink() || st.size>2048)continue;
       const pending=JSON.parse(await readFile(p,"utf8")) as {operation_id?:unknown;target_version?:unknown};
       if(typeof pending.operation_id!=="string" || !OP.test(pending.operation_id) ||
-         pending.target_version!==runningVersion)continue;
+         pending.target_version!==runningVersion ||
+         !await isAdmitted(pending.operation_id))continue;
       const proof=path.win32.join(receiptDir,"upgrade-auth-"+pending.operation_id+".json");
       const body=JSON.stringify({operation_id:pending.operation_id,
         target_version:runningVersion,status:"authenticated_wss"});
