@@ -4,13 +4,9 @@
  * The detached WMI child uses the same SID and no new Task or service.
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { readFile, writeFile, stat, lstat, mkdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import os from "node:os";
+import { readFile, writeFile, lstat, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { parseRemoteUpgradeDispatch, type RemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
+import { parseRemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
 
 const OP = /^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
 const PIN = /^[a-f0-9]{64}$/;
@@ -78,11 +74,23 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
   }
   // Verify SHA-256 of every installed executable/script with the bundled
   // manifest verifier; no unexpected replacements or symlink-based escalation.
+  // The old installed runtime must pass its complete manifest audit before
+  // executing the staged installer or the independent watchdog script.
+  await runPowerShell(node,[verifier,paths.installedRoot],30_000);
   await (hooks.stage ?? runPowerShell)(powershell,[
     "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-File",source,
     "-StageOnly","-Version",op.target.tag,
     "-PinnedCommit",op.target.commit,"-PinnedReleaseSha256",op.target.windows_asset_sha256,
   ]);
+  const receiptDir=path.win32.join(paths.stateRoot,"receipts");
+  const info=await lstat(receiptDir);
+  if(!info.isDirectory() || info.isSymbolicLink())throw Error("Unsafe native receipt directory.");
+  const pending=path.win32.join(receiptDir,"upgrade-pending-"+op.operation_id+".json");
+  // Existing-file refusal and fsync-free CreateNew leave a conservative
+  // guarded receipt if native process launch reports an unknown outcome.
+  const evidence=JSON.stringify({operation_id:op.operation_id,
+    target_version:op.target.tag,source_version:op.current_version});
+  await writeFile(pending,evidence,{flag:"wx",mode:0o600});
   // Only AFTER immutable release staging succeeded may a separate same-user
   // WMI child switch the user's existing Task.
   const childLine = '"' + powershell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
