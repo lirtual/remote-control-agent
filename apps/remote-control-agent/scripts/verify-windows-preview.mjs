@@ -58,8 +58,10 @@ export function inspectWindowsPreview(root) {
       !expected.has("apps/remote-control-agent/scripts/windows-stage-install.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-upgrade-once.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
-      // Remote upgrade admission adds exactly one statically bundled source module.
-      expected.size < 9 || expected.size > 46 ||
+      // The signed shared lifecycle imports one reviewed Linux proof module.
+      // Require that exact path, not arbitrary extra packaged files.
+      !expected.has("apps/remote-control-agent/src/linux-upgrade-reconnect.js") ||
+      expected.size < 9 || expected.size > 47 ||
       expected.get("bin/node.exe") !==
         "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32") {
     throw Error("Incomplete or unknown Windows preview files.");
