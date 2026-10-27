@@ -8,7 +8,7 @@ import { ReceiptStore } from "../src/operations.ts";
 import {
   admitOwnerApprovedUpgrade, localUpgradeFingerprint, parseRemoteUpgradeDispatch,
 } from "../src/remote-upgrade-admission.ts";
-import { collectDeviceInfo } from "../src/device-info.ts";
+import { collectDeviceInfo, classifyLinuxEnvironment } from "../src/device-info.ts";
 
 const DEVICE = "2a83dae6-600c-49cc-b643-ab0d5ec7e0c8";
 const NOW = 1793100000000;
@@ -191,4 +191,12 @@ test("Linux remote dispatcher rejects foreign pin fields, prerelease and wrong-a
     {...intent,current_version:"v0.1.22-rc.1"},
     {...intent,current_version:"v000.1.22"},
   ])assert.equal(parseRemoteUpgradeDispatch(candidate),null,JSON.stringify(candidate).slice(0,160));
+});
+
+test("a WSL2-hosted container is never misidentified as native WSL2 for owner upgrade",()=>{
+  assert.equal(classifyLinuxEnvironment(true,true,true),"container");
+  assert.equal(classifyLinuxEnvironment(true,false,true),"container");
+  assert.equal(classifyLinuxEnvironment(true,true,false),"wsl2");
+  assert.equal(classifyLinuxEnvironment(true,false,false),"native");
+  assert.equal(classifyLinuxEnvironment(false,true,true),"native");
 });
