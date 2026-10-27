@@ -34,6 +34,14 @@ assert.equal(inspectWindowsPreview(stage).files,46);
 
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
+const infoModule=path.join(stage,"apps/remote-control-agent/src/device-info.js");
+const {collectDeviceInfo}=await import(pathToFileURL(infoModule).href);
+const signedInfo=collectDeviceInfo();
+assert.equal(signedInfo.agent_version,results.version);
+assert.equal(signedInfo.upgrade_protocol,"owner-one-shot-v1",
+  "the reviewed native release must advertise remote readiness only with its full bundled executor");
+assert.equal(manifest.upgrade_protocol,"owner-one-shot-v1");
+
 const pinned=manifest.browser_runtime;
 assert.equal(pinned?.name,"playwright-core");
 assert.equal(pinned.version,"1.64.1");
