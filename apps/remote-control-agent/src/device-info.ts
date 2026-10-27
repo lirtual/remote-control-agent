@@ -14,13 +14,25 @@ function installedRelease(): {version?:string;upgrade_protocol?:"owner-one-shot-
     };
     if (bundle.name !== "remote-control-agent" || typeof bundle.version !== "string" ||
         !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(bundle.version))return {};
-    const ready = process.platform === "win32" && process.arch === "x64" &&
+    const windowsReady = process.platform === "win32" && process.arch === "x64" &&
       bundle.target === "windows-x64" && bundle.upgrade_profile === "paired-full-v1" &&
       bundle.upgrade_protocol === "owner-one-shot-v1" &&
       Array.isArray(bundle.modules) &&
       bundle.modules.includes("windows-upgrade-executor.ts") &&
       typeof bundle.hashes?.["apps/remote-control-agent/scripts/windows-upgrade-once.ps1"] === "string" &&
       typeof bundle.hashes?.["apps/remote-control-agent/scripts/windows-stage-install.ps1"] === "string";
+    const linuxReady = process.platform === "linux" &&
+      ["x64","arm64"].includes(process.arch) &&
+      bundle.target === "linux-"+process.arch+"-glibc" &&
+      bundle.upgrade_profile === "paired-full-v1" &&
+      bundle.upgrade_protocol === "owner-one-shot-v1" &&
+      Array.isArray(bundle.modules) &&
+      ["linux-upgrade-executor.ts","linux-upgrade-reconnect.ts"].every(
+        name => (bundle.modules as string[]).includes(name)) &&
+      ["linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+        "bootstrap-v2.py"].every(name => existsSync(fileURLToPath(new URL(
+        "../scripts/"+name, import.meta.url))));
+    const ready=windowsReady||linuxReady;
     return {version:bundle.version,...(ready ? {upgrade_protocol:"owner-one-shot-v1" as const}:{})};
   } catch { return {}; }
 }
