@@ -79,6 +79,7 @@ export interface AgentExecutionEngine {
   resetReadSessions(): Promise<void>;
   stopOwnedForRevocation(): Promise<"confirmed" | "uncertain">;
   freezeForUpgrade(): boolean;
+  verifyUpgradeFreeze(): boolean;
   releaseUpgradeFreeze(): void;
   close(): Promise<void>;
 }
@@ -735,6 +736,10 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       }
       return true;
     },
+    verifyUpgradeFreeze: () => upgradeFrozen && !stopped && !handoff.isBlocked() &&
+      activeCalls === 0 && inFlight.size === 0 &&
+      !(browser?.hasPending() ?? false) && !Boolean(options.browser?.status()) &&
+      sessions.isQuiescentForUpgrade(),
     releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
       const generation = handoff.generation();
