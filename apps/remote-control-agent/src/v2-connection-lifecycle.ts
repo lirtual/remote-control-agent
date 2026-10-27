@@ -407,6 +407,7 @@ export async function maintainAuthenticatedDeviceSession(
   let authenticatedDeviceId: string | undefined;
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory, browser: options.browser,
+    signedEndpoint:baseAddress,
     verifyHandoffPrerequisites: options.verifyHandoffPrerequisites,
     sealHandoffEvidence: options.sealHandoffEvidence,
     handoffDeviceId: () => authenticatedDeviceId,
@@ -478,7 +479,11 @@ export async function maintainAuthenticatedDeviceSession(
           full && execution
             ? async (tool, args, operationId, requestSignal) => {
               const upgrade = tool === "upgrade_agent" && authenticatedDeviceId &&
-                process.platform === "win32"
+                (process.platform === "win32" ||
+                  (process.platform === "linux" &&
+                    runtimeInfo.upgrade_protocol === "owner-one-shot-v1" &&
+                    ["native","wsl2"].includes(runtimeInfo.environment) &&
+                    ["x64","arm64"].includes(runtimeInfo.arch)))
                 ? { signedDeviceId:authenticatedDeviceId,
                     originalVersion:collectDeviceInfo().agent_version ?? "",
                     privateKeyPem:await readFile(keyPath,"utf8") }
