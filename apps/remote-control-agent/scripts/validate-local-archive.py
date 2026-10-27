@@ -144,16 +144,17 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     candidate = root / "candidate"
     module.unpack_verified(archive, candidate, records, tag, target)
     manifest = json.loads((candidate / "bundle.json").read_text("utf-8"))
-    # Candidate packages include the reviewed inert Linux helper source, but
-    # must NOT advertise remote upgrade readiness until a signed-WSS approval
-    # path and exact source/asset pins are independently security-accepted.
-    if manifest.get("upgrade_protocol") is not None:
-        raise SystemExit("Linux one-shot capability cannot be advertised by an unaccepted candidate")
-    for helper in ("linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"):
+    # Candidate-only CI must validate the complete one-shot runtime from the
+    # archive itself; this does NOT approve publishing or a live device switch.
+    if manifest.get("upgrade_protocol") != "owner-one-shot-v1":
+        raise SystemExit("Candidate archive lacks reviewed owner-one-shot-v1 protocol")
+    for helper in ("bootstrap-v2.py", "linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"):
         entry = candidate / "apps/remote-control-agent/scripts" / helper
         meta = entry.lstat()
         if not entry.is_file() or entry.is_symlink() or meta.st_mode & 0o777 != 0o600:
             raise SystemExit("Required inert Linux one-shot helper is absent or untrusted")
+    if (candidate / "apps/remote-control-agent/scripts/bootstrap-v2.py").read_bytes() != bootstrap.read_bytes():
+        raise SystemExit("Packaged Linux staging bootstrap differs from reviewed source")
     node = candidate / "bin/node"
     helper = candidate / "apps/remote-control-agent/.build/session-supervisor"
     script = candidate / "apps/remote-control-agent/src/v2-main.js"
