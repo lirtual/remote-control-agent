@@ -683,31 +683,46 @@ jobs:
               # switch. The CI timeout leaves enough time to observe rollback.
               $deadline = (Get-Date).AddSeconds(112)
               $terminated = $false
+              $observedUpgrade = $false
+              $observedRunningUpgrade = $false
               do {
-                Start-Sleep -Seconds 2
+                Start-Sleep -Seconds 1
+                $live = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                if ([string]::Equals([string]$live.Actions[0].Execute,
+                    (Join-Path $newDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                  $observedUpgrade = $true
+                  if ($live.State -eq 'Running') { $observedRunningUpgrade = $true }
+                }
                 $running = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $watchdogChild.ProcessId) -ErrorAction SilentlyContinue
                 $terminated = -not $running
               } while (-not $terminated -and (Get-Date) -lt $deadline)
               if (-not $terminated) { throw 'No-proof native watchdog exceeded its deadline' }
+              if (-not $observedUpgrade -or -not $observedRunningUpgrade) {
+                throw 'CI watchdog never demonstrated a running upgraded Task before rollback'
+              }
               if (Test-Path -LiteralPath $testProof) {
                 throw 'Unauthenticated synthetic device fabricated WSS proof'
               }
-              # Failure before the Task switch can produce no outcome file.
-              # This is a legitimate fail-closed refusal, not an upgrade PASS.
-              if (Test-Path -LiteralPath $testOutcome) {
-                $outcome = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
-                if ($outcome.operation_id -cne $proofOperation -or
-                    $outcome.status -notin @('rolled_back','needs_attention')) {
-                  throw 'Native no-proof watchdog claimed an upgrade completed'
-                }
-              } elseif (-not (Test-Path -LiteralPath $watchdogLog)) {
-                throw 'No native watchdog terminal result or refusal was observed'
+              # Earlier unstaged-target tests already cover pre-switch refusal.
+              # This test MUST observe a live target Task and a definitive
+              # rollback after no signed WSS; a refusal is not sufficient.
+              if (-not (Test-Path -LiteralPath $testOutcome)) {
+                throw 'Switched native watchdog did not persist a rollback result'
+              }
+              $outcome = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
+              if ($outcome.operation_id -cne $proofOperation -or
+                  $outcome.original_version -cne $oldVersion -or
+                  $outcome.target_version -cne $newVersion -or
+                  $outcome.status -cne 'rolled_back') {
+                throw 'No-proof watchdog did not verify rollback of running Task'
               }
               $safeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-              if (-not [string]::Equals([string]$safeTask.Actions[0].Execute,
-                  (Join-Path $oldDir 'bin\rca-background.exe'),
-                  [StringComparison]::OrdinalIgnoreCase)) {
-                throw 'No-proof watchdog left upgraded Task active'
+              if ($safeTask.State -ne 'Running' -or
+                  -not [string]::Equals([string]$safeTask.Actions[0].Execute,
+                    (Join-Path $oldDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'No-proof watchdog did not restore running original Task'
               }
             } finally {
               # Only fixture-created local evidence. Never change any real user Task.
