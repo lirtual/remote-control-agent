@@ -558,8 +558,20 @@ jobs:
                 }
                 throw 'WMI updater did not survive the synthetic running Task stop'
               }
+              # Observing the new Action is possible between Set-ScheduledTask
+              # and Start-ScheduledTask. Wait for the same finite runner window
+              # instead of treating that expected transition as a failed upgrade.
+              $runningDeadline = (Get-Date).AddSeconds(12)
+              while ($liveTask.State -ne 'Running' -and (Get-Date) -lt $runningDeadline) {
+                Start-Sleep -Milliseconds 500
+                $liveTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              }
               if ($liveTask.State -ne 'Running') {
                 throw 'Independent updater did not restart the upgraded synthetic Agent Task'
+              }
+              Start-Sleep -Seconds 2
+              if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') {
+                throw 'Upgraded synthetic Agent Task exited immediately after restart'
               }
             } finally {
               # This is the exact just-created WMI fixture process, not an
