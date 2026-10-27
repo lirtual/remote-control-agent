@@ -65,16 +65,16 @@ test("reviewed watchdog cannot complete on only one Running Task snapshot",async
   // real running Task/no-WSS rollback; real signed WSS UAT stays mandatory.
   const source=fileURLToPath(new URL("../scripts/windows-upgrade-once.ps1",import.meta.url));
   const script=await readFile(source,"utf8");
-  assert.match(script,/\\$runningSamples\\s*=\\s*0/,
+  assert.match(script,/\$runningSamples\s*=\s*0/,
     "liveness evidence must begin empty and reset after missing/invalid observations");
-  assert.match(script,/\\$current\\.State\\s+-eq\\s+'Running'/,
+  assert.match(script,/\$current\.State\s+-eq\s+'Running'/,
     "the verified native Task itself must still be Running");
-  assert.match(script,/\\$runningSamples\\+\\+/,
+  assert.match(script,/\$runningSamples\+\+/,
     "a valid signed-WSS Task sample must advance the liveness counter");
-  assert.match(script,/if\\s*\\(\\$runningSamples\\s+-ge\\s+3\\)/,
+  assert.match(script,/if\s*\(\$runningSamples\s+-ge\s+3\)/,
     "at least three consecutive observations must precede a completed outcome");
-  assert.match(script,/\\$result\\s*=\\s*'completed'/);
-  assert.match(script,/for\\s*\\(\\$index=0;\\s*\\$index\\s+-lt\\s+90;/,
+  assert.match(script,/\$result\s*=\s*'completed'/);
+  assert.match(script,/for\s*\(\$index=0;\s*\$index\s+-lt\s+90;/,
     "the existing bounded 90-second proof deadline must not be extended");
 });
 
