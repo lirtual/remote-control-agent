@@ -647,7 +647,13 @@ jobs:
                 [Text.Encoding]::UTF8.GetBytes($proofOperation))).Replace('-','').ToLowerInvariant()
             } finally { $digest.Dispose() }
             $receiptDirectory = Join-Path $root 'receipts'
-            $null = New-Item -ItemType Directory -Path $receiptDirectory -Force
+            if (-not (Test-Path -LiteralPath $receiptDirectory)) {
+              $null = New-Item -ItemType Directory -Path $receiptDirectory
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName receipts
+              if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory ACL could not be sealed' }
+            }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Check -Directory $root
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory failed native private ACL gate' }
             $testPending = Join-Path $receiptDirectory ('upgrade-pending-' + $proofKey + '.json')
             $testProof = Join-Path $receiptDirectory ('upgrade-auth-' + $proofKey + '.json')
             $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
