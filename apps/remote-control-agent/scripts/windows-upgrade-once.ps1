@@ -37,6 +37,17 @@ foreach ($file in @($taskScript,$node,$verify,$entry)) {
 # version ACL, all via the existing code. No owner-controlled arbitrary path.
 & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Original Task identity could not be verified' }
+$currentTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+$oldAction = [IO.Path]::Combine($old,'bin','rca-background.exe')
+if (-not [string]::Equals([string]$currentTask.Actions[0].Execute,$oldAction,
+    [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Task version drift before one-shot upgrade; no switch permitted'
+}
+$receiptItem = Get-Item -LiteralPath $receiptDir -Force -ErrorAction Stop
+if (-not $receiptItem.PSIsContainer -or
+    ($receiptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'Untrusted native receipt directory'
+}
 & $node $verify $target | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Target release inventory is not verified' }
 $manifest = Get-Content -LiteralPath ([IO.Path]::Combine($target,'bundle.json')) -Raw | ConvertFrom-Json
