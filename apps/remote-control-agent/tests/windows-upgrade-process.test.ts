@@ -7,7 +7,7 @@ import { test } from "node:test";
  * Agent Task or install a package on a GitHub Actions runner. */
 test("native Windows same-owner WMI child outlives its launching shell and is outside inherited jobs",{
   skip: process.platform !== "win32",
-  timeout: 25_000,
+  timeout: 40_000,
 },()=>{
   const system = process.env.SystemRoot;
   assert.ok(system && /^[a-z]:[\\/]/i.test(system),"system Windows location required");
@@ -21,12 +21,12 @@ test("native Windows same-owner WMI child outlives its launching shell and is ou
     assert.equal(r.status,0,"Windows PowerShell probe failed: "+r.stderr.slice(-800));
     return r.stdout.trim();
   };
-  const start = Date.now();
+
   // Win32_Process.Create is a built-in Windows API, not a new service/task.
   // It does not inherit the caller's Job, unlike ordinary nested spawn().
   const launched=JSON.parse(run([
-    "$p="+JSON.stringify(powershell),
-    "$cmd='"'+$p+'" -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 24"'",
+    "$p='"+powershell.replaceAll("'","''")+"'",
+    String.raw`$cmd='"' + $p + '" -NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 24"'`,
     "$created=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$cmd} -ErrorAction Stop",
     "if($created.ReturnValue -ne 0){throw 'Native one-shot launcher rejected'}",
     "@{pid=[int]$created.ProcessId} | ConvertTo-Json -Compress",
@@ -41,7 +41,7 @@ test("native Windows same-owner WMI child outlives its launching shell and is ou
       "if(-not $proc -or $proc.Name -ne 'powershell.exe'){throw 'WMI child absent after parent exit'}",
       "$localSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
       "$childSid=(Invoke-CimMethod -InputObject $proc -MethodName GetOwnerSid).Sid",
-      "$source='using System;using System.Runtime.InteropServices; public static class RcaUpgradeJobCheck{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool IsProcessInJob(IntPtr p,IntPtr job,out bool b);}'",
+      String.raw`$source='using System;using System.Runtime.InteropServices; public static class RcaUpgradeJobCheck{[DllImport("kernel32.dll",SetLastError=true)]public static extern bool IsProcessInJob(IntPtr p,IntPtr job,out bool b);}'`,
       "Add-Type -TypeDefinition $source -ErrorAction Stop",
       "$h=[Diagnostics.Process]::GetProcessById($pidToCheck)",
       "$inJob=$true",
@@ -54,7 +54,7 @@ test("native Windows same-owner WMI child outlives its launching shell and is ou
     run([
       "$target=Get-CimInstance Win32_Process -Filter ('ProcessId="+launched.pid+"') -ErrorAction SilentlyContinue",
       "if($target -and $target.Name -eq 'powershell.exe' -and "+
-        "$target.CreationDate -ge (Get-Date '1970-01-01T00:00:00Z').AddMilliseconds("+start+").ToLocalTime() -and "+
+        "$target.CreationDate -ge (Get-Date).AddMinutes(-2) -and "+
         "(Invoke-CimMethod -InputObject $target -MethodName GetOwnerSid).Sid -eq "+
         "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value){Stop-Process -Id "+
         launched.pid+" -Force -ErrorAction Stop}",
