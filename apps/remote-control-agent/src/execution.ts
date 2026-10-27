@@ -16,6 +16,7 @@ import { operationDigest, ReceiptStore, type OperationReceipt } from "./operatio
 import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote-upgrade-admission.ts";
 import { stageAndLaunchApprovedWindowsUpgrade, readNativeUpgradeOutcome } from "./windows-upgrade-executor.ts";
 import { collectDeviceInfo } from "./device-info.ts";
+import { readLinuxUpgradeOutcome } from "./linux-upgrade-reconnect.ts";
 import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -722,6 +723,24 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         } else if (observed === "rolled_back") {
           receipt = await receipts.update(id,"failed",
             "Watchdog restored original native user Task; owner review required.");
+        }
+      }
+      // Linux watchdog outcome is NOT success on its own. A newly signed
+      // WSS device identity, immutable protocol bundle, owner-only execution
+      // claim and exact authenticated proof must all match before SQLite
+      // can report completion to the epoch-fenced Worker owner ledger.
+      if (receipt?.tool_name === "upgrade_agent" &&
+          ["admitted","running","unknown"].includes(receipt.state) &&
+          process.platform === "linux" && !handoff.isBlocked() &&
+          generation === handoff.generation()) {
+        const identity = options.handoffDeviceId?.();
+        const info = collectDeviceInfo();
+        if (identity && info.upgrade_protocol === "owner-one-shot-v1" &&
+            info.agent_version &&
+            await readLinuxUpgradeOutcome(receipts.directory,id,info.agent_version,identity)
+              === "completed") {
+          receipt = await receipts.update(id,"completed",
+            "Linux watchdog, signed WSS and original identity verified.");
         }
       }
       return receipt && (handoff.isBlocked() || generation !== handoff.generation())
