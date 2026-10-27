@@ -93,7 +93,9 @@ try {
             }
           }
         }
-      } catch { # Invalid proof cannot authorize success; remain bounded. }
+      } catch {
+        # Invalid proof cannot authorize success; remain bounded.
+      }
     }
     Start-Sleep -Seconds 1
   }
