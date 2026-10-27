@@ -6,6 +6,9 @@
  */
 import { HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
 import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { acknowledgeAuthenticatedLinuxUpgrade } from "./linux-upgrade-reconnect.ts";
 import { parseRemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
 import { acknowledgeAuthenticatedUpgrade } from "./windows-upgrade-executor.ts";
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
@@ -440,6 +443,26 @@ export async function maintainAuthenticatedDeviceSession(
                 ["admitted","running","unknown"].includes(receipt.state);
             });
         } catch { /* A missing or locked receipt is never evidence of success. */ }
+      }
+      // A Linux proof can only be written by the new, manifest-reviewed
+      // one-shot runtime after successful signed WSS authentication. Existing
+      // Linux releases never advertise this protocol, so this is inert there.
+      if (process.platform === "linux" &&
+          runtimeInfo.upgrade_protocol === "owner-one-shot-v1" &&
+          runtimeInfo.agent_version && authenticatedDeviceId && execution) {
+        try {
+          await acknowledgeAuthenticatedLinuxUpgrade({
+            stateDirectory:options.receiptDirectory ?? path.join(os.homedir(),
+              ".local","state","mcp-workers","remote-control-agent"),
+            deviceId:authenticatedDeviceId,
+            runningVersion:runtimeInfo.agent_version,
+            isAdmitted:async operationId => {
+              const receipt=await execution.getReceipt(operationId);
+              return receipt?.tool_name === "upgrade_agent" &&
+                ["admitted","running","unknown"].includes(receipt.state);
+            },
+          });
+        } catch { /* No proof is safer than unverifiable upgrade success. */ }
       }
       const connectedAt = performance.now();
       options.onState?.("connected");
