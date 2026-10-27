@@ -21,6 +21,17 @@ assert.deepEqual(
   await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
   "The staged immutable Release verifier must be byte-identical to the reviewed interactive installer"
 );
+const nativeStageInstaller=path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1");
+const verifiedStageInstaller=await readFile(nativeStageInstaller);
+try{
+  await writeFile(nativeStageInstaller,Buffer.concat([verifiedStageInstaller,Buffer.from("\n# tampered")]));
+  assert.throws(()=>inspectWindowsPreview(stage),/checksum mismatch/,
+    "Modifying the locally installed stage-only PowerShell must invalidate the release bundle");
+}finally{
+  await writeFile(nativeStageInstaller,verifiedStageInstaller);
+}
+assert.equal(inspectWindowsPreview(stage).files,44);
+
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
 const pinned=manifest.browser_runtime;
