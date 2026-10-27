@@ -13,6 +13,12 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
+import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote-upgrade-admission.ts";
+import { stageAndLaunchApprovedWindowsUpgrade, readNativeUpgradeOutcome } from "./windows-upgrade-executor.ts";
+import { collectDeviceInfo } from "./device-info.ts";
+import { readLinuxUpgradeOutcome } from "./linux-upgrade-reconnect.ts";
+
+import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
@@ -32,6 +38,14 @@ export interface AgentExecutionOptions {
   sealHandoffEvidence?: (kind: "directory" | "pending") => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
+  /** Configured outbound authenticated Worker origin; never an MCP argument. */
+  signedEndpoint?: string;
+  /** Linux main injects the reviewed same-owner launcher; Windows never
+   * imports Linux systemd/installer sources into its immutable package. */
+  launchLinuxUpgrade?: (input:unknown, options:{
+    installedRoot:string;endpoint:string;
+    readAdmission:(operationId:string)=>Promise<boolean>;
+  })=>Promise<"launched">;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
@@ -54,11 +68,18 @@ export interface AgentExecutionEngine {
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined>;
   getReceipt(id: string): Promise<(Partial<OperationReceipt> & Pick<OperationReceipt,"operation_id" | "state">) | null>;
+  /** Only callable by an authenticated WSS upgrade handler after owner-DO claim.
+   * Validates and records but does NOT yet spawn an updater or switch versions. */
+  admitUpgrade(input: unknown, local: {
+    signedDeviceId: string; originalVersion: string; privateKeyPem: string;
+    confirmedByAuthenticatedWorker: boolean;
+  }): Promise<RemoteUpgradeAdmission>;
   handoffGeneration(): number;
   handoffBlocked(): boolean;
   resetReadSessions(): Promise<void>;
   stopOwnedForRevocation(): Promise<"confirmed" | "uncertain">;
   freezeForUpgrade(): boolean;
+  verifyUpgradeFreeze(): boolean;
   releaseUpgradeFreeze(): void;
   close(): Promise<void>;
 }
@@ -629,6 +650,77 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
 
   return {
     executeTool,
+    admitUpgrade: async (input, local) => {
+      if (stopped || upgradeFrozen || handoff.isBlocked() ||
+          activeCalls > 0 || inFlight.size > 0 ||
+          (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
+          !sessions.isQuiescentForUpgrade()) return { status: "unavailable" };
+      upgradeFrozen = true;
+      try {
+        await ensureReceipts();
+        const info=collectDeviceInfo();
+        const receipt = await admitOwnerApprovedUpgrade(receipts,input,{
+          ...local,platform:process.platform,arch:process.arch,
+          environment:info.environment,
+          linuxProtocolReady:info.upgrade_protocol==="owner-one-shot-v1" &&
+            info.os==="linux" && ["native","wsl2"].includes(info.environment),
+        });
+        if (receipt.status !== "admitted" || !receipt.operation_id) {
+          upgradeFrozen = false;
+          return receipt;
+        }
+        // The WSS operation ACK is an ADMISSION, never an upgrade success.
+        // Subsequent staging occurs independently; the Agent remains frozen
+        // until the Task switch stops it or failure is recorded locally.
+        const approvedId = receipt.operation_id;
+        const task = (async () => {
+          try {
+            await receipts.update(approvedId,"running","Immutable release staging pending.");
+            const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..","..","..");
+            let result:"launched";
+            if (process.platform==="linux") {
+              if (!options.signedEndpoint) throw Error("Signed Linux endpoint missing.");
+              const endpoint=new URL(options.signedEndpoint).origin+"/";
+              if (!options.launchLinuxUpgrade)
+                throw Error("No reviewed native Linux one-shot executor.");
+              result=await options.launchLinuxUpgrade(input,{
+                installedRoot:sourceRoot,endpoint,
+                readAdmission:async operationId=>{
+                  const row=await receipts.get(operationId);
+                  return row?.tool_name==="upgrade_agent" &&
+                    row.state==="running" && operationId===approvedId;
+                },
+              });
+            } else {
+              const receiptRoot = options.receiptDirectory;
+              if (!receiptRoot) throw Error("Missing installed native receipts directory.");
+              result = await stageAndLaunchApprovedWindowsUpgrade(input,{
+                installedRoot:sourceRoot,
+                stateRoot:path.dirname(receiptRoot),
+                systemRoot:process.env.SystemRoot ?? "",
+              });
+            }
+            if (result !== "launched") throw Error("No isolated updater was launched.");
+            // Do not mark completed until a NEW authenticated WSS incarnation
+            // proves the installed target and watchdog records a local result.
+          } catch {
+            try {
+              // The child could have started before WMI transport returned;
+              // unknown must remain replay-guarded even on a timeout.
+              await receipts.update(approvedId,"unknown","Native upgrade effect needs reconciliation.");
+            } catch { /* Never declare success after a persistence failure. */ }
+            upgradeFrozen = false;
+          }
+        })();
+        // Keep shutdown waiting for pre-switch staging, but never request
+        // or simulate a local console Y confirmation.
+        void task.catch(()=>{upgradeFrozen=false;});
+        return receipt;
+      } catch {
+        upgradeFrozen = false;
+        return { status: "unavailable" };
+      }
+    },
     handoffGeneration: () => handoff.generation(),
     handoffBlocked: () => handoff.isBlocked(),
     resetReadSessions: () => searches.close(),
@@ -644,11 +736,54 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       }
       return true;
     },
+    verifyUpgradeFreeze: () => upgradeFrozen && !stopped && !handoff.isBlocked() &&
+      activeCalls === 0 && inFlight.size === 0 &&
+      !(browser?.hasPending() ?? false) && !Boolean(options.browser?.status()) &&
+      sessions.isQuiescentForUpgrade(),
     releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
       const generation = handoff.generation();
       await ensureReceipts();
-      const receipt = await receipts.get(id);
+      let receipt = await receipts.get(id);
+      if (receipt?.tool_name === "upgrade_agent" &&
+          ["admitted","running","unknown"].includes(receipt.state) &&
+          options.receiptDirectory && process.platform === "win32" &&
+          !handoff.isBlocked() && generation === handoff.generation()) {
+        const observed = await readNativeUpgradeOutcome(
+          options.receiptDirectory,id,collectDeviceInfo().agent_version);
+        if (observed === "completed") {
+          receipt = await receipts.update(id,"completed",
+            "New Agent signed WSS, exact native Task and watchdog outcome verified.");
+        } else if (observed === "rolled_back") {
+          receipt = await receipts.update(id,"failed",
+            "Watchdog restored original native user Task; owner review required.");
+        }
+      }
+      // Linux watchdog outcome is NOT success on its own. A newly signed
+      // WSS device identity, immutable protocol bundle, owner-only execution
+      // claim and exact authenticated proof must all match before SQLite
+      // can report completion to the epoch-fenced Worker owner ledger.
+      if (receipt?.tool_name === "upgrade_agent" &&
+          ["admitted","running","unknown"].includes(receipt.state) &&
+          process.platform === "linux" && !handoff.isBlocked() &&
+          generation === handoff.generation()) {
+        const identity = options.handoffDeviceId?.();
+        const info = collectDeviceInfo();
+        if (identity && info.upgrade_protocol === "owner-one-shot-v1" &&
+            info.agent_version) {
+          const outcome=await readLinuxUpgradeOutcome(
+            receipts.directory,id,info.agent_version,identity);
+          if (outcome === "completed") {
+            receipt = await receipts.update(id,"completed",
+              "Linux watchdog, signed WSS and original identity verified.");
+          } else if (outcome === "rolled_back") {
+            // Only a verified old-unit restoration, not a generic failure,
+            // yields this exact message; Worker still checks a NEW WSS epoch.
+            receipt = await receipts.update(id,"failed",
+              "Original Linux unit and identity restored; signed owner reconciliation required.");
+          }
+        }
+      }
       return receipt && (handoff.isBlocked() || generation !== handoff.generation())
         ? {operation_id:receipt.operation_id,state:receipt.state} : receipt;
     },

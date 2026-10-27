@@ -3,7 +3,7 @@ import {createServer} from "node:http";
 import {createHash} from "node:crypto";
 import {mkdtemp,readFile,writeFile,rm} from "node:fs/promises";
 import {spawnSync} from "node:child_process";
-import {pathToFileURL} from "node:url";
+import {pathToFileURL,fileURLToPath} from "node:url";
 import os from "node:os";
 import path from "node:path";
 import {inspectWindowsPreview} from "../scripts/verify-windows-preview.mjs";
@@ -14,10 +14,36 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
   throw Error("Native Windows absolute staging directory required");
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
-// The reviewed supervisor adds one script to the previously pinned 41-file candidate.
-assert.equal(results.files,42,"Unexpected reviewed Windows Playwright file inventory");
+// The StageOnly installer is packaged from the reviewed root source as a pinned file.
+assert.equal(results.files,47,"Unexpected reviewed Windows Playwright file inventory");
+assert.deepEqual(
+  await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
+  await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
+  "The staged immutable Release verifier must be byte-identical to the reviewed interactive installer"
+);
+const nativeStageInstaller=path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1");
+const verifiedStageInstaller=await readFile(nativeStageInstaller);
+try{
+  await writeFile(nativeStageInstaller,Buffer.concat([verifiedStageInstaller,Buffer.from("\n# tampered")]));
+  assert.throws(()=>inspectWindowsPreview(stage),/checksum mismatch/,
+    "Modifying the locally installed stage-only PowerShell must invalidate the release bundle");
+}finally{
+  await writeFile(nativeStageInstaller,verifiedStageInstaller);
+}
+assert.equal(inspectWindowsPreview(stage).files,47);
+
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
+assert.equal(typeof manifest.hashes?.["apps/remote-control-agent/src/linux-upgrade-reconnect.js"],
+  "string","The exact audited Linux WSS proof module must be included in shared Windows runtime");
+const infoModule=path.join(stage,"apps/remote-control-agent/src/device-info.js");
+const {collectDeviceInfo}=await import(pathToFileURL(infoModule).href);
+const signedInfo=collectDeviceInfo();
+assert.equal(signedInfo.agent_version,results.version);
+assert.equal(signedInfo.upgrade_protocol,"owner-one-shot-v1",
+  "the reviewed native release must advertise remote readiness only with its full bundled executor");
+assert.equal(manifest.upgrade_protocol,"owner-one-shot-v1");
+
 const pinned=manifest.browser_runtime;
 assert.equal(pinned?.name,"playwright-core");
 assert.equal(pinned.version,"1.64.1");

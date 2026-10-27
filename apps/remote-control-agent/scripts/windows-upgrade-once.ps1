@@ -1,0 +1,163 @@
+# Short-lived, same-owner Windows Task switch watchdog. This script must be
+# launched only by the already-approved Agent receipt's independent WMI child.
+# It does not create a service, scheduled task or new device identity.
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory=$true)][ValidatePattern('^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$')][string]$OperationId,
+  [Parameter(Mandatory=$true)][ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$')][string]$OriginalVersion,
+  [Parameter(Mandatory=$true)][ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$')][string]$TargetVersion
+)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or
+    -not [Environment]::Is64BitOperatingSystem -or -not $env:LOCALAPPDATA) {
+  throw 'Native same-user Windows upgrade required'
+}
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+if ($identity.IsSystem) { throw 'SYSTEM cannot upgrade a paired user Task' }
+$taskName = 'RCA-Remote-Control-v2-' + $identity.User.Value.Replace('-', '_')
+$root = [IO.Path]::Combine($env:LOCALAPPDATA,'mcp-workers','remote-control')
+$programs = [IO.Path]::Combine($root,'programs')
+$old = [IO.Path]::Combine($programs,$OriginalVersion + '-windows-x64')
+$target = [IO.Path]::Combine($programs,$TargetVersion + '-windows-x64')
+$taskScript = [IO.Path]::Combine($old,'apps','remote-control-agent','scripts','windows-user-task.ps1')
+$receiptDir = [IO.Path]::Combine($root,'receipts')
+# This watchdog only runs against already staged immutable programs. StageOnly
+# must have returned success in the original Agent BEFORE WMI launch.
+$node = [IO.Path]::Combine($target,'bin','node.exe')
+$verify = [IO.Path]::Combine($target,'apps','remote-control-agent','scripts','verify-windows-preview.mjs')
+$entry = [IO.Path]::Combine($target,'apps','remote-control-agent','src','windows-v2.js')
+foreach ($file in @($taskScript,$node,$verify,$entry)) {
+  $item = Get-Item -LiteralPath $file -Force -ErrorAction Stop
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw 'Linked or invalid verified native upgrade file'
+  }
+}
+# Task validator checks immutable SID, user-only LogonType, trigger, action path,
+# version ACL, all via the existing code. No owner-controlled arbitrary path.
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Original Task identity could not be verified' }
+$currentTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+$oldAction = [IO.Path]::Combine($old,'bin','rca-background.exe')
+if (-not [string]::Equals([string]$currentTask.Actions[0].Execute,$oldAction,
+    [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Task version drift before one-shot upgrade; no switch permitted'
+}
+# An approved remote upgrade must start from a live authenticated Task.
+# A stopped or rapidly exiting Task cannot safely preserve running state
+# through the native Switch, even if the earlier owner preview was online.
+if ($currentTask.State -ne 'Running') {
+  throw 'Current Agent Task is not running; remote switch refused'
+}
+$receiptItem = Get-Item -LiteralPath $receiptDir -Force -ErrorAction Stop
+if (-not $receiptItem.PSIsContainer -or
+    ($receiptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+  throw 'Untrusted native receipt directory'
+}
+& $node $verify $target | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Target release inventory is not verified' }
+$manifest = Get-Content -LiteralPath ([IO.Path]::Combine($target,'bundle.json')) -Raw | ConvertFrom-Json
+if ($manifest.version -cne $TargetVersion -or $manifest.upgrade_protocol -cne 'owner-one-shot-v1') {
+  throw 'Target does not provide reviewed remote-upgrade reconciliation'
+}
+# A proof file can only be produced by a NEW signed Agent WSS authentication
+# after Task restart. The watchdog never trusts its own local Switch output
+# as proof of success. The same-user Shell boundary is not an OS sandbox.
+$sha = [Security.Cryptography.SHA256]::Create()
+try {
+  $idHash = [BitConverter]::ToString($sha.ComputeHash(
+    [Text.Encoding]::UTF8.GetBytes($OperationId))).Replace('-','').ToLowerInvariant()
+} finally { $sha.Dispose() }
+$proof = [IO.Path]::Combine($receiptDir,'upgrade-auth-' + $idHash + '.json')
+$outcome = [IO.Path]::Combine($receiptDir,'upgrade-outcome-' + $idHash + '.json')
+$switched = $false
+$result = 'needs_attention'
+function Write-Outcome([string]$status) {
+  if ($status -notin @('completed','rolled_back','needs_attention')) { throw 'Unknown upgrade state' }
+  $json = @{ operation_id = $OperationId; original_version = $OriginalVersion;
+    target_version = $TargetVersion; status = $status } | ConvertTo-Json -Compress
+  # Atomic create: never overwrite evidence from a previous invocation.
+  $stream = [IO.File]::Open($outcome,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+    $stream.Write($bytes,0,$bytes.Length)
+    $stream.Flush($true)
+  } finally { $stream.Dispose() }
+}
+try {
+  if (Test-Path -LiteralPath $outcome) { throw 'One-shot operation already has a terminal outcome' }
+  if (Test-Path -LiteralPath $proof) { throw 'Unexpected preexisting reconnect proof' }
+  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Switch -Direction Upgrade -Version $TargetVersion | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Task switch did not succeed' }
+  $switched = $true
+  # One brief Running snapshot is not enough to accept a newly restarted
+  # Agent. Require three consecutive observations under the SAME Task action
+  # within the existing 90-second signed-reconnect deadline.
+  $runningSamples = 0
+  for ($index=0; $index -lt 90; $index++) {
+    # All failed proof/Status/Task checks invalidate the consecutive run:
+    # even one missing or malformed sample resets the liveness evidence.
+    $liveSample = $false
+    if (Test-Path -LiteralPath $proof -PathType Leaf) {
+      try {
+        $claim = Get-Content -LiteralPath $proof -Raw | ConvertFrom-Json
+        if ($claim.operation_id -ceq $OperationId -and
+            $claim.target_version -ceq $TargetVersion -and
+            $claim.status -ceq 'authenticated_wss') {
+          $statusText = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status
+          if ($LASTEXITCODE -eq 0) {
+            $status = $statusText | ConvertFrom-Json
+            $current = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            $expectedAction = [IO.Path]::Combine($target,'bin','rca-background.exe')
+            $liveSample = $status.installed -eq $true -and $status.running -eq $true -and
+              $current.State -eq 'Running' -and
+              [string]::Equals([string]$current.Actions[0].Execute,$expectedAction,
+                [StringComparison]::OrdinalIgnoreCase)
+          }
+        }
+      } catch {
+        # A failed verifier cannot contribute even one liveness observation.
+      }
+    }
+    if ($liveSample) {
+      $runningSamples++
+      if ($runningSamples -ge 3) {
+        $result = 'completed'
+        break
+      }
+    } else {
+      $runningSamples = 0
+    }
+    Start-Sleep -Seconds 1
+  }
+  if ($result -cne 'completed') { throw 'New Agent authenticated reconnect not verified' }
+} catch {
+  if ($switched) {
+    try {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Switch -Direction Rollback -Version $OriginalVersion | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Rollback rejected' }
+      # A successful Switch exit is not enough: verify the original Task is
+      # again running under its original executable before recording rollback.
+      $restoredTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+      if ($restoredTask.State -ne 'Running' -or
+          -not [string]::Equals([string]$restoredTask.Actions[0].Execute,
+            $oldAction,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Original Agent Task was not restored to Running'
+      }
+      $restoredStatusText = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status
+      if ($LASTEXITCODE -ne 0) { throw 'Restored Task identity verification failed' }
+      $restoredStatus = $restoredStatusText | ConvertFrom-Json
+      if ($restoredStatus.installed -ne $true -or $restoredStatus.running -ne $true) {
+        throw 'Restored Task failed native liveness verification'
+      }
+      $result = 'rolled_back'
+    } catch { $result = 'needs_attention' }
+  } else {
+    # The native Switch handles its own failure rollback. Do not claim a clean
+    # rollback without observing the original task identity and action.
+    $result = 'needs_attention'
+  }
+} finally {
+  try { Write-Outcome $result } catch { throw 'Cannot persist upgrade outcome; manual reconciliation required' }
+}
+if ($result -cne 'completed') { throw 'Remote Agent upgrade unconfirmed; inspect guarded receipt' }

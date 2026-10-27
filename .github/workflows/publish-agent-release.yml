@@ -137,7 +137,9 @@ jobs:
                 --arg version "$RELEASE_TAG" --arg target "$target" '
                   .name == "remote-control-agent" and
                   .version == $version and .target == $target and
-                  .artifact_schema == 1 and .device_protocol == 2
+                  .artifact_schema == 1 and .device_protocol == 2 and
+                  .upgrade_profile == "paired-full-v1" and
+                  .upgrade_protocol == "owner-one-shot-v1"
                 ' >/dev/null
             else
               grep -Fx "$digest  release-candidate/$target/$filename" "$record" >/dev/null
@@ -146,7 +148,8 @@ jobs:
                   .name == "remote-control-agent" and
                   .version == $version and .target == $target and
                   .artifact_schema == 1 and .device_protocol == 2 and
-                  .receipt_schema == 1 and .upgrade_profile == "paired-full-v1"
+                  .receipt_schema == 1 and .upgrade_profile == "paired-full-v1" and
+                  .upgrade_protocol == "owner-one-shot-v1"
                 ' >/dev/null
             fi
             cp -- "$archive" "$RUNNER_TEMP/publish/$filename"

@@ -3,16 +3,45 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 
-function releaseVersion(): string | undefined {
-  // Immutable release bundles contain this version; development checkouts may not.
+function installedRelease(): {version?:string;upgrade_protocol?:"owner-one-shot-v1"} {
+  // Only the immutable package manifest can advertise the native protocol.
+  // Unpackaged source and legacy releases must remain upgrade-ineligible.
   try {
     const file = fileURLToPath(new URL("../../../bundle.json", import.meta.url));
-    const bundle = JSON.parse(readFileSync(file, "utf8")) as { version?: unknown };
-    if (typeof bundle.version === "string" && /^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(bundle.version)) {
-      return bundle.version;
-    }
-  } catch { /* No release manifest in source checkout. */ }
-  return undefined;
+    const bundle = JSON.parse(readFileSync(file, "utf8")) as {
+      name?:unknown;version?:unknown;target?:unknown;upgrade_profile?:unknown;
+      upgrade_protocol?:unknown;modules?:unknown;hashes?:Record<string,unknown>;
+    };
+    if (bundle.name !== "remote-control-agent" || typeof bundle.version !== "string" ||
+        !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(bundle.version))return {};
+    const windowsReady = process.platform === "win32" && process.arch === "x64" &&
+      bundle.target === "windows-x64" && bundle.upgrade_profile === "paired-full-v1" &&
+      bundle.upgrade_protocol === "owner-one-shot-v1" &&
+      Array.isArray(bundle.modules) &&
+      bundle.modules.includes("windows-upgrade-executor.ts") &&
+      typeof bundle.hashes?.["apps/remote-control-agent/scripts/windows-upgrade-once.ps1"] === "string" &&
+      typeof bundle.hashes?.["apps/remote-control-agent/scripts/windows-stage-install.ps1"] === "string";
+    const linuxReady = process.platform === "linux" &&
+      ["x64","arm64"].includes(process.arch) &&
+      bundle.target === "linux-"+process.arch+"-glibc" &&
+      bundle.upgrade_profile === "paired-full-v1" &&
+      bundle.upgrade_protocol === "owner-one-shot-v1" &&
+      Array.isArray(bundle.modules) &&
+      ["linux-upgrade-executor.ts","linux-upgrade-reconnect.ts"].every(
+        name => (bundle.modules as string[]).includes(name)) &&
+      ["linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+        "bootstrap-v2.py"].every(name => existsSync(fileURLToPath(new URL(
+        "../scripts/"+name, import.meta.url))));
+    const ready=windowsReady||linuxReady;
+    return {version:bundle.version,...(ready ? {upgrade_protocol:"owner-one-shot-v1" as const}:{})};
+  } catch { return {}; }
+}
+
+/** Container identity wins over a WSL2 host kernel for remote upgrade safety. */
+export function classifyLinuxEnvironment(
+  isLinux:boolean,isWsl2:boolean,isContainer:boolean,
+):"native"|"wsl2"|"container" {
+  return isLinux && isContainer ? "container" : isLinux && isWsl2 ? "wsl2" : "native";
 }
 
 export function collectDeviceInfo() {
@@ -29,10 +58,14 @@ export function collectDeviceInfo() {
   }
   const isWsl2 = system === "linux" && (/microsoft.*wsl2?/i.test(kernel) ||
     Boolean(process.env.WSL_DISTRO_NAME && /microsoft/i.test(kernel)));
-  const environment = isWsl2 ? "wsl2" : system === "linux" &&
-    (existsSync("/.dockerenv") || existsSync("/run/.containerenv")) ? "container" : "native";
+  // Containers hosted by WSL2 still are containers. Do not upgrade them
+  // under the native/WSL2 owner-once policy merely because the kernel string
+  // contains "microsoft"; the stricter environment classification wins.
+  const isContainer = system === "linux" &&
+    (existsSync("/.dockerenv") || existsSync("/run/.containerenv"));
+  const environment = classifyLinuxEnvironment(system==="linux",isWsl2,isContainer);
   const clean = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, max);
-  const version = releaseVersion();
+  const release = installedRelease();
   return {
     kind: "device_info" as const,
     hostname: clean(os.hostname(), 64) || "unknown",
@@ -40,6 +73,7 @@ export function collectDeviceInfo() {
     os_version: clean(osVersion, 96) || "unknown",
     arch: clean(process.arch, 16) || "unknown",
     environment,
-    ...(version ? { agent_version: version } : {}),
+    ...(release.version ? { agent_version: release.version } : {}),
+    ...(release.upgrade_protocol ? {upgrade_protocol:release.upgrade_protocol} : {}),
   };
 }

@@ -13,6 +13,12 @@ import {fileURLToPath} from "node:url";
 import {requestUpgradeConsent} from "./install-v2.mjs";
 
 export const HISTORICAL_UNIT="remote-control-v2-agent.service";
+/** Only confirms original systemd unit, running service and key were restored.
+ * A new signed WSS connection is still required for end-to-end recovery.
+ */
+export class ConfirmedLinuxServiceRollback extends Error {
+  constructor(){ super("Original signed Linux service restored; WSS reconnection pending."); }
+}
 const CANONICAL_UNIT="remote-control-agent.service";
 const LEGACY_MARKER="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
 const MODERN_MARKER="# Managed by Remote Control Agent installer.";
@@ -21,6 +27,7 @@ const DESCRIPTION="Remote Control Agent (signed outbound WSS)";
 const APP="apps/remote-control-agent";
 const VERSION=/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DEVICE_ID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const OPERATION_ID=/^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
 
 function owned(meta,dir=false){
   if(meta.uid!==process.getuid()||meta.isSymbolicLink()||
@@ -135,21 +142,32 @@ async function exactIdentity(key){
   if(!DEVICE_ID.test(id))throw Error("Invalid approved device identity");
   return {id,digest:createHash("sha256").update(await readFile(key)).digest("hex")};
 }
-async function safeProgram(root){
+async function safeProgram(root,{remoteTarget=false}={}){
   owned(await lstat(root),true);
   owned(await lstat(path.join(root,"bundle.json")));
   const manifest=JSON.parse(await readFile(path.join(root,"bundle.json"),"utf8"));
   if(manifest.name!=="remote-control-agent"||manifest.version+"-"+manifest.target!==path.basename(root)||
      manifest.upgrade_profile!=="paired-full-v1"||manifest.receipt_schema!==1||
-     manifest.device_protocol!==2)throw Error("Untrusted packaged Agent profile");
+     manifest.device_protocol!==2||
+     (remoteTarget&&manifest.upgrade_protocol!=="owner-one-shot-v1"))
+    throw Error("Untrusted packaged Agent profile or remote-upgrade protocol");
   for(const relative of ["bin/node",APP+"/src/v2-main.js",APP+"/.build/session-supervisor"])
     owned(await lstat(path.join(root,relative)));
 }
 export async function upgradeExistingSignedService({
   home=os.homedir(),newRoot,endpoint,
   systemctl=system,freeze=requestUpgradeConsent,
+  // Optional, locally supplied by a future independent one-shot updater.
+  // Never derived from MCP arguments or an Agent-provided version string.
+  verifySignedReconnect,upgradeOperationId,
 }={}){
   if(process.platform!=="linux"||process.getuid()===0)throw Error("Linux non-root owner required");
+  if(verifySignedReconnect!==undefined&&
+     (typeof verifySignedReconnect!=="function"||
+      typeof upgradeOperationId!=="string"||!OPERATION_ID.test(upgradeOperationId)))
+    throw Error("Invalid locally verified one-shot upgrade acceptance");
+  if(verifySignedReconnect===undefined&&upgradeOperationId!==undefined)
+    throw Error("Unbound one-shot upgrade operation");
   const unitDir=path.join(home,".config/systemd/user");
   const unitPath=path.join(unitDir,HISTORICAL_UNIT);
   const backup=unitPath+".upgrade-backup";
@@ -161,7 +179,8 @@ export async function upgradeExistingSignedService({
   const previous=await readFile(unitPath,"utf8");
   const plan=inspectInstalledSignedUnit(previous,{home,newRoot,endpoint});
   if(await safeExisting(unitPath+".d"))throw Error("Unexpected service drop-in");
-  await safeProgram(plan.oldRoot);await safeProgram(plan.newRoot);
+  await safeProgram(plan.oldRoot);
+  await safeProgram(plan.newRoot,{remoteTarget:!!verifySignedReconnect});
   await compatibleReceipts(home);
   const identity=await exactIdentity(plan.identity);
   const status=systemctl(["show",HISTORICAL_UNIT,"-p","ActiveState","-p","SubState","-p","MainPID"]);
@@ -171,12 +190,17 @@ export async function upgradeExistingSignedService({
   if(!active&&!offline)throw Error("Agent state uncertain; upgrade refused");
   let frozen=false;
   if(active){
-    const answer=await freeze(plan.identity,"freeze");
+    // One-shot WSS owner admission already froze the active Agent before
+    // staging. Check that freeze without taking/releasing it a second time.
+    const remotelyApproved=!!verifySignedReconnect;
+    const answer=await freeze(plan.identity,
+      remotelyApproved?"verify-frozen":"freeze");
     if(answer!=="ready"){
-      if(answer!=="busy")await freeze(plan.identity,"release").catch(()=>{});
+      if(answer!=="busy" && !remotelyApproved)
+        await freeze(plan.identity,"release").catch(()=>{});
       throw Error("Agent has active or uncertain operations; upgrade refused");
     }
-    frozen=true;
+    frozen=!remotelyApproved;
   }
   try{
     if((await exactIdentity(plan.identity)).digest!==identity.digest ||
@@ -191,19 +215,51 @@ export async function upgradeExistingSignedService({
       const same=await exactIdentity(plan.identity);
       if(same.id!==identity.id||same.digest!==identity.digest)
         throw Error("Device identity changed during upgrade");
+      // Remote one-shot mode retains the original unit backup until the
+      // trusted same-owner updater has verified a NEW signed WSS session.
+      // systemctl is-active alone is never a remote success receipt.
+      const targetVersion=path.basename(plan.newRoot).split("-linux-")[0];
+      if(verifySignedReconnect){
+        // The actual signed-session check belongs to the independent
+        // same-user watchdog. Bound even a stalled callback, and never delete
+        // the backup on timeout; the ordinary local upgrade path is unchanged.
+        let timeout;
+        let verified;
+        try{
+          verified=await Promise.race([
+            Promise.resolve().then(()=>verifySignedReconnect({
+              operationId:upgradeOperationId,deviceId:identity.id,
+              version:targetVersion,service:HISTORICAL_UNIT,
+            })),
+            new Promise(resolve=>{timeout=setTimeout(()=>resolve(false),90_000);}),
+          ]);
+        }finally{clearTimeout(timeout);}
+        if(verified!==true)throw Error("New signed Agent reconnect not verified");
+        systemctl(["is-active","--quiet",HISTORICAL_UNIT]);
+        const after=await exactIdentity(plan.identity);
+        if(after.id!==identity.id||after.digest!==identity.digest)
+          throw Error("Device identity changed after reconnect");
+        if(await readFile(unitPath,"utf8")!==plan.newUnit)
+          throw Error("Agent unit changed after signed reconnect");
+      }
       await rm(backup);await syncParent(backup);
       return {status:"active",deviceId:identity.id,service:HISTORICAL_UNIT,
-        version:path.basename(plan.newRoot).split("-linux-")[0],identityPreserved:true};
+        version:targetVersion,identityPreserved:true};
     }catch(error){
       try{
         await atomicWrite(unitPath,previous);
         systemctl(["daemon-reload"]);
         systemctl(["restart",HISTORICAL_UNIT]);
         systemctl(["is-active","--quiet",HISTORICAL_UNIT]);
+        if(await readFile(unitPath,"utf8")!==previous)throw Error("Rollback unit mismatch");
+        const restored=await exactIdentity(plan.identity);
+        if(restored.id!==identity.id||restored.digest!==identity.digest)
+          throw Error("Rollback identity changed");
         await rm(backup);await syncParent(backup);
       }catch{
         throw Error("Upgrade failed; rollback uncertain; backup retained for manual recovery");
       }
+      if(verifySignedReconnect)throw new ConfirmedLinuxServiceRollback();
       throw error;
     }
   }finally{

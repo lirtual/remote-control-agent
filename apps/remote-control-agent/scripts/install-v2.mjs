@@ -317,7 +317,7 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
  * Absence of the socket or a busy/unknown response refuses the upgrade.
  */
 export async function requestUpgradeConsent(keyPath, action, {dial=createConnection}={}){
-  if(!["freeze","release"].includes(action))throw Error("Invalid upgrade action");
+  if(!["freeze","release","verify-frozen"].includes(action))throw Error("Invalid upgrade action");
   const file=path.join(path.dirname(keyPath),"upgrade.sock");
   const meta=await lstat(file);
   if(!meta.isSocket()||meta.uid!==process.getuid()||(meta.mode&0o077)!==0)

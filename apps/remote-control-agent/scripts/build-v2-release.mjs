@@ -112,6 +112,11 @@ export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "v2-re
     for (const imp of pp.importedFiles) {
       const dependency = imp.fileName;
       if (dependency.startsWith("node:")) continue;
+      // Exactly one reviewed native helper, already packaged by the strict
+      // fixed scripts inventory, may be imported by the Linux-only executor.
+      // Do not broaden the static source boundary to arbitrary .mjs modules.
+      if (name==="linux-upgrade-executor.ts" &&
+          dependency==="../scripts/linux-upgrade-detached.mjs") continue;
       if (!dependency.startsWith("./") || !dependency.endsWith(".ts")) {
         throw new Error("An external dependency needs separate review: " + dependency);
       }
@@ -210,7 +215,9 @@ export function build(args) {
   writeFileSync(path.join(work,"apps/remote-control-agent/scripts/install-v2.mjs"),
     rewriteExtensions(installer),{mode:0o600});
   for (const name of ["bootstrap-node.mjs","manage-v2.mjs",
-      "lifecycle-v2.mjs","upgrade-v2.mjs","upgrade-existing-service.mjs","verify-v2-release.mjs","rca.sh"]) {
+      "lifecycle-v2.mjs","upgrade-v2.mjs","upgrade-existing-service.mjs",
+      "bootstrap-v2.py","linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+      "verify-v2-release.mjs","rca.sh"]) {
     const sourceFile=path.join(root,"scripts",name);
     const dest=path.join(work,"apps/remote-control-agent/scripts",name);
     copyFileSync(sourceFile,dest);
@@ -222,7 +229,7 @@ export function build(args) {
     name:"remote-control-agent",version:args.version,target:args.target,
     node:nodeVersion,glibc_build:libc,glibc_min:glibcMin,modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
-    upgrade_profile:"paired-full-v1",
+    upgrade_profile:"paired-full-v1",upgrade_protocol:"owner-one-shot-v1",
     ...(browserRuntime?{browser_runtime:browserRuntime}:{})
   })+"\n",{mode:0o600});
   const name="remote-control-agent-"+args.version+"-"+args.target+".tar.gz";

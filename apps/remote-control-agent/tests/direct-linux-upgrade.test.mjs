@@ -4,6 +4,8 @@ import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {inspectInstalledSignedUnit,upgradeExistingSignedService,HISTORICAL_UNIT} from "../scripts/upgrade-existing-service.mjs";
+import {startUpgradeControl} from "../src/upgrade-control.ts";
+import {requestUpgradeConsent} from "../scripts/install-v2.mjs";
 
 function unit(root,home,endpoint,{legacy=false,oldEnv=false}={}){
   const key=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
@@ -113,6 +115,164 @@ linuxTest("active Agent gets same-identity quiescence consent before any restart
   assert.equal(calls.at(-1),"freeze:release");
  }finally{f.cleanup();}
 });
+linuxTest("remote Linux gate refuses an unreviewed target before any unit effects",async()=>{
+ const f=fixture();
+ try{
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   upgradeOperationId:"../wrong-device-op",
+   verifySignedReconnect:async()=>true,
+   systemctl:()=>{throw Error("invalid operation must not reach systemd")}
+  }),/Invalid locally verified one-shot/);
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   upgradeOperationId:"linux-one-shot-39",
+   verifySignedReconnect:async()=>true,
+   systemctl:()=>{throw Error("systemd must not execute before reviewed protocol")}
+  }),/remote-upgrade protocol/);
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+ }finally{f.cleanup();}
+});
+linuxTest("remote signed reconnect verifier preserves backup until it proves the new service",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  const systemCalls=[];
+  let verified=0;
+  const result=await upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    systemCalls.push(args[0]);
+    return args[0]==="show"?"ActiveState=inactive\nSubState=dead\nMainPID=0":"";
+   },
+   upgradeOperationId:"linux-one-shot-39",
+   verifySignedReconnect:async proof=>{
+    verified++;
+    assert.deepEqual(proof,{operationId:"linux-one-shot-39",deviceId:uuid,version:"v0.1.21",
+      service:HISTORICAL_UNIT});
+    assert.equal(readFileSync(f.unitPath,"utf8"),unit(f.newRoot,f.home,endpoint));
+    assert.equal(readFileSync(f.unitPath+".upgrade-backup","utf8"),f.oldUnit,
+      "original unit backup must remain until real signed reconnect acceptance");
+    return true;
+   },
+  });
+  assert.equal(result.status,"active");
+  assert.equal(verified,1);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+  assert.deepEqual(systemCalls,["show","daemon-reload","restart","is-active","is-active"]);
+ }finally{f.cleanup();}
+});
+linuxTest("missing signed Linux reconnect refuses success and restores original systemd unit",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  let restarts=0;
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    if(args[0]==="show")return "ActiveState=inactive\nSubState=dead\nMainPID=0";
+    if(args[0]==="restart")restarts++;
+    return "";
+   },
+   upgradeOperationId:"linux-one-shot-39",
+   verifySignedReconnect:async()=>false,
+  }),/Original signed Linux service restored/);
+  assert.equal(restarts,2,"real new service and original rollback service both restart");
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+ }finally{f.cleanup();}
+});
+
+linuxTest("failed remote proof plus unsuccessful rollback retains owner-only recovery backup",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  let restarts=0;
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    if(args[0]==="show")return "ActiveState=inactive\nSubState=dead\nMainPID=0";
+    if(args[0]==="restart"&&++restarts===2)
+      throw Error("original service cannot be confirmed running");
+    return "";
+   },
+   upgradeOperationId:"linux-one-shot-39",
+   verifySignedReconnect:async()=>false,
+  }),/rollback uncertain; backup retained/);
+  assert.equal(restarts,2);
+  assert.equal(readFileSync(f.unitPath+".upgrade-backup","utf8"),f.oldUnit,
+    "uncertain systemd recovery must not erase original unit bytes");
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+ }finally{f.cleanup();}
+});
+
+linuxTest("one-shot remote cutover observes pre-existing frozen Agent without a second freeze or release",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  const calls=[];
+  const result=await upgradeExistingSignedService({
+    home:f.home,newRoot:f.newRoot,endpoint,upgradeOperationId:"linux-approved-once",
+    verifySignedReconnect:async()=>true,
+    systemctl:args=>args[0]==="show"?"ActiveState=active\nSubState=running\nMainPID=35":"",
+    freeze:async(_,action)=>{calls.push(action);return action==="verify-frozen"?"ready":"busy";},
+  });
+  assert.equal(result.status,"active");
+  assert.deepEqual(calls,["verify-frozen"],
+    "watchdog cannot take or release the WSS admission freeze a second time");
+ }finally{f.cleanup();}
+});
+
+linuxTest("remote cutover refuses missing freeze while preserving the old unit",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  const calls=[];
+  await assert.rejects(upgradeExistingSignedService({
+    home:f.home,newRoot:f.newRoot,endpoint,upgradeOperationId:"linux-approved-once",
+    verifySignedReconnect:async()=>true,
+    systemctl:args=>args[0]==="show"?"ActiveState=active\nSubState=running\nMainPID=35":"",
+    freeze:async(_,action)=>{calls.push(action);return "busy";},
+  }),/active or uncertain/);
+  assert.deepEqual(calls,["verify-frozen"]);
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+ }finally{f.cleanup();}
+});
+
+linuxTest("owner-local verify-frozen checks but never acquires or releases a freeze",async()=>{
+ const f=fixture();
+ let frozen=false;
+ const execution={
+   freezeForUpgrade:()=>{if(frozen)return false;frozen=true;return true;},
+   verifyUpgradeFreeze:()=>frozen,
+   releaseUpgradeFreeze:()=>{frozen=false;},
+ };
+ const control=await startUpgradeControl(execution,f.key);
+ try{
+  assert.equal(await requestUpgradeConsent(f.key,"verify-frozen"),"busy");
+  assert.equal(await requestUpgradeConsent(f.key,"freeze"),"ready");
+  assert.equal(await requestUpgradeConsent(f.key,"verify-frozen"),"ready");
+  assert.equal(await requestUpgradeConsent(f.key,"verify-frozen"),"ready");
+  assert.equal(frozen,true,"read-only checks must never release the freeze");
+  assert.equal(await requestUpgradeConsent(f.key,"release"),"released");
+  assert.equal(await requestUpgradeConsent(f.key,"verify-frozen"),"busy");
+ }finally{await control.close();f.cleanup();}
+});
+
 linuxTest("busy Agent must not update unit or release another in-flight freeze",async()=>{
  const f=fixture();
  try{

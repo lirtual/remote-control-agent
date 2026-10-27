@@ -37,6 +37,8 @@ jobs:
         run: corepack pnpm --filter remote-control-agent typecheck
       - name: Build native supervisor and test
         run: corepack pnpm --filter remote-control-agent test
+      - name: Isolated Linux one-shot immutable staging contract (no systemd effects)
+        run: python3 -B apps/remote-control-agent/tests/linux-stage-only.test.py
       - name: Build and unpack unpublished native candidate (no Release publishing)
         shell: bash
         run: |
@@ -155,6 +157,11 @@ jobs:
           # Keep its 7-second output assertion and every original safety check.
           node --experimental-strip-types --test tests/windows-full-tools.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows process integration tests failed' }
+          # The WMI child must outlive its caller without changing a production Task.
+          node --experimental-strip-types --test tests/windows-upgrade-process.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows independent upgrade-process gate failed' }
+          node --experimental-strip-types --test tests/windows-upgrade-executor.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows upgrade reconnect proof and watchdog validation failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
       - name: Real protected Quick Tunnel challenge on native Windows (manual candidate gate)
@@ -464,11 +471,30 @@ jobs:
               throw 'Pinned browser upgrade candidate ZIP unavailable'
             }
             $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
-            if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
-            $newCli = Join-Path $newDir 'rca.cmd'
+            # A real stage-only request must never stop or mutate the existing
+            # Task or bypass the local installer's default RawUI approval.
+            $originalTask = Get-ScheduledTask -TaskName ('RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_'))
+            $originalAction = [string]$originalTask.Actions[0].Execute
             $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
             $origKey = (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash
+            # Source pin fields are mandatory even for CI's separately hashed
+            # offline archive; the offline branch is unavailable outside CI.
+            $ciCommit = 'a' * 40
+            $stagerScript = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-stage-install.ps1'
+            if (-not (Test-Path -LiteralPath $stagerScript -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $stagerScript -Algorithm SHA256).Hash -ne
+                  (Get-FileHash -LiteralPath 'install.ps1' -Algorithm SHA256).Hash) {
+              throw 'Installed current-version StageOnly script is not the reviewed installer'
+            }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stagerScript -StageOnly -Version $newVersion -PinnedCommit $ciCommit -PinnedReleaseSha256 $secondDigest -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            if ($LASTEXITCODE -ne 0) { throw 'Real installer stage-only candidate failed' }
+            $afterStaging = Get-ScheduledTask -TaskName $originalTask.TaskName
+            if (-not [string]::Equals([string]$afterStaging.Actions[0].Execute,$originalAction,[StringComparison]::OrdinalIgnoreCase) -or
+                (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
+                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
+              throw 'Stage-only changed the original Task or paired device'
+            }
+            $newCli = Join-Path $newDir 'rca.cmd'
             # Forced post-switch failure must restore original task's action.
             $badSwitch = Start-Process -FilePath powershell.exe -ArgumentList @(
               '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
@@ -489,11 +515,102 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Failed switch did not restore old executable'
             }
-            & $newCli upgrade --version $newVersion
-            if ($LASTEXITCODE -ne 0) {
-              # Fixture-only diagnostics; owner-facing CLI keeps OS details private.
-              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Switch -Version $newVersion -Direction Upgrade
-              throw 'Verified Windows version upgrade failed'
+            # An unstaged/unreviewed target MUST fail before any Task effect.
+            # This uses the real bundled watchdog against the CI-only Task.
+            $nativeWatchdog = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-upgrade-once.ps1'
+            $unsupportedTarget = Start-Process -FilePath powershell.exe -ArgumentList @(
+              '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
+              $nativeWatchdog,'-OperationId','unstaged-target-denial',
+              '-OriginalVersion',$oldVersion,'-TargetVersion','v0.0.2-ci'
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'unstaged-protocol-refusal.txt')
+            if ($unsupportedTarget.ExitCode -eq 0) {
+              throw 'Watchdog accepted a target without an immutable staged Release'
+            }
+            $noOpTask = Get-ScheduledTask -TaskName $taskName
+            if (-not [string]::Equals([string]$noOpTask.Actions[0].Execute,
+                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase) -or
+                (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
+                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
+              throw 'Unstaged target refusal changed Task or protected device identity'
+            }
+            # The existing CI-only user Task is the process that an updater
+            # will need to stop. WMI spawns under the same SID *outside* its
+            # inherited Job, so the verified switch child must survive Stop.
+            Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $oldRunning = Get-ScheduledTask -TaskName $taskName
+            if ($oldRunning.State -ne 'Running') {
+              throw 'Synthetic Agent Task did not remain active before WMI upgrade'
+            }
+            $powershellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+            $switchScript = (Resolve-Path 'apps/remote-control-agent/scripts/windows-user-task.ps1').Path
+            # CI-only: capture a bounded diagnostic from the WMI child.
+            # All paths and versions here belong to the isolated runner fixture.
+            $wmiLog = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-diagnostic.log'
+            $wmiCommand = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-once.ps1'
+            $wmiBody = @"
+            `$ErrorActionPreference = 'Stop'
+            try {
+              & '$switchScript' -Action Switch -Version '$newVersion' -Direction Upgrade *>&1 |
+                Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+            } catch {
+              (`$_ | Out-String) | Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+              exit 1
+            }
+          "@
+            [IO.File]::WriteAllText($wmiCommand, $wmiBody)
+            $launchLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $wmiCommand + '"'
+            $launchAt = Get-Date
+            $child = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $launchLine } -ErrorAction Stop
+            if ($child.ReturnValue -ne 0 -or $child.ProcessId -le 0) {
+              throw 'Independent WMI upgrade process could not start'
+            }
+            $verifiedChild = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $child.ProcessId) -ErrorAction SilentlyContinue
+            if ($verifiedChild -and
+                (Invoke-CimMethod -InputObject $verifiedChild -MethodName GetOwnerSid).Sid -ne
+                  ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+              throw 'Independent upgrade process owner SID changed'
+            }
+            try {
+              $deadline = (Get-Date).AddSeconds(45)
+              $switched = $false
+              do {
+                Start-Sleep -Milliseconds 500
+                $liveTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                $switched = [string]::Equals([string]$liveTask.Actions[0].Execute,
+                  (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)
+              } while (-not $switched -and (Get-Date) -lt $deadline)
+              if (-not $switched) {
+                if (Test-Path -LiteralPath $wmiLog) {
+                  Get-Content -LiteralPath $wmiLog -Tail 25 | Write-Output
+                }
+                throw 'WMI updater did not survive the synthetic running Task stop'
+              }
+              # Observing the new Action is possible between Set-ScheduledTask
+              # and Start-ScheduledTask. Wait for the same finite runner window
+              # instead of treating that expected transition as a failed upgrade.
+              $runningDeadline = (Get-Date).AddSeconds(12)
+              while ($liveTask.State -ne 'Running' -and (Get-Date) -lt $runningDeadline) {
+                Start-Sleep -Milliseconds 500
+                $liveTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              }
+              if ($liveTask.State -ne 'Running') {
+                throw 'Independent updater did not restart the upgraded synthetic Agent Task'
+              }
+              Start-Sleep -Seconds 2
+              if ((Get-ScheduledTask -TaskName $taskName).State -ne 'Running') {
+                throw 'Upgraded synthetic Agent Task exited immediately after restart'
+              }
+            } finally {
+              # This is the exact just-created WMI fixture process, not an
+              # arbitrary PID. Never kill or clean any production device.
+              $remaining = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $child.ProcessId) -ErrorAction SilentlyContinue
+              if ($remaining -and $remaining.Name -eq 'powershell.exe' -and
+                  $remaining.CreationDate -ge $launchAt.AddSeconds(-3) -and
+                  (Invoke-CimMethod -InputObject $remaining -MethodName GetOwnerSid).Sid -eq
+                    ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+              }
             }
             & (Join-Path $newDir 'bin/node.exe') (Join-Path $newDir 'apps/remote-control-agent/scripts/verify-windows-preview.mjs') $newDir
             if ($LASTEXITCODE -ne 0) { throw 'Installed upgraded Playwright candidate hashes failed' }
@@ -509,12 +626,126 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not restore old executable'
             }
+            # The earlier direct WMI fixture might have stopped its synthetic
+            # target before rollback. Re-establish the actual original Task as
+            # RUNNING so the one-shot watchdog exercises Stop -> Start.
+            $beforeOneShot = Get-ScheduledTask -TaskName $taskName
+            if ($beforeOneShot.State -ne 'Running') {
+              Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              Start-Sleep -Seconds 2
+              $beforeOneShot = Get-ScheduledTask -TaskName $taskName
+            }
+            if ($beforeOneShot.State -ne 'Running') {
+              throw 'CI one-shot fixture cannot establish a running original Agent Task'
+            }
+            # This synthetic identity has NO signed cloud grant. It must
+            # never be able to satisfy the watchdog's authenticated reconnect.
+            # The preceding direct WMI CI already proved Task switch/rollback;
+            # this separate native test proves that NO proof means NO success.
+            $proofOperation = 'ci-watchdog-no-signed-wss'
+            $digest = [Security.Cryptography.SHA256]::Create()
+            try {
+              $proofKey = [BitConverter]::ToString($digest.ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($proofOperation))).Replace('-','').ToLowerInvariant()
+            } finally { $digest.Dispose() }
+            $receiptDirectory = Join-Path $root 'receipts'
+            if (-not (Test-Path -LiteralPath $receiptDirectory)) {
+              $null = New-Item -ItemType Directory -Path $receiptDirectory
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName receipts
+              if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory ACL could not be sealed' }
+            }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Check -Directory $root
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory failed native private ACL gate' }
+            $testPending = Join-Path $receiptDirectory ('upgrade-pending-' + $proofKey + '.json')
+            $testProof = Join-Path $receiptDirectory ('upgrade-auth-' + $proofKey + '.json')
+            $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
+            [IO.File]::WriteAllText($testPending,
+              (@{operation_id=$proofOperation;target_version=$newVersion;source_version=$oldVersion} | ConvertTo-Json -Compress))
+            $watchdogLog = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.log'
+            $watchdogCommand = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.ps1'
+            $watchdogBody = @"
+            try {
+              & '$nativeWatchdog' -OperationId '$proofOperation' -OriginalVersion '$oldVersion' -TargetVersion '$newVersion' *>&1 |
+                Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
+            } catch {
+              (`$_ | Out-String) | Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
+              exit 1
+            }
+          "@
+            [IO.File]::WriteAllText($watchdogCommand, $watchdogBody)
+            $watchdogLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $watchdogCommand + '"'
+            $watchdogChild = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+              CommandLine = $watchdogLine
+            } -ErrorAction Stop
+            if ($watchdogChild.ReturnValue -ne 0 -or $watchdogChild.ProcessId -le 0) {
+              throw 'CI same-owner native watchdog could not start'
+            }
+            try {
+              # Production watchdog waits at most 90 seconds after an actual
+              # switch. The CI timeout leaves enough time to observe rollback.
+              $deadline = (Get-Date).AddSeconds(112)
+              $terminated = $false
+              $observedUpgrade = $false
+              $observedRunningUpgrade = $false
+              do {
+                Start-Sleep -Seconds 1
+                $live = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                if ([string]::Equals([string]$live.Actions[0].Execute,
+                    (Join-Path $newDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                  $observedUpgrade = $true
+                  if ($live.State -eq 'Running') { $observedRunningUpgrade = $true }
+                }
+                $running = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $watchdogChild.ProcessId) -ErrorAction SilentlyContinue
+                $terminated = -not $running
+              } while (-not $terminated -and (Get-Date) -lt $deadline)
+              if (-not $terminated) { throw 'No-proof native watchdog exceeded its deadline' }
+              if (-not $observedUpgrade -or -not $observedRunningUpgrade) {
+                throw 'CI watchdog never demonstrated a running upgraded Task before rollback'
+              }
+              if (Test-Path -LiteralPath $testProof) {
+                throw 'Unauthenticated synthetic device fabricated WSS proof'
+              }
+              # Earlier unstaged-target tests already cover pre-switch refusal.
+              # This test MUST observe a live target Task and a definitive
+              # rollback after no signed WSS; a refusal is not sufficient.
+              if (-not (Test-Path -LiteralPath $testOutcome)) {
+                throw 'Switched native watchdog did not persist a rollback result'
+              }
+              $outcome = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
+              if ($outcome.operation_id -cne $proofOperation -or
+                  $outcome.original_version -cne $oldVersion -or
+                  $outcome.target_version -cne $newVersion -or
+                  $outcome.status -cne 'rolled_back') {
+                throw 'No-proof watchdog did not verify rollback of running Task'
+              }
+              $safeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              if ($safeTask.State -ne 'Running' -or
+                  -not [string]::Equals([string]$safeTask.Actions[0].Execute,
+                    (Join-Path $oldDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'No-proof watchdog did not restore running original Task'
+              }
+            } finally {
+              # Only fixture-created local evidence. Never change any real user Task.
+              Remove-Item -LiteralPath $testPending,$testProof,$testOutcome -Force -ErrorAction SilentlyContinue
+            }
             if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
                 (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
               throw 'Windows upgrade or rollback changed protected identity'
             }
             & $program disable
-            if ($LASTEXITCODE -ne 0) { throw 'Task removal failed' }
+            if ($LASTEXITCODE -ne 0) {
+              # CI-only: isolate a CLI/private-store refusal from a native
+              # Task-Scheduler backend failure without printing credentials.
+              $privateScript = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-private-store.ps1'
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $privateScript -Action Check -Directory $root *> $null
+              Write-Output ('CI CLEANUP PRIVATE ACL: ' + $(if ($LASTEXITCODE -eq 0) {'PASS'} else {'REFUSED'}))
+              $taskBackend = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-user-task.ps1'
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskBackend -Action Status
+              Write-Output ('CI CLEANUP TASK BACKEND: ' + $(if ($LASTEXITCODE -eq 0) {'PASS'} else {'REFUSED'}))
+              throw 'Task removal failed'
+            }
             $created = $false
             $status = & $program task-status | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $status.installed -ne $false) { throw 'Task remained after removal' }

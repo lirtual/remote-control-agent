@@ -9,7 +9,7 @@ export type OperationState = "admitted" | "running" | "completed" | "failed" | "
 
 export interface OperationReceipt {
   operation_id: string;
-  tool_name: "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
+  tool_name: "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option" | "upgrade_agent";
   argument_digest: string;
   state: OperationState;
   created_at: string;
@@ -41,7 +41,7 @@ const RECEIPT_TOOLS = new Set<OperationReceipt["tool_name"]>([
   "write_file", "create_directory", "edit_block", "move_file", "delete_file",
   "start_process", "interact_with_process", "force_terminate",
   "browser_start", "browser_navigate", "browser_close", "browser_tabs",
-  "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+  "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "upgrade_agent",
 ]);
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
@@ -161,7 +161,7 @@ export class ReceiptStore {
 
   private cleanup(): void {
     const cutoff = new Date(Date.now() - RECEIPT_TTL_MS).toISOString();
-    this.db().prepare("DELETE FROM receipts WHERE guarded = 0 AND state IN ('completed','failed') AND created_at < ?").run(cutoff);
+    this.db().prepare("DELETE FROM receipts WHERE guarded = 0 AND tool_name != 'upgrade_agent' AND state IN ('completed','failed') AND created_at < ?").run(cutoff);
     this.db().prepare("UPDATE receipts SET safe_result_summary = NULL, session_id = NULL WHERE guarded = 1 AND created_at < ? AND (safe_result_summary IS NOT NULL OR session_id IS NOT NULL)").run(cutoff);
   }
 
@@ -277,6 +277,13 @@ export class ReceiptStore {
       if (prior) {
         return { kind: prior.tool_name === toolName && prior.argument_digest === digest ? "same" as const : "conflict" as const, receipt: fromRow(prior) };
       }
+      // Only one unresolved upgrade may exist in this owner-local receipt DB.
+      // Once the previous upgrade was interrupted or uncertain, a different
+      // operation ID cannot start another Task switch without reconciliation.
+      if (toolName === "upgrade_agent" &&
+          this.db().prepare("SELECT 1 FROM receipts WHERE tool_name = 'upgrade_agent' AND state != 'completed' LIMIT 1").get()) {
+        return { kind: "full" as const };
+      }
       this.cleanup();
       const now = new Date().toISOString();
       this.db().prepare("INSERT INTO receipts (operation_id, tool_name, argument_digest, state, created_at, updated_at, safe_result_summary, session_id, guarded) VALUES (?, ?, ?, 'admitted', ?, ?, NULL, NULL, 1)")
@@ -290,7 +297,11 @@ export class ReceiptStore {
       if (!this.getStored(operationId)) throw new Error("Receipt disappeared.");
       // Nonzero process exit is not proof of zero effects. Unknown/uncertain
       // failures keep their replay guard after normal retention.
-      const guarded = state === "unknown" || state === "admitted" || state === "running" ||
+      const previous = this.getStored(operationId)!;
+      // Owner-approved upgrade identities can never be reused, even after a
+      // successful switch or 30-day receipt history pruning.
+      const guarded = previous.tool_name === "upgrade_agent" || state === "unknown" ||
+        state === "admitted" || state === "running" ||
         (state === "failed" && !knownNoEffect);
       this.db().prepare("UPDATE receipts SET state = ?, updated_at = ?, safe_result_summary = ?, session_id = COALESCE(?, session_id), guarded = ? WHERE operation_id = ?")
         .run(state, new Date().toISOString(), summary.slice(0, 128), sessionId ?? null, guarded ? 1 : 0, operationId);

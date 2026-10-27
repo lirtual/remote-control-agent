@@ -5,6 +5,12 @@
  * Hibernation heartbeat responses do not wake the DO.
  */
 import { HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
+import { readFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { acknowledgeAuthenticatedLinuxUpgrade } from "./linux-upgrade-reconnect.ts";
+import { parseRemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
+import { acknowledgeAuthenticatedUpgrade } from "./windows-upgrade-executor.ts";
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
 import { collectDeviceInfo } from "./device-info.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
@@ -31,7 +37,7 @@ export async function executeV2SessionRead(
   } catch { return null; }
 }
 
-type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
+type V2FileOperation = "upgrade_agent" | "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
 
 /** One adapter shared by production and tests; no new mutation executor. */
 export async function executeV2FileOperation(
@@ -40,8 +46,24 @@ export async function executeV2FileOperation(
   args: unknown,
   operationId: string,
   signal: AbortSignal,
+  upgrade?: {signedDeviceId: string; originalVersion: string; privateKeyPem: string},
 ): Promise<Record<string, unknown>> {
   try {
+    if (tool === "upgrade_agent") {
+      const parsed = parseRemoteUpgradeDispatch(args);
+      if (!upgrade || !parsed || parsed.operation_id !== operationId) {
+        return { operation_id: operationId, status: "unavailable" };
+      }
+      // This entry only durably records one owner-approved intent. The actual
+      // native Task switch is deliberately disabled until its updater passes
+      // the separate rollback/reconnect acceptance gate.
+      const result = await execution.admitUpgrade(parsed,{
+        ...upgrade, confirmedByAuthenticatedWorker:true,
+      });
+      return { operation_id: operationId,
+        status: result.status === "duplicate" ? "conflict" :
+          result.status === "refused" ? "unavailable" : result.status };
+    }
     if (tool === "get_operation_status") {
       const receipt = await execution.getReceipt(operationId);
       return { operation_id: operationId, status: receipt?.state ?? "not_found",
@@ -232,6 +254,7 @@ export function monitorDeviceSocket(
           return;
         }
         const mutationParsers: Record<string, (input: unknown) => unknown> = {
+          upgrade_agent: parseRemoteUpgradeDispatch,
           write_file: parseLocalWriteFile, create_directory: parseLocalCreateDirectory,
           edit_block: parseLocalEditBlock, move_file: parseLocalMoveFile,
           delete_file: parseLocalDeleteFile, start_process: parseStartProcess,
@@ -250,7 +273,7 @@ export function monitorDeviceSocket(
         // Malformed or unrecognized frames still fail closed below.
         const mutationTool = typeof request?.tool === "string" &&
           Object.hasOwn(mutationParsers, request.tool);
-        const shellTool = ["start_process", "interact_with_process", "force_terminate"]
+        const shellTool = ["start_process", "interact_with_process", "force_terminate", "upgrade_agent"]
           .includes(String(request?.tool));
         const validOperation = request?.kind === "operation" &&
           typeof request.tool === "string" &&
@@ -276,7 +299,7 @@ export function monitorDeviceSocket(
         if (operation && request?.kind === "operation" && typeof request.tool === "string" &&
             (request.tool === "get_operation_status" ||
               (Object.hasOwn(mutationParsers, request.tool) &&
-                (!["start_process", "interact_with_process", "force_terminate"].includes(request.tool) || allowShell))) &&
+                (!["start_process", "interact_with_process", "force_terminate", "upgrade_agent"].includes(request.tool) || allowShell))) &&
             typeof request.operation_id === "string" &&
             parseOperationId({ operation_id: request.operation_id }) &&
             typeof request.request_id === "string" &&
@@ -361,6 +384,8 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
+    /** Fixed local Linux runtime launcher; absent on Windows packages. */
+    launchLinuxUpgrade?: import("./execution.ts").AgentExecutionOptions["launchLinuxUpgrade"];
     /** Optional, locally created browser. Absent by default; never from remote frames. */
     browser?: BrowserBackend;
     verifyHandoffPrerequisites?: () => import("./protected-tunnel.ts").ProtectedTunnelConfig | void;
@@ -384,6 +409,8 @@ export async function maintainAuthenticatedDeviceSession(
   let authenticatedDeviceId: string | undefined;
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory, browser: options.browser,
+    signedEndpoint:baseAddress,
+    launchLinuxUpgrade:options.launchLinuxUpgrade,
     verifyHandoffPrerequisites: options.verifyHandoffPrerequisites,
     sealHandoffEvidence: options.sealHandoffEvidence,
     handoffDeviceId: () => authenticatedDeviceId,
@@ -405,7 +432,42 @@ export async function maintainAuthenticatedDeviceSession(
       authenticatedDeviceId = connection.device_id;
       // Report once per authenticated socket, including each reconnect.
       // The runtime's read-only/full execution gate is separate from display metadata.
-      connection.socket.send(JSON.stringify(collectDeviceInfo()));
+      const runtimeInfo = collectDeviceInfo();
+      connection.socket.send(JSON.stringify(runtimeInfo));
+      // Only a newly signed/approved WSS session can produce the local
+      // watchdog success proof. Updater outcomes remain guarded independently
+      // until the owner DO verifies the same paired device/version.
+      if (process.platform === "win32" && runtimeInfo.agent_version &&
+          options.receiptDirectory && execution) {
+        try {
+          await acknowledgeAuthenticatedUpgrade(options.receiptDirectory,
+            runtimeInfo.agent_version, async operationId => {
+              const receipt = await execution.getReceipt(operationId);
+              return receipt?.tool_name === "upgrade_agent" &&
+                ["admitted","running","unknown"].includes(receipt.state);
+            });
+        } catch { /* A missing or locked receipt is never evidence of success. */ }
+      }
+      // A Linux proof can only be written by the new, manifest-reviewed
+      // one-shot runtime after successful signed WSS authentication. Existing
+      // Linux releases never advertise this protocol, so this is inert there.
+      if (process.platform === "linux" &&
+          runtimeInfo.upgrade_protocol === "owner-one-shot-v1" &&
+          runtimeInfo.agent_version && authenticatedDeviceId && execution) {
+        try {
+          await acknowledgeAuthenticatedLinuxUpgrade({
+            stateDirectory:options.receiptDirectory ?? path.join(os.homedir(),
+              ".local","state","mcp-workers","remote-control-agent"),
+            deviceId:authenticatedDeviceId,
+            runningVersion:runtimeInfo.agent_version,
+            isAdmitted:async operationId => {
+              const receipt=await execution.getReceipt(operationId);
+              return receipt?.tool_name === "upgrade_agent" &&
+                ["admitted","running","unknown"].includes(receipt.state);
+            },
+          });
+        } catch { /* No proof is safer than unverifiable upgrade success. */ }
+      }
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
@@ -418,8 +480,19 @@ export async function maintainAuthenticatedDeviceSession(
             return executeV2SessionRead(execution,tool,args,requestSignal);
           },
           full && execution
-            ? (tool, args, operationId, requestSignal) =>
-              executeV2FileOperation(execution, tool, args, operationId, requestSignal)
+            ? async (tool, args, operationId, requestSignal) => {
+              const upgrade = tool === "upgrade_agent" && authenticatedDeviceId &&
+                (process.platform === "win32" ||
+                  (process.platform === "linux" &&
+                    runtimeInfo.upgrade_protocol === "owner-one-shot-v1" &&
+                    ["native","wsl2"].includes(runtimeInfo.environment) &&
+                    ["x64","arm64"].includes(runtimeInfo.arch)))
+                ? { signedDeviceId:authenticatedDeviceId,
+                    originalVersion:collectDeviceInfo().agent_version ?? "",
+                    privateKeyPem:await readFile(keyPath,"utf8") }
+                : undefined;
+              return executeV2FileOperation(execution,tool,args,operationId,requestSignal,upgrade);
+            }
             : undefined,
           full,
           full && execution ? () => execution.stopOwnedForRevocation() : undefined, execution);

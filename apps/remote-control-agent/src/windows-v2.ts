@@ -83,7 +83,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending" | "receipts"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -512,9 +512,18 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   try {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
+    // SQLite upgrade receipts must inherit a Windows owner-only DACL, not
+    // rely on Node's POSIX 0700 mode (which is not an ACL on Windows).
+    // Existing stores are checked, NEVER silently repaired or replaced.
+    const receiptDirectory = path.win32.join(directory, "receipts");
+    if (!existsSync(receiptDirectory)) {
+      await mkdir(receiptDirectory);
+      assertPrivateStore("Seal", directory, "receipts");
+    }
+    assertPrivateStore("Check", directory);
     const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
-      receiptDirectory: path.win32.join(directory, "receipts"),
+      receiptDirectory,
       verifyHandoffPrerequisites: () => verifyWindowsHandoffPrerequisites(directory,() => assertPrivateStore("Check",directory)),
       sealHandoffEvidence: kind => sealWindowsRuntimeMarker(path.win32.join(directory,"receipts"),kind),
       ...(browser ? { browser } : {}),
