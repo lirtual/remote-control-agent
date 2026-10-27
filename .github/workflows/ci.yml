@@ -712,7 +712,17 @@ jobs:
               throw 'Windows upgrade or rollback changed protected identity'
             }
             & $program disable
-            if ($LASTEXITCODE -ne 0) { throw 'Task removal failed' }
+            if ($LASTEXITCODE -ne 0) {
+              # CI-only: isolate a CLI/private-store refusal from a native
+              # Task-Scheduler backend failure without printing credentials.
+              $privateScript = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-private-store.ps1'
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $privateScript -Action Check -Directory $root *> $null
+              Write-Output ('CI CLEANUP PRIVATE ACL: ' + $(if ($LASTEXITCODE -eq 0) {'PASS'} else {'REFUSED'}))
+              $taskBackend = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-user-task.ps1'
+              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskBackend -Action Status
+              Write-Output ('CI CLEANUP TASK BACKEND: ' + $(if ($LASTEXITCODE -eq 0) {'PASS'} else {'REFUSED'}))
+              throw 'Task removal failed'
+            }
             $created = $false
             $status = & $program task-status | ConvertFrom-Json
             if ($LASTEXITCODE -ne 0 -or $status.installed -ne $false) { throw 'Task remained after removal' }
