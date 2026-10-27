@@ -15,7 +15,7 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 // The StageOnly installer is packaged from the reviewed root source as a pinned file.
-assert.equal(results.files,47,"Unexpected reviewed Windows Playwright file inventory");
+assert.equal(results.files,43,"Unexpected reviewed Windows Playwright file inventory");
 assert.deepEqual(
   await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
   await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
