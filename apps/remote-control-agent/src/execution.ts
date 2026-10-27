@@ -42,7 +42,10 @@ export interface AgentExecutionOptions {
   signedEndpoint?: string;
   /** Linux main injects the reviewed same-owner launcher; Windows never
    * imports Linux systemd/installer sources into its immutable package. */
-  launchLinuxUpgrade?: typeof import("./linux-upgrade-executor.ts").stageAndLaunchApprovedLinuxUpgrade;
+  launchLinuxUpgrade?: (input:unknown, options:{
+    installedRoot:string;endpoint:string;
+    readAdmission:(operationId:string)=>Promise<boolean>;
+  })=>Promise<"launched">;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
