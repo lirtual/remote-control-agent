@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import {hashOperation,matchingLinuxProof,waitForLinuxSignedProof,
   runLinuxOneShotWatchdog} from "../scripts/linux-upgrade-watchdog.mjs";
-import {HISTORICAL_UNIT} from "../scripts/upgrade-existing-service.mjs";
+import {HISTORICAL_UNIT,ConfirmedLinuxServiceRollback} from "../scripts/upgrade-existing-service.mjs";
 
 const linux=process.platform==="linux"&&process.getuid?.()!==0?test:test.skip;
 const OP="proof-one-shot-39",DEVICE="af666663-b30c-4b3d-ad85-c8047dc3516b";
@@ -123,6 +123,22 @@ linux("missing proof, callback error, or failed rollback emits guarded attention
    assert.equal(entry.status,"needs_attention");
   }finally{f.cleanup();}
  }
+});
+linux("only confirmed original Linux service rollback yields terminal local rolled_back",async()=>{
+ const f=fixture();
+ try{
+  const answer=await runLinuxOneShotWatchdog({...f.opts,upgrade:async()=>{
+    throw new ConfirmedLinuxServiceRollback();
+  }});
+  assert.deepEqual(answer,{status:"rolled_back"});
+  assert.deepEqual(JSON.parse(readFileSync(f.outcome,"utf8")),{
+    operation_id:OP,device_id:DEVICE,original_version:SOURCE,
+    target_version:TARGET,status:"rolled_back",
+  });
+  await assert.rejects(runLinuxOneShotWatchdog({...f.opts,
+    upgrade:async()=>{throw Error("must not repeat");}
+  }),/Existing proof or outcome/);
+ }finally{f.cleanup();}
 });
 linux("stale WSS proof or result before switching refuses without invoking installer",async()=>{
  for(const prior of ["proof","outcome"]){
