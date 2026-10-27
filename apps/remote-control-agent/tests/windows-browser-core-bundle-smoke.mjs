@@ -3,7 +3,7 @@ import {createServer} from "node:http";
 import {createHash} from "node:crypto";
 import {mkdtemp,readFile,writeFile,rm} from "node:fs/promises";
 import {spawnSync} from "node:child_process";
-import {pathToFileURL} from "node:url";
+import {pathToFileURL,fileURLToPath} from "node:url";
 import os from "node:os";
 import path from "node:path";
 import {inspectWindowsPreview} from "../scripts/verify-windows-preview.mjs";
@@ -16,6 +16,11 @@ const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 // The StageOnly installer is packaged from the reviewed root source as a pinned file.
 assert.equal(results.files,44,"Unexpected reviewed Windows Playwright file inventory");
+assert.deepEqual(
+  await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
+  await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
+  "The staged immutable Release verifier must be byte-identical to the reviewed interactive installer"
+);
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
 const pinned=manifest.browser_runtime;
