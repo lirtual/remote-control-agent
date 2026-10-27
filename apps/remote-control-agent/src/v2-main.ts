@@ -3,6 +3,7 @@ import { lstat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
+import { stageAndLaunchApprovedLinuxUpgrade } from "./linux-upgrade-executor.ts";
 // Immutable release profile identifier, not a user-configurable capability switch.
 export const V2_RUNTIME_PROFILE = "paired-full-v1";
 
@@ -35,6 +36,7 @@ if (!endpoint || process.platform !== "linux") {
     // A successfully paired device exposes file, Shell and session tools.
     // Signed WSS identity, device revocation and durable receipts still apply.
     await maintainAuthenticatedDeviceSession(endpoint, keyPath, controller.signal, {
+      launchLinuxUpgrade:stageAndLaunchApprovedLinuxUpgrade,
       onState: state => {
         log(state);
         if (state === "rejected") rejected = true;
