@@ -17,7 +17,7 @@ import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote
 import { stageAndLaunchApprovedWindowsUpgrade, readNativeUpgradeOutcome } from "./windows-upgrade-executor.ts";
 import { collectDeviceInfo } from "./device-info.ts";
 import { readLinuxUpgradeOutcome } from "./linux-upgrade-reconnect.ts";
-import { stageAndLaunchApprovedLinuxUpgrade } from "./linux-upgrade-executor.ts";
+
 import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -40,6 +40,9 @@ export interface AgentExecutionOptions {
   receiptDirectory?: string;
   /** Configured outbound authenticated Worker origin; never an MCP argument. */
   signedEndpoint?: string;
+  /** Linux main injects the reviewed same-owner launcher; Windows never
+   * imports Linux systemd/installer sources into its immutable package. */
+  launchLinuxUpgrade?: typeof import("./linux-upgrade-executor.ts").stageAndLaunchApprovedLinuxUpgrade;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
@@ -674,7 +677,9 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
             if (process.platform==="linux") {
               if (!options.signedEndpoint) throw Error("Signed Linux endpoint missing.");
               const endpoint=new URL(options.signedEndpoint).origin+"/";
-              result=await stageAndLaunchApprovedLinuxUpgrade(input,{
+              if (!options.launchLinuxUpgrade)
+                throw Error("No reviewed native Linux one-shot executor.");
+              result=await options.launchLinuxUpgrade(input,{
                 installedRoot:sourceRoot,endpoint,
                 readAdmission:async operationId=>{
                   const row=await receipts.get(operationId);
