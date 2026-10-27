@@ -295,9 +295,14 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
                 break
         if removing.poll() is None:
             removing.kill()
-        if (removing.wait(timeout=3) != 0 or not confirmed
-                or b"NOT_PERFORMED" not in transcript):
-            raise SystemExit("Packaged manager real-TTY uninstall failed closed")
+        rc = removing.wait(timeout=3)
+        if (rc != 0 or not confirmed or b"NOT_PERFORMED" not in transcript):
+            # Safe diagnostics only; never expose the TTY transcript or keys.
+            raise SystemExit("Packaged manager real-TTY uninstall failed closed"
+                             + " (exit_ok=" + str(rc == 0).lower()
+                             + ", confirmation_seen=" + str(confirmed).lower()
+                             + ", result_marker_seen="
+                             + str(b"NOT_PERFORMED" in transcript).lower() + ")")
     finally:
         os.close(uninstall_master)
     if (launcher.exists() or launcher.is_symlink() or version.exists()
