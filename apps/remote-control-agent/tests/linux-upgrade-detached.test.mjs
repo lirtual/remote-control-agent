@@ -107,7 +107,11 @@ linux("approved reviewed Linux upgrade creates durable guard then launches separ
     const marker=path.join(f.state,oneShotLinuxUnit(OP).marker);
     const json=JSON.parse(readFileSync(marker,"utf8"));
     assert.deepEqual(json,{operation_id:OP,device_id:DEVICE,
-      current_version:CURRENT,target_version:TARGET});
+      current_version:CURRENT,target_version:TARGET,
+      current_manifest_sha256:createHash("sha256").update(readFileSync(
+        path.join(f.current,"bundle.json"))).digest("hex"),
+      target_manifest_sha256:createHash("sha256").update(readFileSync(
+        path.join(f.target,"bundle.json"))).digest("hex")});
     assert.equal(f.attempts().length,1);
     await assert.rejects(launchDetachedLinuxUpgrade(f.options),
       /EEXIST|file already exists/i,"same operation must never execute a second time");
