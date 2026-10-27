@@ -82,6 +82,17 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
     "-StageOnly","-Version",op.target.tag,
     "-PinnedCommit",op.target.commit,"-PinnedReleaseSha256",op.target.windows_asset_sha256,
   ]);
+  // Fail BEFORE creating a pending receipt or stopping any Task if the
+  // immutable target lacks the entire owner-one-shot reconnect protocol.
+  // Earlier published Windows releases intentionally do not advertise it.
+  const targetRoot=path.win32.join(programs,op.target.tag+"-windows-x64");
+  const targetManifest=JSON.parse(
+    await readFile(path.win32.join(targetRoot,"bundle.json"),"utf8")
+  ) as {version?:unknown;upgrade_protocol?:unknown};
+  if(targetManifest.version!==op.target.tag ||
+     targetManifest.upgrade_protocol!=="owner-one-shot-v1") {
+    throw Error("Reviewed target does not support remote rollback watchdog.");
+  }
   const receiptDir=path.win32.join(paths.stateRoot,"receipts");
   const info=await lstat(receiptDir);
   if(!info.isDirectory() || info.isSymbolicLink())throw Error("Unsafe native receipt directory.");
