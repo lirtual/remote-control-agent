@@ -492,11 +492,56 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Failed switch did not restore old executable'
             }
-            & $newCli upgrade --version $newVersion
-            if ($LASTEXITCODE -ne 0) {
-              # Fixture-only diagnostics; owner-facing CLI keeps OS details private.
-              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File 'apps/remote-control-agent/scripts/windows-user-task.ps1' -Action Switch -Version $newVersion -Direction Upgrade
-              throw 'Verified Windows version upgrade failed'
+            # The existing CI-only user Task is the process that an updater
+            # will need to stop. WMI spawns under the same SID *outside* its
+            # inherited Job, so the verified switch child must survive Stop.
+            Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            Start-Sleep -Seconds 2
+            $oldRunning = Get-ScheduledTask -TaskName $taskName
+            if ($oldRunning.State -ne 'Running') {
+              throw 'Synthetic Agent Task did not remain active before WMI upgrade'
+            }
+            $powershellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
+            $switchScript = (Resolve-Path 'apps/remote-control-agent/scripts/windows-user-task.ps1').Path
+            # All interpolated fields are CI-owned paths and pinned fixture
+            # versions, never tool arguments or user-supplied shell strings.
+            $launchLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $switchScript + '" -Action Switch -Version ' + $newVersion + ' -Direction Upgrade'
+            $launchAt = Get-Date
+            $child = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $launchLine } -ErrorAction Stop
+            if ($child.ReturnValue -ne 0 -or $child.ProcessId -le 0) {
+              throw 'Independent WMI upgrade process could not start'
+            }
+            $verifiedChild = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $child.ProcessId) -ErrorAction SilentlyContinue
+            if ($verifiedChild -and
+                (Invoke-CimMethod -InputObject $verifiedChild -MethodName GetOwnerSid).Sid -ne
+                  ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+              throw 'Independent upgrade process owner SID changed'
+            }
+            try {
+              $deadline = (Get-Date).AddSeconds(45)
+              $switched = $false
+              do {
+                Start-Sleep -Milliseconds 500
+                $liveTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                $switched = [string]::Equals([string]$liveTask.Actions[0].Execute,
+                  (Join-Path $newDir 'bin\\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)
+              } while (-not $switched -and (Get-Date) -lt $deadline)
+              if (-not $switched) {
+                throw 'WMI updater did not survive the synthetic running Task stop'
+              }
+              if ($liveTask.State -ne 'Running') {
+                throw 'Independent updater did not restart the upgraded synthetic Agent Task'
+              }
+            } finally {
+              # This is the exact just-created WMI fixture process, not an
+              # arbitrary PID. Never kill or clean any production device.
+              $remaining = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $child.ProcessId) -ErrorAction SilentlyContinue
+              if ($remaining -and $remaining.Name -eq 'powershell.exe' -and
+                  $remaining.CreationDate -ge $launchAt.AddSeconds(-3) -and
+                  (Invoke-CimMethod -InputObject $remaining -MethodName GetOwnerSid).Sid -eq
+                    ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+                Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+              }
             }
             & (Join-Path $newDir 'bin/node.exe') (Join-Path $newDir 'apps/remote-control-agent/scripts/verify-windows-preview.mjs') $newDir
             if ($LASTEXITCODE -ne 0) { throw 'Installed upgraded Playwright candidate hashes failed' }
