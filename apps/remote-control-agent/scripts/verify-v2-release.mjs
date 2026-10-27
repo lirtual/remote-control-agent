@@ -168,7 +168,7 @@ function safePath(name,directory) {
     n==="apps/remote-control-agent/scripts/install-v2.mjs" ||
     ["bootstrap-node.mjs","manage-v2.mjs","lifecycle-v2.mjs",
      "upgrade-v2.mjs","upgrade-existing-service.mjs",
-     "linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+     "bootstrap-v2.py","linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
      "verify-v2-release.mjs","rca.sh"].some(name=>
        n==="apps/remote-control-agent/scripts/"+name) ||
     n==="apps/remote-control-agent/.build/session-supervisor" ||
@@ -229,6 +229,14 @@ export function inspectTarGzip(gzip,{tag,target}) {
   if(manifest.version!==tag || manifest.target!==target || !/^v24\.\d+\.\d+$/.test(manifest.node) ||
       manifest.name!=="remote-control-agent" || manifest.artifact_schema!==1 ||
       !Array.isArray(manifest.modules)) throw new Error("Unexpected Release version or architecture.");
+  // Historical local-only Releases remain readable. An archive advertising
+  // owner-one-shot must contain the actual Linux stage and recovery runtime.
+  if(manifest.upgrade_protocol!==undefined &&
+     (manifest.upgrade_protocol!=="owner-one-shot-v1" ||
+      ["bootstrap-v2.py","linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs"]
+        .some(name=>!entries.has("apps/remote-control-agent/scripts/"+name) ||
+                    entries.get("apps/remote-control-agent/scripts/"+name).directory)))
+    throw new Error("Incomplete reviewed Linux one-shot Release.");
   const present=Object.keys(PINNED_PLAYWRIGHT_FILES).filter(n=>entries.has(n));
   const dirs=[...PLAYWRIGHT_DIRS].filter(n=>entries.has(n));
   if(manifest.browser_runtime === undefined) {
