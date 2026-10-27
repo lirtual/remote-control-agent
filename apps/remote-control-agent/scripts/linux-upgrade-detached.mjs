@@ -95,16 +95,19 @@ export async function launchDetachedLinuxUpgrade({
   await requireOwned(node,false,true);
   const originalId=(await readFile(identity+".device-id","utf8")).trim();
   if(originalId!==deviceId)throw Error("Linux upgrade pairing changed.");
+  const bundleDigests=[];
   for(const [dir,version] of [[current,currentVersion],[target,targetVersion]]){
     const bundle=path.join(dir,"bundle.json");
     await requireOwned(bundle);
-    const manifest=JSON.parse(await readFile(bundle,"utf8"));
+    const manifestBytes=await readFile(bundle);
+    const manifest=JSON.parse(manifestBytes.toString("utf8"));
     if(manifest.name!=="remote-control-agent"||manifest.version!==version||
        manifest.target!=="linux-"+arch+"-glibc"||
        manifest.upgrade_profile!=="paired-full-v1"||
        manifest.device_protocol!==2||manifest.receipt_schema!==1||
        manifest.upgrade_protocol!=="owner-one-shot-v1")
       throw Error("Unreviewed Linux one-shot bundle.");
+    bundleDigests.push(createHash("sha256").update(manifestBytes).digest("hex"));
   }
   if(await assertAdmission(Object.freeze({operationId,deviceId,currentVersion,
      targetVersion}))!==true)throw Error("No durable owner-approved Linux admission.");
@@ -118,7 +121,8 @@ export async function launchDetachedLinuxUpgrade({
     constants.O_EXCL|constants.O_NOFOLLOW,0o600);
   try{
     await file.writeFile(JSON.stringify({operation_id:operationId,device_id:deviceId,
-      current_version:currentVersion,target_version:targetVersion}),"utf8");
+      current_version:currentVersion,target_version:targetVersion,
+      current_manifest_sha256:bundleDigests[0],target_manifest_sha256:bundleDigests[1]}),"utf8");
     await file.sync();
   }finally{await file.close();}
   const parent=await open(state,constants.O_RDONLY|constants.O_DIRECTORY);
