@@ -13,6 +13,12 @@ import {fileURLToPath} from "node:url";
 import {requestUpgradeConsent} from "./install-v2.mjs";
 
 export const HISTORICAL_UNIT="remote-control-v2-agent.service";
+/** Only confirms original systemd unit, running service and key were restored.
+ * A new signed WSS connection is still required for end-to-end recovery.
+ */
+export class ConfirmedLinuxServiceRollback extends Error {
+  constructor(){ super("Original signed Linux service restored; WSS reconnection pending."); }
+}
 const CANONICAL_UNIT="remote-control-agent.service";
 const LEGACY_MARKER="# Managed by mcp-workers v2 Linux installer; NOT the v1 Agent.";
 const MODERN_MARKER="# Managed by Remote Control Agent installer.";
@@ -240,10 +246,15 @@ export async function upgradeExistingSignedService({
         systemctl(["daemon-reload"]);
         systemctl(["restart",HISTORICAL_UNIT]);
         systemctl(["is-active","--quiet",HISTORICAL_UNIT]);
+        if(await readFile(unitPath,"utf8")!==previous)throw Error("Rollback unit mismatch");
+        const restored=await exactIdentity(plan.identity);
+        if(restored.id!==identity.id||restored.digest!==identity.digest)
+          throw Error("Rollback identity changed");
         await rm(backup);await syncParent(backup);
       }catch{
         throw Error("Upgrade failed; rollback uncertain; backup retained for manual recovery");
       }
+      if(verifySignedReconnect)throw new ConfirmedLinuxServiceRollback();
       throw error;
     }
   }finally{
