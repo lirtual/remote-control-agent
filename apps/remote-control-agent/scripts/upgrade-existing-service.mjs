@@ -21,6 +21,7 @@ const DESCRIPTION="Remote Control Agent (signed outbound WSS)";
 const APP="apps/remote-control-agent";
 const VERSION=/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DEVICE_ID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const OPERATION_ID=/^(?!\\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
 
 function owned(meta,dir=false){
   if(meta.uid!==process.getuid()||meta.isSymbolicLink()||
@@ -152,11 +153,15 @@ export async function upgradeExistingSignedService({
   systemctl=system,freeze=requestUpgradeConsent,
   // Optional, locally supplied by a future independent one-shot updater.
   // Never derived from MCP arguments or an Agent-provided version string.
-  verifySignedReconnect,
+  verifySignedReconnect,upgradeOperationId,
 }={}){
   if(process.platform!=="linux"||process.getuid()===0)throw Error("Linux non-root owner required");
-  if(verifySignedReconnect!==undefined&&typeof verifySignedReconnect!=="function")
-    throw Error("Invalid locally verified upgrade acceptance");
+  if(verifySignedReconnect!==undefined&&
+     (typeof verifySignedReconnect!=="function"||
+      typeof upgradeOperationId!=="string"||!OPERATION_ID.test(upgradeOperationId)))
+    throw Error("Invalid locally verified one-shot upgrade acceptance");
+  if(verifySignedReconnect===undefined&&upgradeOperationId!==undefined)
+    throw Error("Unbound one-shot upgrade operation");
   const unitDir=path.join(home,".config/systemd/user");
   const unitPath=path.join(unitDir,HISTORICAL_UNIT);
   const backup=unitPath+".upgrade-backup";
@@ -212,7 +217,8 @@ export async function upgradeExistingSignedService({
         try{
           verified=await Promise.race([
             Promise.resolve().then(()=>verifySignedReconnect({
-              deviceId:identity.id,version:targetVersion,service:HISTORICAL_UNIT,
+              operationId:upgradeOperationId,deviceId:identity.id,
+              version:targetVersion,service:HISTORICAL_UNIT,
             })),
             new Promise(resolve=>{timeout=setTimeout(()=>resolve(false),90_000);}),
           ]);
