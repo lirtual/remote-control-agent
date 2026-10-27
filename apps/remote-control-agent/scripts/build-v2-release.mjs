@@ -112,6 +112,11 @@ export function runtimeSources(entries = ["v2-main.ts", "pair-device.ts", "v2-re
     for (const imp of pp.importedFiles) {
       const dependency = imp.fileName;
       if (dependency.startsWith("node:")) continue;
+      // Exactly one reviewed native helper, already packaged by the strict
+      // fixed scripts inventory, may be imported by the Linux-only executor.
+      // Do not broaden the static source boundary to arbitrary .mjs modules.
+      if (name==="linux-upgrade-executor.ts" &&
+          dependency==="../scripts/linux-upgrade-detached.mjs") continue;
       if (!dependency.startsWith("./") || !dependency.endsWith(".ts")) {
         throw new Error("An external dependency needs separate review: " + dependency);
       }
