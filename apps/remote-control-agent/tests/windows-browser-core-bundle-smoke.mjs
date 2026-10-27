@@ -15,7 +15,7 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 // The StageOnly installer is packaged from the reviewed root source as a pinned file.
-assert.equal(results.files,46,"Unexpected reviewed Windows Playwright file inventory");
+assert.equal(results.files,47,"Unexpected reviewed Windows Playwright file inventory");
 assert.deepEqual(
   await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
   await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
@@ -30,10 +30,12 @@ try{
 }finally{
   await writeFile(nativeStageInstaller,verifiedStageInstaller);
 }
-assert.equal(inspectWindowsPreview(stage).files,46);
+assert.equal(inspectWindowsPreview(stage).files,47);
 
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
+assert.equal(typeof manifest.hashes?.["apps/remote-control-agent/src/linux-upgrade-reconnect.js"],
+  "string","The exact audited Linux WSS proof module must be included in shared Windows runtime");
 const infoModule=path.join(stage,"apps/remote-control-agent/src/device-info.js");
 const {collectDeviceInfo}=await import(pathToFileURL(infoModule).href);
 const signedInfo=collectDeviceInfo();
