@@ -110,8 +110,7 @@ export async function admitOwnerApprovedUpgrade(
   const p = parseRemoteUpgradeDispatch(untrusted);
   if (!p || !local.confirmedByAuthenticatedWorker ||
       ("windows_asset_sha256" in p.target
-        ? (local.platform ?? process.platform) !== "win32" ||
-          (local.arch ?? process.arch) !== "x64"
+        ? (local.platform ?? process.platform) !== "win32"
         : (local.platform ?? process.platform) !== "linux" ||
           local.linuxProtocolReady !== true ||
           (local.arch ?? process.arch) !== p.target.linux_arch ||
