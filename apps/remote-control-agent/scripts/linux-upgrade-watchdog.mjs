@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
 import {setTimeout as sleep} from "node:timers/promises";
-import {HISTORICAL_UNIT,upgradeExistingSignedService}
+import {HISTORICAL_UNIT,upgradeExistingSignedService,ConfirmedLinuxServiceRollback}
   from "./upgrade-existing-service.mjs";
 
 const OP=/^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
@@ -193,9 +193,12 @@ export async function runLinuxOneShotWatchdog({
        result.service!==HISTORICAL_UNIT||result.identityPreserved!==true)
       throw Error("Signed Linux upgrade result remains unverified.");
     status="completed";
-  }catch{
-    // Existing upgrader tries rollback and protects the original-unit backup
-    // when rollback is uncertain. Do NOT infer verified rollback from an error.
+  }catch(error){
+    // This typed signal only proves original unit + identity + systemctl
+    // restoration. Worker may report the final rollback only after the OLD
+    // signed Agent reconnects and reports its original SQLite receipt.
+    if(error instanceof ConfirmedLinuxServiceRollback)status="rolled_back";
+    // Every other error remains guarded unknown; never infer rollback.
   }
   const payload={operation_id:operationId,device_id:op.device_id,
     original_version:op.current_version,target_version:op.target_version,status};
