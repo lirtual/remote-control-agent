@@ -37,6 +37,8 @@ jobs:
         run: corepack pnpm --filter remote-control-agent typecheck
       - name: Build native supervisor and test
         run: corepack pnpm --filter remote-control-agent test
+      - name: Isolated Linux one-shot immutable staging contract (no systemd effects)
+        run: python3 -B apps/remote-control-agent/tests/linux-stage-only.test.py
       - name: Build and unpack unpublished native candidate (no Release publishing)
         shell: bash
         run: |
