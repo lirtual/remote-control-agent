@@ -19,7 +19,7 @@ const FILES=new Set([
   APP+"/scripts/install-v2.mjs",APP+"/scripts/bootstrap-node.mjs",
   APP+"/scripts/manage-v2.mjs",APP+"/scripts/lifecycle-v2.mjs",
   APP+"/scripts/upgrade-v2.mjs",APP+"/scripts/upgrade-existing-service.mjs",
-  APP+"/scripts/linux-upgrade-detached.mjs",
+  APP+"/scripts/bootstrap-v2.py",APP+"/scripts/linux-upgrade-detached.mjs",
   APP+"/scripts/linux-upgrade-watchdog.mjs",
   APP+"/scripts/verify-v2-release.mjs",
   APP+"/scripts/rca.sh",APP+"/.build/session-supervisor",
@@ -107,6 +107,14 @@ export function inspectPinnedArchiveBytes(bytes,{expectedSha256,tag,target}){
     manifest.device_protocol!==2||manifest.receipt_schema!==1||
     !["read-only-no-shell-v1","paired-full-v1"].includes(manifest.upgrade_profile))
     throw Error("Unsupported Agent manifest / ABI / protocol");
+  // Continue accepting historic local-only archives, but never extract an
+  // advertised owner-one-shot release missing its signed-upgrade runtime.
+  if(manifest.upgrade_protocol!==undefined &&
+     (manifest.upgrade_protocol!=="owner-one-shot-v1" ||
+      ["bootstrap-v2.py","linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs"]
+        .some(name=>!records.has(APP+"/scripts/"+name) ||
+                    records.get(APP+"/scripts/"+name).directory)))
+    throw Error("Incomplete reviewed Linux one-shot Release");
   const elfMachine=target==="linux-x64-glibc"?62:183;
   for(const entry of ["bin/node",APP+"/.build/session-supervisor"]){
     const elf=records.get(entry).data;
