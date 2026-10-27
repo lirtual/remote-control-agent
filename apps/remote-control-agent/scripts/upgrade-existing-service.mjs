@@ -21,7 +21,7 @@ const DESCRIPTION="Remote Control Agent (signed outbound WSS)";
 const APP="apps/remote-control-agent";
 const VERSION=/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const DEVICE_ID=/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
-const OPERATION_ID=/^(?!\\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
+const OPERATION_ID=/^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
 
 function owned(meta,dir=false){
   if(meta.uid!==process.getuid()||meta.isSymbolicLink()||
