@@ -43,6 +43,12 @@ if (-not [string]::Equals([string]$currentTask.Actions[0].Execute,$oldAction,
     [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Task version drift before one-shot upgrade; no switch permitted'
 }
+# An approved remote upgrade must start from a live authenticated Task.
+# A stopped or rapidly exiting Task cannot safely preserve running state
+# through the native Switch, even if the earlier owner preview was online.
+if ($currentTask.State -ne 'Running') {
+  throw 'Current Agent Task is not running; remote switch refused'
+}
 $receiptItem = Get-Item -LiteralPath $receiptDir -Force -ErrorAction Stop
 if (-not $receiptItem.PSIsContainer -or
     ($receiptItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
