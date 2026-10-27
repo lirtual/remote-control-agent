@@ -69,6 +69,12 @@ test("reviewed watchdog cannot complete on only one Running Task snapshot",async
     "liveness evidence must begin empty and reset after missing/invalid observations");
   assert.match(script,/\$current\.State\s+-eq\s+'Running'/,
     "the verified native Task itself must still be Running");
+  assert.match(script,/\$liveSample\s*=\s*\$false/,
+    "every bounded poll must start as invalid, including missing WSS proof");
+  assert.match(script,/if\s*\(\$liveSample\)/,
+    "only a complete native Task and signed proof check can count toward success");
+  assert.match(script,/\}\s*else\s*\{\s*\$runningSamples\s*=\s*0/,
+    "any invalid observation must reset the consecutive liveness count");
   assert.match(script,/\$runningSamples\+\+/,
     "a valid signed-WSS Task sample must advance the liveness counter");
   assert.match(script,/if\s*\(\$runningSamples\s+-ge\s+3\)/,
