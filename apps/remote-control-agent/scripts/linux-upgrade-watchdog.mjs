@@ -67,17 +67,35 @@ export async function readLinuxUpgradeAttempt({home=os.homedir(),operationId}={}
   await privateMeta(state,true);
   const hash=hashOperation(operationId);
   const record=await readPrivateJson(path.join(state,"upgrade-run-"+hash+".json"));
-  if(!exactKeys(record,["operation_id","device_id","current_version","target_version"])||
+  if(!exactKeys(record,["operation_id","device_id","current_version","target_version",
+       "current_manifest_sha256","target_manifest_sha256"])||
      record.operation_id!==operationId||!ID.test(record.device_id)||
-     !VERSION.test(record.current_version)||!VERSION.test(record.target_version))
+     !VERSION.test(record.current_version)||!VERSION.test(record.target_version)||
+     !/^[a-f0-9]{64}$/.test(record.current_manifest_sha256)||
+     !/^[a-f0-9]{64}$/.test(record.target_manifest_sha256))
     throw Error("Invalid durable one-shot operation evidence.");
   const source=rootPath(home,record.current_version);
   const currentRunner=path.join(source,APP,"scripts/linux-upgrade-watchdog.mjs");
   const actualRunner=path.resolve(fileURLToPath(import.meta.url));
   if(actualRunner!==currentRunner)throw Error("Watchdog did not start from approved existing program.");
   await privateMeta(source,true);
-  await privateMeta(rootPath(home,record.target_version),true);
+  const target=rootPath(home,record.target_version);
+  await privateMeta(target,true);
   await privateMeta(currentRunner);
+  for(const [root,digest,version] of [
+    [source,record.current_manifest_sha256,record.current_version],
+    [target,record.target_manifest_sha256,record.target_version],
+  ]){
+    const name=path.join(root,"bundle.json");
+    const m=await readPrivateJson(name);
+    if(m.name!=="remote-control-agent"||m.version!==version||
+       m.target!=="linux-"+process.arch+"-glibc"||
+       m.upgrade_profile!=="paired-full-v1"||
+       m.upgrade_protocol!=="owner-one-shot-v1"||
+       m.device_protocol!==2||m.receipt_schema!==1||
+       createHash("sha256").update(await readFile(name)).digest("hex")!==digest)
+      throw Error("Linux one-shot manifest changed after approved launch.");
+  }
   const identity=path.join(home,".local/share/mcp-workers/remote-control/v2-identity.pem");
   await privateMeta(identity);
   await privateMeta(identity+".device-id");
@@ -133,8 +151,9 @@ export async function runLinuxOneShotWatchdog({
   home=os.homedir(),operationId,
   upgrade=upgradeExistingSignedService,
   waitForProof=waitForLinuxSignedProof,
+  readAttempt=readLinuxUpgradeAttempt,
 }={}){
-  const op=await readLinuxUpgradeAttempt({home,operationId});
+  const op=await readAttempt({home,operationId});
   const proof=path.join(op.state,"upgrade-auth-"+op.hash+".json");
   const outcome=path.join(op.state,"upgrade-outcome-"+op.hash+".json");
   if(await exists(proof)||await exists(outcome))
