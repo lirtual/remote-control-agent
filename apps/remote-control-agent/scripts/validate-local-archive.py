@@ -144,13 +144,25 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     candidate = root / "candidate"
     module.unpack_verified(archive, candidate, records, tag, target)
     manifest = json.loads((candidate / "bundle.json").read_text("utf-8"))
+    # Candidate packages include the reviewed inert Linux helper source, but
+    # must NOT advertise remote upgrade readiness until a signed-WSS approval
+    # path and exact source/asset pins are independently security-accepted.
+    if manifest.get("upgrade_protocol") is not None:
+        raise SystemExit("Linux one-shot capability cannot be advertised by an unaccepted candidate")
+    for helper in ("linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"):
+        entry = candidate / "apps/remote-control-agent/scripts" / helper
+        meta = entry.lstat()
+        if not entry.is_file() or entry.is_symlink() or meta.st_mode & 0o777 != 0o600:
+            raise SystemExit("Required inert Linux one-shot helper is absent or untrusted")
     node = candidate / "bin/node"
     helper = candidate / "apps/remote-control-agent/.build/session-supervisor"
     script = candidate / "apps/remote-control-agent/src/v2-main.js"
     installer = candidate / "apps/remote-control-agent/scripts/install-v2.mjs"
     for argv in ([str(node), "--version"], [str(helper), "--probe"],
                  [str(node), "--check", str(script)],
-                 [str(node), "--check", str(installer)]):
+                 [str(node), "--check", str(installer)],
+                 *([str(node), "--check", str(candidate / "apps/remote-control-agent/scripts" / helper)]
+                   for helper in ("linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"))):
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=10, check=False,
                               start_new_session=True)
