@@ -158,18 +158,40 @@ export async function runLinuxOneShotWatchdog({
   const outcome=path.join(op.state,"upgrade-outcome-"+op.hash+".json");
   if(await exists(proof)||await exists(outcome))
     throw Error("Existing proof or outcome forbids new Linux Task switch.");
-  let status="needs_attention";
+  // systemd-run's unit collision is not a durable replay barrier: systemd may
+  // collect the transient unit after an interrupted watchdog. A separate
+  // fsynced exclusive claim keeps a restarted runner from switching twice.
+  // An interrupted claim is UNKNOWN and must be reconciled, never retried.
+  const claim=path.join(op.state,"upgrade-exec-"+op.hash+".json");
+  const claimFile=await open(claim,constants.O_WRONLY|constants.O_CREAT|
+    constants.O_EXCL|constants.O_NOFOLLOW,0o600);
   try{
-    await upgrade({
+    await claimFile.writeFile(JSON.stringify({operation_id:operationId,
+      device_id:op.device_id,target_version:op.target_version}),"utf8");
+    await claimFile.sync();
+  }finally{await claimFile.close();}
+  const claimDir=await open(op.state,constants.O_RDONLY|constants.O_DIRECTORY);
+  try{await claimDir.sync();}finally{await claimDir.close();}
+  let status="needs_attention";
+  let signedProofAccepted=false;
+  try{
+    const result=await upgrade({
       home,newRoot:rootPath(home,op.target_version),endpoint:op.endpoint,
       upgradeOperationId:operationId,
       verifySignedReconnect:async binding=>{
         if(binding.operationId!==operationId||binding.deviceId!==op.device_id||
            binding.version!==op.target_version||binding.service!==HISTORICAL_UNIT)
           return false;
-        return await waitForProof(proof,binding);
+        signedProofAccepted=(await waitForProof(proof,binding))===true;
+        return signedProofAccepted;
       },
     });
+    // Neither a successful systemctl call nor a mock that returns without
+    // invoking the signed callback is allowed to produce completion evidence.
+    if(!signedProofAccepted||result?.status!=="active"||
+       result.deviceId!==op.device_id||result.version!==op.target_version||
+       result.service!==HISTORICAL_UNIT||result.identityPreserved!==true)
+      throw Error("Signed Linux upgrade result remains unverified.");
     status="completed";
   }catch{
     // Existing upgrader tries rollback and protects the original-unit backup
