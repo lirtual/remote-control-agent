@@ -146,3 +146,34 @@ export async function acknowledgeAuthenticatedUpgrade(
   }
   return acknowledged;
 }
+
+/** A signed live Agent may reconcile an already fsynced watchdog outcome.
+ * The file is an effect observation, not permission to retry an upgrade.
+ */
+export async function readNativeUpgradeOutcome(
+  receiptDir:string, operationId:string, runningVersion:string | undefined,
+):Promise<"completed" | "rolled_back" | null> {
+  if(process.platform!=="win32" || !OP.test(operationId) || !runningVersion) return null;
+  const key=createHash("sha256").update(operationId).digest("hex");
+  const name=path.win32.join(receiptDir,"upgrade-outcome-"+key+".json");
+  try {
+    const entry=await lstat(name);
+    if(!entry.isFile() || entry.isSymbolicLink() || entry.size>2048) return null;
+    const row=JSON.parse(await readFile(name,"utf8")) as {
+      operation_id?:unknown;original_version?:unknown;target_version?:unknown;status?:unknown;
+    };
+    if(row.operation_id!==operationId ||
+       !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(String(row.original_version)) ||
+       !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(String(row.target_version)))return null;
+    if(row.status==="completed" && row.target_version===runningVersion) {
+      const proof=path.win32.join(receiptDir,"upgrade-auth-"+key+".json");
+      const signed=JSON.parse(await readFile(proof,"utf8")) as {
+        operation_id?:unknown;target_version?:unknown;status?:unknown;
+      };
+      if(signed.operation_id===operationId && signed.target_version===runningVersion &&
+         signed.status==="authenticated_wss") return "completed";
+    }
+    if(row.status==="rolled_back" && row.original_version===runningVersion)return "rolled_back";
+  }catch{ /* Missing/truncated/stale local outcomes stay guarded. */ }
+  return null;
+}
