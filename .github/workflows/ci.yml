@@ -158,6 +158,8 @@ jobs:
           # The WMI child must outlive its caller without changing a production Task.
           node --experimental-strip-types --test tests/windows-upgrade-process.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows independent upgrade-process gate failed' }
+          node --experimental-strip-types --test tests/windows-upgrade-executor.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows upgrade reconnect proof and watchdog validation failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
       - name: Real protected Quick Tunnel challenge on native Windows (manual candidate gate)
