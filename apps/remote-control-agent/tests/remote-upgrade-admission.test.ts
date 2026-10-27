@@ -144,3 +144,51 @@ test("receipt-only native Agent never advertises upgrade execution readiness",()
   assert.equal(Object.hasOwn(info,"upgrade_protocol"),false,
     "a release without a proven one-shot updater may not enable remote owner approval");
 });
+
+
+test("Linux signed one-shot admission requires exact arch, reviewed protocol and permanent key",async()=>{
+  const f=privateFixture();
+  const pin={tag:"v0.1.33",commit:"a".repeat(40),
+    linux_asset_sha256:"b".repeat(64),linux_arch:"x64" as const};
+  const intent={...f.intent,current_version:"v0.1.22",target:pin};
+  const local={...f.local,originalVersion:"v0.1.22",
+    platform:"linux" as const,arch:"x64",linuxProtocolReady:true,
+    environment:"wsl2"};
+  await withStore(async receipts=>{
+    for(const [i,change] of [
+      {linuxProtocolReady:false},{platform:"win32" as const},
+      {arch:"arm64"},{environment:"container"},
+      {environment:"wsl1"},{confirmedByAuthenticatedWorker:false},
+    ].entries()){
+      const denied=await admitOwnerApprovedUpgrade(receipts,
+        {...intent,operation_id:"denied-linux-"+i},{...local,...change});
+      assert.equal(denied.status,"refused",JSON.stringify(change));
+    }
+    assert.equal((await admitOwnerApprovedUpgrade(receipts,intent,local)).status,
+      "admitted");
+    assert.equal((await admitOwnerApprovedUpgrade(receipts,intent,local)).status,
+      "duplicate");
+    assert.equal((await admitOwnerApprovedUpgrade(receipts,
+      {...intent,target:{...pin,linux_asset_sha256:"c".repeat(64)}},local)).status,
+      "conflict");
+  });
+});
+
+test("Linux remote dispatcher rejects foreign pin fields, prerelease and wrong-arch payload",()=>{
+  const f=privateFixture();
+  const intent={...f.intent,current_version:"v0.1.22",target:{
+    tag:"v0.1.33",commit:"a".repeat(40),
+    linux_asset_sha256:"b".repeat(64),linux_arch:"arm64"}};
+  assert.ok(parseRemoteUpgradeDispatch(intent));
+  for(const candidate of [
+    {...intent,target:{...intent.target,command:"systemctl restart"}},
+    {...intent,target:{...intent.target,windows_asset_sha256:"c".repeat(64)}},
+    {...intent,target:{...intent.target,linux_arch:"unknown"}},
+    {...intent,target:{...intent.target,linux_asset_sha256:"not-a-hash"}},
+    {...intent,target:{...intent.target,tag:"v0.1.33-rc.1"}},
+    {...intent,target:{...intent.target,tag:"v0.1.22"}},
+    {...intent,target:{...intent.target,tag:"v0.1.21"}},
+    {...intent,current_version:"v0.1.22-rc.1"},
+    {...intent,current_version:"v000.1.22"},
+  ])assert.equal(parseRemoteUpgradeDispatch(candidate),null,JSON.stringify(candidate).slice(0,160));
+});
