@@ -167,7 +167,9 @@ function safePath(name,directory) {
     n==="apps/remote-control-agent/package.json" ||
     n==="apps/remote-control-agent/scripts/install-v2.mjs" ||
     ["bootstrap-node.mjs","manage-v2.mjs","lifecycle-v2.mjs",
-     "upgrade-v2.mjs","verify-v2-release.mjs","rca.sh"].some(name=>
+     "upgrade-v2.mjs","upgrade-existing-service.mjs",
+     "linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+     "verify-v2-release.mjs","rca.sh"].some(name=>
        n==="apps/remote-control-agent/scripts/"+name) ||
     n==="apps/remote-control-agent/.build/session-supervisor" ||
     /^apps\/remote-control-agent\/src\/[a-z0-9-]+\.js$/.test(n) ||
