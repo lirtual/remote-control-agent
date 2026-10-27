@@ -18,11 +18,10 @@ export interface RemoteUpgradeDispatch {
   device_id: string;
   fingerprint: string;
   current_version: string;
-  target: {
-    tag: string;
-    commit: string;
-    windows_asset_sha256: string;
-  };
+  target: { tag: string; commit: string } & (
+    | { windows_asset_sha256: string }
+    | { linux_asset_sha256: string; linux_arch: "x64" | "arm64" }
+  );
   approved_at: number;
   expires_at: number;
 }
@@ -64,17 +63,27 @@ export function parseRemoteUpgradeDispatch(input: unknown): RemoteUpgradeDispatc
       "approved_at|current_version|device_id|expires_at|fingerprint|operation_id|target" ||
       !target || typeof target !== "object" || Array.isArray(target)) return null;
   const pin = target as Record<string, unknown>;
-  if (Object.keys(pin).sort().join("|") !== "commit|tag|windows_asset_sha256" ||
+  const windows = Object.keys(pin).sort().join("|") ===
+    "commit|tag|windows_asset_sha256";
+  const linux = Object.keys(pin).sort().join("|") ===
+    "commit|linux_arch|linux_asset_sha256|tag";
+  if ((!windows && !linux) ||
       typeof row.operation_id !== "string" || !OP.test(row.operation_id) ||
       typeof row.device_id !== "string" || !ID.test(row.device_id) ||
       typeof row.fingerprint !== "string" || !HEX24.test(row.fingerprint) ||
       typeof row.current_version !== "string" || row.current_version.length > 64 ||
       !VERSION.test(row.current_version) ||
       typeof pin.tag !== "string" || pin.tag.length > 64 || !VERSION.test(pin.tag) ||
-      !newerWindowsVersion(pin.tag, row.current_version) ||
+      !(windows ? newerWindowsVersion(pin.tag, row.current_version)
+        : /^[v](?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})$/.test(pin.tag) &&
+          /^[v](?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})$/.test(row.current_version) &&
+          newerWindowsVersion(pin.tag, row.current_version)) ||
       typeof pin.commit !== "string" || !HEX40.test(pin.commit) ||
-      typeof pin.windows_asset_sha256 !== "string" ||
-      !HEX64.test(pin.windows_asset_sha256) ||
+      (windows ? typeof pin.windows_asset_sha256 !== "string" ||
+          !HEX64.test(pin.windows_asset_sha256)
+        : typeof pin.linux_asset_sha256 !== "string" ||
+          !HEX64.test(pin.linux_asset_sha256) ||
+          !["x64","arm64"].includes(String(pin.linux_arch))) ||
       typeof row.approved_at !== "number" || !Number.isSafeInteger(row.approved_at) ||
       typeof row.expires_at !== "number" || !Number.isSafeInteger(row.expires_at) ||
       row.expires_at - row.approved_at > 300_000 ||
@@ -89,6 +98,10 @@ export async function admitOwnerApprovedUpgrade(
     originalVersion: string;
     privateKeyPem: string;
     platform?: NodeJS.Platform;
+    arch?: string;
+    /** From the current immutable manifest and actual native/WSL2 runtime. */
+    linuxProtocolReady?: boolean;
+    environment?: string;
     now?: number;
     /** True only after the Worker OWNER DO atomically claimed approval. */
     confirmedByAuthenticatedWorker: boolean;
@@ -96,7 +109,13 @@ export async function admitOwnerApprovedUpgrade(
 ): Promise<RemoteUpgradeAdmission> {
   const p = parseRemoteUpgradeDispatch(untrusted);
   if (!p || !local.confirmedByAuthenticatedWorker ||
-      (local.platform ?? process.platform) !== "win32" ||
+      ("windows_asset_sha256" in p.target
+        ? (local.platform ?? process.platform) !== "win32" ||
+          (local.arch ?? process.arch) !== "x64"
+        : (local.platform ?? process.platform) !== "linux" ||
+          local.linuxProtocolReady !== true ||
+          (local.arch ?? process.arch) !== p.target.linux_arch ||
+          !["native","wsl2"].includes(local.environment ?? "")) ||
       p.device_id !== local.signedDeviceId ||
       p.current_version !== local.originalVersion ||
       !Number.isSafeInteger(local.now ?? Date.now()) ||
