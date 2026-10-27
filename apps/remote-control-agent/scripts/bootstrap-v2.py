@@ -201,6 +201,15 @@ def inspect_archive(archive, tag, target):
                 or manifest.get("version") != tag or manifest.get("target") != target
                 or not re.fullmatch(r"v24\.[0-9]+\.[0-9]+", str(manifest.get("node", "")))):
             raise ValueError("Bundle version, architecture, or runtime mismatch")
+        # A remote-capable archive must contain the complete packaged
+        # stage/rollback implementation; old local-only Releases still work.
+        if "upgrade_protocol" in manifest:
+            required_one_shot = {APP + "/scripts/" + item for item in (
+                "bootstrap-v2.py", "linux-upgrade-detached.mjs",
+                "linux-upgrade-watchdog.mjs")}
+            if (manifest["upgrade_protocol"] != "owner-one-shot-v1"
+                    or not required_one_shot.issubset(names)):
+                raise ValueError("Incomplete reviewed Linux one-shot Release")
         # The official manifest is covered by the GitHub asset SHA-256.
         # Refuse ABI-incompatible binaries before unpacking OR executing Node.
         minimum = str(manifest.get("glibc_min", ""))
