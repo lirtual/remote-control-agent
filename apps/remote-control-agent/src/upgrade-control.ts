@@ -51,6 +51,10 @@ export async function startUpgradeControl(execution: AgentExecutionEngine, keyPa
       if (!buffer.includes("\n")) return;
       if (buffer === "freeze\n") {
         socket.end(execution.freezeForUpgrade() ? "ready\n" : "busy\n");
+      } else if (buffer === "verify-frozen\n") {
+        // Read-only check: the remote owner admission must already have
+        // frozen the original Agent before the one-shot watchdog switches.
+        socket.end(execution.verifyUpgradeFreeze() ? "ready\n" : "busy\n");
       } else if (buffer === "release\n") {
         execution.releaseUpgradeFreeze();
         socket.end("released\n");
