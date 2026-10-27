@@ -476,7 +476,13 @@ jobs:
             # Source pin fields are mandatory even for CI's separately hashed
             # offline archive; the offline branch is unavailable outside CI.
             $ciCommit = 'a' * 40
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1 -StageOnly -Version $newVersion -PinnedCommit $ciCommit -PinnedReleaseSha256 $secondDigest -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            $stagerScript = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-stage-install.ps1'
+            if (-not (Test-Path -LiteralPath $stagerScript -PathType Leaf) -or
+                (Get-FileHash -LiteralPath $stagerScript -Algorithm SHA256).Hash -ne
+                  (Get-FileHash -LiteralPath 'install.ps1' -Algorithm SHA256).Hash) {
+              throw 'Installed current-version StageOnly script is not the reviewed installer'
+            }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $stagerScript -StageOnly -Version $newVersion -PinnedCommit $ciCommit -PinnedReleaseSha256 $secondDigest -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
             if ($LASTEXITCODE -ne 0) { throw 'Real installer stage-only candidate failed' }
             $afterStaging = Get-ScheduledTask -TaskName $originalTask.TaskName
             if (-not [string]::Equals([string]$afterStaging.Actions[0].Execute,$originalAction,[StringComparison]::OrdinalIgnoreCase) -or
