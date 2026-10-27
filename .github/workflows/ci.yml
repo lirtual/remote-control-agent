@@ -624,6 +624,68 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not restore old executable'
             }
+            # Exercise the ACTUAL bundled WMI one-shot watchdog using the
+            # already verified synthetic Task. CI writes a stand-in proof
+            # AFTER it observes restart: this tests local Task mechanics only,
+            # NOT genuine signed WSS authentication (covered separately).
+            $proofOperation = 'ci-watchdog-approved-once'
+            $shaAlgorithm = [Security.Cryptography.SHA256]::Create()
+            try {
+              $proofKey = [BitConverter]::ToString($shaAlgorithm.ComputeHash(
+                [Text.Encoding]::UTF8.GetBytes($proofOperation))).Replace('-','').ToLowerInvariant()
+            } finally { $shaAlgorithm.Dispose() }
+            $receiptDirectory = Join-Path $root 'receipts'
+            $null = New-Item -ItemType Directory -Path $receiptDirectory -Force
+            $testPending = Join-Path $receiptDirectory ('upgrade-pending-' + $proofKey + '.json')
+            $testProof = Join-Path $receiptDirectory ('upgrade-auth-' + $proofKey + '.json')
+            $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
+            [IO.File]::WriteAllText($testPending,
+              (@{operation_id=$proofOperation;target_version=$newVersion;source_version=$oldVersion} | ConvertTo-Json -Compress))
+            $watchdogLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+              $nativeWatchdog + '" -OperationId ' + $proofOperation + ' -OriginalVersion ' +
+              $oldVersion + ' -TargetVersion ' + $newVersion
+            $watchdogChild = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+              CommandLine = $watchdogLine
+            } -ErrorAction Stop
+            if ($watchdogChild.ReturnValue -ne 0 -or $watchdogChild.ProcessId -le 0) {
+              throw 'CI independent watchdog could not start'
+            }
+            try {
+              $taskDeadline = (Get-Date).AddSeconds(45)
+              $matched = $false
+              while ((Get-Date) -lt $taskDeadline) {
+                Start-Sleep -Milliseconds 500
+                $nativeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                if ($nativeTask.State -eq 'Running' -and [string]::Equals(
+                    [string]$nativeTask.Actions[0].Execute,(Join-Path $newDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {
+                  $matched = $true; break
+                }
+              }
+              if (-not $matched) { throw 'Real independent watchdog did not start upgraded Task' }
+              # This fixture is not passed through the WSS transport; never
+              # count it as an authenticated integration acceptance.
+              [IO.File]::WriteAllText($testProof,
+                (@{operation_id=$proofOperation;target_version=$newVersion;status='authenticated_wss'} |
+                  ConvertTo-Json -Compress))
+              $finalDeadline = (Get-Date).AddSeconds(20)
+              while (-not (Test-Path -LiteralPath $testOutcome) -and (Get-Date) -lt $finalDeadline) {
+                Start-Sleep -Milliseconds 500
+              }
+              if (-not (Test-Path -LiteralPath $testOutcome)) {
+                throw 'Native watchdog did not persist terminal outcome'
+              }
+              $result = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
+              if ($result.operation_id -cne $proofOperation -or $result.status -cne 'completed' -or
+                  $result.target_version -cne $newVersion) {
+                throw 'Native watchdog outcome was not an exact successful transition'
+              }
+              & $newCli rollback --version $oldVersion
+              if ($LASTEXITCODE -ne 0) { throw 'Post-watchdog synthetic rollback failed' }
+            } finally {
+              # Only test-owned files in this disposable fixture.
+              Remove-Item -LiteralPath $testPending,$testProof,$testOutcome -Force -ErrorAction SilentlyContinue
+            }
             if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
                 (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
               throw 'Windows upgrade or rollback changed protected identity'
