@@ -112,7 +112,7 @@ export function buildWindowsPreview(args) {
   const installerBytes = readFileSync(path.join(root, "..", "..", "install.ps1"));
   writeFileSync(path.join(stage, stageInstaller), installerBytes, { mode: 0o600 });
   hashes[stageInstaller] = digest(installerBytes);
-  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "windows-handoff-tunnel.ps1", "verify-windows-preview.mjs"];
+  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "windows-upgrade-once.ps1", "windows-handoff-tunnel.ps1", "verify-windows-preview.mjs"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
     const bytes = readFileSync(path.join(root, "scripts", name));
