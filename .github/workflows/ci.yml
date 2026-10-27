@@ -503,9 +503,22 @@ jobs:
             }
             $powershellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
             $switchScript = (Resolve-Path 'apps/remote-control-agent/scripts/windows-user-task.ps1').Path
-            # All interpolated fields are CI-owned paths and pinned fixture
-            # versions, never tool arguments or user-supplied shell strings.
-            $launchLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $switchScript + '" -Action Switch -Version ' + $newVersion + ' -Direction Upgrade'
+            # CI-only: capture a bounded diagnostic from the WMI child.
+            # All paths and versions here belong to the isolated runner fixture.
+            $wmiLog = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-diagnostic.log'
+            $wmiCommand = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-once.ps1'
+            $wmiBody = @"
+\$ErrorActionPreference = 'Stop'
+try {
+  & '$switchScript' -Action Switch -Version '$newVersion' -Direction Upgrade *>&1 |
+    Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+} catch {
+  (\$_ | Out-String) | Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+  exit 1
+}
+"@
+            [IO.File]::WriteAllText($wmiCommand, $wmiBody)
+            $launchLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $wmiCommand + '"'
             $launchAt = Get-Date
             $child = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $launchLine } -ErrorAction Stop
             if ($child.ReturnValue -ne 0 -or $child.ProcessId -le 0) {
@@ -527,6 +540,9 @@ jobs:
                   (Join-Path $newDir 'bin\\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)
               } while (-not $switched -and (Get-Date) -lt $deadline)
               if (-not $switched) {
+                if (Test-Path -LiteralPath $wmiLog) {
+                  Get-Content -LiteralPath $wmiLog -Tail 25 | Write-Output
+                }
                 throw 'WMI updater did not survive the synthetic running Task stop'
               }
               if ($liveTask.State -ne 'Running') {
