@@ -624,6 +624,18 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not restore old executable'
             }
+            # The earlier direct WMI fixture might have stopped its synthetic
+            # target before rollback. Re-establish the actual original Task as
+            # RUNNING so the one-shot watchdog exercises Stop -> Start.
+            $beforeOneShot = Get-ScheduledTask -TaskName $taskName
+            if ($beforeOneShot.State -ne 'Running') {
+              Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              Start-Sleep -Seconds 2
+              $beforeOneShot = Get-ScheduledTask -TaskName $taskName
+            }
+            if ($beforeOneShot.State -ne 'Running') {
+              throw 'CI one-shot fixture cannot establish a running original Agent Task'
+            }
             # Exercise the ACTUAL bundled WMI one-shot watchdog using the
             # already verified synthetic Task. CI writes a stand-in proof
             # AFTER it observes restart: this tests local Task mechanics only,
