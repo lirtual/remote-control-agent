@@ -37,6 +37,13 @@ function installedRelease(): {version?:string;upgrade_protocol?:"owner-one-shot-
   } catch { return {}; }
 }
 
+/** Container identity wins over a WSL2 host kernel for remote upgrade safety. */
+export function classifyLinuxEnvironment(
+  isLinux:boolean,isWsl2:boolean,isContainer:boolean,
+):"native"|"wsl2"|"container" {
+  return isLinux && isContainer ? "container" : isLinux && isWsl2 ? "wsl2" : "native";
+}
+
 export function collectDeviceInfo() {
   const platform = process.platform;
   const system = platform === "win32" ? "windows" : platform === "darwin" ? "darwin" : "linux";
@@ -56,7 +63,7 @@ export function collectDeviceInfo() {
   // contains "microsoft"; the stricter environment classification wins.
   const isContainer = system === "linux" &&
     (existsSync("/.dockerenv") || existsSync("/run/.containerenv"));
-  const environment = isContainer ? "container" : isWsl2 ? "wsl2" : "native";
+  const environment = classifyLinuxEnvironment(system==="linux",isWsl2,isContainer);
   const clean = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, max);
   const release = installedRelease();
   return {
