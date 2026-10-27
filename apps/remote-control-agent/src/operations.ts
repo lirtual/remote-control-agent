@@ -277,6 +277,13 @@ export class ReceiptStore {
       if (prior) {
         return { kind: prior.tool_name === toolName && prior.argument_digest === digest ? "same" as const : "conflict" as const, receipt: fromRow(prior) };
       }
+      // Only one unresolved upgrade may exist in this owner-local receipt DB.
+      // Once the previous upgrade was interrupted or uncertain, a different
+      // operation ID cannot start another Task switch without reconciliation.
+      if (toolName === "upgrade_agent" &&
+          this.db().prepare("SELECT 1 FROM receipts WHERE tool_name = 'upgrade_agent' AND state != 'completed' LIMIT 1").get()) {
+        return { kind: "full" as const };
+      }
       this.cleanup();
       const now = new Date().toISOString();
       this.db().prepare("INSERT INTO receipts (operation_id, tool_name, argument_digest, state, created_at, updated_at, safe_result_summary, session_id, guarded) VALUES (?, ?, ?, 'admitted', ?, ?, NULL, NULL, 1)")
