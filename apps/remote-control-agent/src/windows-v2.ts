@@ -3,7 +3,6 @@
  * Uses Windows user-logon tasks, the single-code protocol and signed WSS.
  * No auto-enrolment on service start, implicit re-key, or remote consent bypass.
  */
-import { verifyWindowsHandoffPrerequisites, sealWindowsRuntimeMarker } from "./protected-tunnel.ts";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lstat, mkdir, readFile, writeFile, unlink } from "node:fs/promises";
@@ -524,8 +523,6 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       receiptDirectory,
-      verifyHandoffPrerequisites: () => verifyWindowsHandoffPrerequisites(directory,() => assertPrivateStore("Check",directory)),
-      sealHandoffEvidence: kind => sealWindowsRuntimeMarker(path.win32.join(directory,"receipts"),kind),
       ...(browser ? { browser } : {}),
       onState: state => {
         recordWindowsEvent(directory, state);
