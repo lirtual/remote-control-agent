@@ -14,8 +14,8 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
   throw Error("Native Windows absolute staging directory required");
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
-// The reviewed supervisor adds one script to the previously pinned 41-file candidate.
-assert.equal(results.files,42,"Unexpected reviewed Windows Playwright file inventory");
+// The approved remote-upgrade admission adds one runtime module to the reviewed 42-file candidate.
+assert.equal(results.files,43,"Unexpected reviewed Windows Playwright file inventory");
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
 const pinned=manifest.browser_runtime;
