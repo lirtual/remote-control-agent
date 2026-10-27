@@ -135,13 +135,15 @@ async function exactIdentity(key){
   if(!DEVICE_ID.test(id))throw Error("Invalid approved device identity");
   return {id,digest:createHash("sha256").update(await readFile(key)).digest("hex")};
 }
-async function safeProgram(root){
+async function safeProgram(root,{remoteTarget=false}={}){
   owned(await lstat(root),true);
   owned(await lstat(path.join(root,"bundle.json")));
   const manifest=JSON.parse(await readFile(path.join(root,"bundle.json"),"utf8"));
   if(manifest.name!=="remote-control-agent"||manifest.version+"-"+manifest.target!==path.basename(root)||
      manifest.upgrade_profile!=="paired-full-v1"||manifest.receipt_schema!==1||
-     manifest.device_protocol!==2)throw Error("Untrusted packaged Agent profile");
+     manifest.device_protocol!==2||
+     (remoteTarget&&manifest.upgrade_protocol!=="owner-one-shot-v1"))
+    throw Error("Untrusted packaged Agent profile or remote-upgrade protocol");
   for(const relative of ["bin/node",APP+"/src/v2-main.js",APP+"/.build/session-supervisor"])
     owned(await lstat(path.join(root,relative)));
 }
@@ -153,6 +155,8 @@ export async function upgradeExistingSignedService({
   verifySignedReconnect,
 }={}){
   if(process.platform!=="linux"||process.getuid()===0)throw Error("Linux non-root owner required");
+  if(verifySignedReconnect!==undefined&&typeof verifySignedReconnect!=="function")
+    throw Error("Invalid locally verified upgrade acceptance");
   const unitDir=path.join(home,".config/systemd/user");
   const unitPath=path.join(unitDir,HISTORICAL_UNIT);
   const backup=unitPath+".upgrade-backup";
@@ -164,7 +168,8 @@ export async function upgradeExistingSignedService({
   const previous=await readFile(unitPath,"utf8");
   const plan=inspectInstalledSignedUnit(previous,{home,newRoot,endpoint});
   if(await safeExisting(unitPath+".d"))throw Error("Unexpected service drop-in");
-  await safeProgram(plan.oldRoot);await safeProgram(plan.newRoot);
+  await safeProgram(plan.oldRoot);
+  await safeProgram(plan.newRoot,{remoteTarget:!!verifySignedReconnect});
   await compatibleReceipts(home);
   const identity=await exactIdentity(plan.identity);
   const status=systemctl(["show",HISTORICAL_UNIT,"-p","ActiveState","-p","SubState","-p","MainPID"]);
