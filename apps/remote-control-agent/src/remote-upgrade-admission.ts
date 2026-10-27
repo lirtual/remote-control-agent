@@ -37,6 +37,25 @@ export function localUpgradeFingerprint(privateKeyPem: string): string {
     .update(createPublicKey(key).export({ format: "der", type: "spki" }))
     .digest("hex").slice(0, 24);
 }
+/** Match the installed Windows task switch rule: only a greater base version
+ * is an upgrade. Same-core prereleases remain rejected until Switch supports
+ * them safely (the caller cannot silently change direction to rollback).
+ */
+function newerWindowsVersion(next: string, current: string): boolean {
+  const parse = (value: string): number[] | null => {
+    const parts = /^v([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:-[a-z0-9][a-z0-9.-]*)?$/.exec(value);
+    if (!parts) return null;
+    const out = parts.slice(1, 4).map(Number);
+    return out.every(Number.isSafeInteger) ? out : null;
+  };
+  const a = parse(next), b = parse(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i]! > b[i]!;
+  }
+  return false;
+}
+
 export function parseRemoteUpgradeDispatch(input: unknown): RemoteUpgradeDispatch | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const row = input as Record<string, unknown>;
@@ -52,7 +71,7 @@ export function parseRemoteUpgradeDispatch(input: unknown): RemoteUpgradeDispatc
       typeof row.current_version !== "string" || row.current_version.length > 64 ||
       !VERSION.test(row.current_version) ||
       typeof pin.tag !== "string" || pin.tag.length > 64 || !VERSION.test(pin.tag) ||
-      pin.tag === row.current_version ||
+      !newerWindowsVersion(pin.tag, row.current_version) ||
       typeof pin.commit !== "string" || !HEX40.test(pin.commit) ||
       typeof pin.windows_asset_sha256 !== "string" ||
       !HEX64.test(pin.windows_asset_sha256) ||
