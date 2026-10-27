@@ -75,11 +75,16 @@ linux("watchdog validates exact proof and commits completion only after native c
     assert.equal(props.endpoint,f.attempt.endpoint);
     assert.equal(props.upgradeOperationId,OP);
     assert.ok(props.newRoot.endsWith(TARGET+"-linux-"+process.arch+"-glibc"));
+    const claim=path.join(f.state,"upgrade-exec-"+hashOperation(OP)+".json");
+    assert.deepEqual(JSON.parse(readFileSync(claim,"utf8")),{
+      operation_id:OP,device_id:DEVICE,target_version:TARGET,
+    },"durable execution guard must precede native systemd change");
     assert.equal(readdirSync(f.state).some(x=>x.startsWith("upgrade-outcome-")),false,
       "success cannot be prewritten before native cutover completes");
     const verified=await props.verifySignedReconnect(expected);
     assert.equal(verified,true);
-    return {status:"active"};
+    return {status:"active",deviceId:DEVICE,version:TARGET,
+      service:HISTORICAL_UNIT,identityPreserved:true};
   },waitForProof:async(file,binding)=>{
     assert.equal(file,f.proof);
     assert.deepEqual(binding,expected);
@@ -129,6 +134,44 @@ linux("stale WSS proof or result before switching refuses without invoking insta
       upgrade:async()=>{calls++;}
     }),/Existing proof or outcome/);
     assert.equal(calls,0);
+  }finally{f.cleanup();}
+ }
+});
+
+linux("watchdog crash before outcome cannot reexecute same operation",async()=>{
+ const f=fixture();
+ try{
+  let invocations=0;
+  await runLinuxOneShotWatchdog({...f.opts,upgrade:async()=>{
+    invocations++;throw Error("simulated process crash");
+  }});
+  // A real crash might happen before any outcome was written. Its durable
+  // execution guard survives and must reject the next one-shot invocation.
+  const {unlinkSync}=await import("node:fs");
+  unlinkSync(f.outcome);
+  await assert.rejects(runLinuxOneShotWatchdog({...f.opts,
+    upgrade:async()=>{invocations++;}}),/EEXIST|already exists/i);
+  assert.equal(invocations,1);
+ }finally{f.cleanup();}
+});
+linux("watched success cannot be inferred from signed proof alone or foreign result",async()=>{
+ for(const variant of ["no-hook","foreign-device","foreign-version","no-identity"]){
+  const f=fixture();
+  try{
+   const outcome=await runLinuxOneShotWatchdog({...f.opts,
+     upgrade:async props=>{
+       if(variant!=="no-hook")
+         assert.equal(await props.verifySignedReconnect(expected),true);
+       return {status:"active",
+         deviceId:variant==="foreign-device"?"11111111-1111-4111-8111-111111111111":DEVICE,
+         version:variant==="foreign-version"?SOURCE:TARGET,
+         service:HISTORICAL_UNIT,
+         identityPreserved:variant!=="no-identity"};
+     },
+     waitForProof:async()=>true,
+   });
+   assert.equal(outcome.status,"needs_attention",variant);
+   assert.equal(JSON.parse(readFileSync(f.outcome,"utf8")).status,"needs_attention");
   }finally{f.cleanup();}
  }
 });
