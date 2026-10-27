@@ -7,6 +7,7 @@
 import { HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
 import { readFile } from "node:fs/promises";
 import { parseRemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
+import { acknowledgeAuthenticatedUpgrade } from "./windows-upgrade-executor.ts";
 import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
 import { collectDeviceInfo } from "./device-info.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
@@ -424,7 +425,22 @@ export async function maintainAuthenticatedDeviceSession(
       authenticatedDeviceId = connection.device_id;
       // Report once per authenticated socket, including each reconnect.
       // The runtime's read-only/full execution gate is separate from display metadata.
-      connection.socket.send(JSON.stringify(collectDeviceInfo()));
+      const runtimeInfo = collectDeviceInfo();
+      connection.socket.send(JSON.stringify(runtimeInfo));
+      // Only a newly signed/approved WSS session can produce the local
+      // watchdog success proof. Updater outcomes remain guarded independently
+      // until the owner DO verifies the same paired device/version.
+      if (process.platform === "win32" && runtimeInfo.agent_version &&
+          options.receiptDirectory && execution) {
+        try {
+          await acknowledgeAuthenticatedUpgrade(options.receiptDirectory,
+            runtimeInfo.agent_version, async operationId => {
+              const receipt = await execution.getReceipt(operationId);
+              return receipt?.tool_name === "upgrade_agent" &&
+                ["admitted","running","unknown"].includes(receipt.state);
+            });
+        } catch { /* A missing or locked receipt is never evidence of success. */ }
+      }
       const connectedAt = performance.now();
       options.onState?.("connected");
       // Search cursors are scoped to one authenticated WSS incarnation.
