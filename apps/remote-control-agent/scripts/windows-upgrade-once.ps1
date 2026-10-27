@@ -90,6 +90,10 @@ try {
   & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Switch -Direction Upgrade -Version $TargetVersion | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Task switch did not succeed' }
   $switched = $true
+  # One brief Running snapshot is not enough to accept a newly restarted
+  # Agent. Require three consecutive observations under the SAME Task action
+  # within the existing 90-second signed-reconnect deadline.
+  $runningSamples = 0
   for ($index=0; $index -lt 90; $index++) {
     if (Test-Path -LiteralPath $proof -PathType Leaf) {
       try {
@@ -103,16 +107,25 @@ try {
             $current = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
             $expectedAction = [IO.Path]::Combine($target,'bin','rca-background.exe')
             if ($status.installed -eq $true -and $status.running -eq $true -and
+                $current.State -eq 'Running' -and
                 [string]::Equals([string]$current.Actions[0].Execute,$expectedAction,
                   [StringComparison]::OrdinalIgnoreCase)) {
-              $result = 'completed'
-              break
+              $runningSamples++
+              if ($runningSamples -ge 3) {
+                $result = 'completed'
+                break
+              }
+            } else {
+              $runningSamples = 0
             }
           }
         }
       } catch {
-        # Invalid proof cannot authorize success; remain bounded.
+        # Invalid proof or an unavailable Task resets consecutive liveness.
+        $runningSamples = 0
       }
+    } else {
+      $runningSamples = 0
     }
     Start-Sleep -Seconds 1
   }
