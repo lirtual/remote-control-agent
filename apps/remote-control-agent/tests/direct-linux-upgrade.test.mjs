@@ -179,6 +179,30 @@ linuxTest("missing signed Linux reconnect refuses success and restores original 
  }finally{f.cleanup();}
 });
 
+linuxTest("failed remote proof plus unsuccessful rollback retains owner-only recovery backup",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  let restarts=0;
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    if(args[0]==="show")return "ActiveState=inactive\nSubState=dead\nMainPID=0";
+    if(args[0]==="restart"&&++restarts===2)
+      throw Error("original service cannot be confirmed running");
+    return "";
+   },
+   verifySignedReconnect:async()=>false,
+  }),/rollback uncertain; backup retained/);
+  assert.equal(restarts,2);
+  assert.equal(readFileSync(f.unitPath+".upgrade-backup","utf8"),f.oldUnit,
+    "uncertain systemd recovery must not erase original unit bytes");
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+ }finally{f.cleanup();}
+});
+
 linuxTest("busy Agent must not update unit or release another in-flight freeze",async()=>{
  const f=fixture();
  try{
