@@ -641,9 +641,21 @@ jobs:
             $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
             [IO.File]::WriteAllText($testPending,
               (@{operation_id=$proofOperation;target_version=$newVersion;source_version=$oldVersion} | ConvertTo-Json -Compress))
-            $watchdogLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-              $nativeWatchdog + '" -OperationId ' + $proofOperation + ' -OriginalVersion ' +
-              $oldVersion + ' -TargetVersion ' + $newVersion
+            # Preserve bounded, synthetic-only preflight diagnostics without
+            # changing the packaged production watchdog or creating a service.
+            $watchdogLog = Join-Path $env:RUNNER_TEMP 'rca-one-shot-watchdog-ci.log'
+            $watchdogCommand = Join-Path $env:RUNNER_TEMP 'rca-one-shot-watchdog-ci.ps1'
+            $watchdogBody = @"
+            try {
+              & '$nativeWatchdog' -OperationId '$proofOperation' -OriginalVersion '$oldVersion' -TargetVersion '$newVersion' *>&1 |
+                Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
+            } catch {
+              (`$_ | Out-String) | Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
+              exit 1
+            }
+          "@
+            [IO.File]::WriteAllText($watchdogCommand, $watchdogBody)
+            $watchdogLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $watchdogCommand + '"'
             $watchdogChild = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
               CommandLine = $watchdogLine
             } -ErrorAction Stop
@@ -662,7 +674,12 @@ jobs:
                   $matched = $true; break
                 }
               }
-              if (-not $matched) { throw 'Real independent watchdog did not start upgraded Task' }
+              if (-not $matched) {
+                if (Test-Path -LiteralPath $watchdogLog) {
+                  Get-Content -LiteralPath $watchdogLog -Tail 15 | Write-Output
+                }
+                throw 'Real independent watchdog did not start upgraded Task'
+              }
               # This fixture is not passed through the WSS transport; never
               # count it as an authenticated integration acceptance.
               [IO.File]::WriteAllText($testProof,
