@@ -216,7 +216,7 @@ export function build(args) {
     rewriteExtensions(installer),{mode:0o600});
   for (const name of ["bootstrap-node.mjs","manage-v2.mjs",
       "lifecycle-v2.mjs","upgrade-v2.mjs","upgrade-existing-service.mjs",
-      "linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
+      "bootstrap-v2.py","linux-upgrade-detached.mjs","linux-upgrade-watchdog.mjs",
       "verify-v2-release.mjs","rca.sh"]) {
     const sourceFile=path.join(root,"scripts",name);
     const dest=path.join(work,"apps/remote-control-agent/scripts",name);
@@ -229,7 +229,7 @@ export function build(args) {
     name:"remote-control-agent",version:args.version,target:args.target,
     node:nodeVersion,glibc_build:libc,glibc_min:glibcMin,modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
-    upgrade_profile:"paired-full-v1",
+    upgrade_profile:"paired-full-v1",upgrade_protocol:"owner-one-shot-v1",
     ...(browserRuntime?{browser_runtime:browserRuntime}:{})
   })+"\n",{mode:0o600});
   const name="remote-control-agent-"+args.version+"-"+args.target+".tar.gz";
