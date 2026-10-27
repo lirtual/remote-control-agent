@@ -107,3 +107,65 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
     return accepted;
   }catch{ return 0; }
 }
+
+
+/**
+ * A new, authenticated Linux runtime may reconcile its existing SQLite
+ * upgrade receipt only after BOTH the independent watchdog's terminal success
+ * AND the local signed-WSS proof exist for the SAME durable execution claim.
+ * File names are operation digests, never remotely supplied paths.
+ *
+ * A watchdog's needs_attention, an absent/partial outcome, or a changed OS
+ * version leaves the original receipt guarded as unknown; no auto retry.
+ */
+export async function readLinuxUpgradeOutcome(
+  stateDirectory:string,operationId:string,runningVersion:string,
+  signedDeviceId:string,
+):Promise<"completed"|null>{
+  if(process.platform!=="linux"||process.getuid?.()===0||
+     !["x64","arm64"].includes(process.arch)||
+     typeof stateDirectory!=="string"||!path.isAbsolute(stateDirectory)||
+     typeof operationId!=="string"||!OP.test(operationId)||
+     !ID.test(signedDeviceId)||!VERSION.test(runningVersion))return null;
+  const exact=(entry:unknown,keys:string[]):entry is Record<string,unknown> =>
+    !!entry && typeof entry==="object" && !Array.isArray(entry) &&
+    Object.keys(entry).sort().join("|")===keys.slice().sort().join("|");
+  try{
+    if(!ownerOnly(await lstat(stateDirectory),true))return null;
+    const digest=createHash("sha256").update(operationId,"utf8").digest("hex");
+    const load=async(type:string):Promise<unknown> =>
+      JSON.parse((await readPrivate(path.join(stateDirectory,
+        "upgrade-"+type+"-"+digest+".json"))).toString("utf8"));
+    const outcome=await load("outcome");
+    const run=await load("run");
+    const claim=await load("exec");
+    const proof=await load("auth");
+    if(!exact(outcome,["operation_id","device_id","original_version",
+          "target_version","status"])||
+       !exact(run,["operation_id","device_id","current_version","target_version",
+          "current_manifest_sha256","target_manifest_sha256"])||
+       !exact(claim,["operation_id","device_id","target_version"])||
+       !exact(proof,["operation_id","device_id","target_version","status"]))
+      return null;
+    if(outcome.operation_id!==operationId||
+       outcome.device_id!==signedDeviceId||
+       outcome.status!=="completed"||
+       outcome.target_version!==runningVersion||
+       outcome.original_version!==run.current_version||
+       run.operation_id!==operationId||run.device_id!==signedDeviceId||
+       run.target_version!==runningVersion||
+       typeof run.current_version!=="string"||
+       !VERSION.test(run.current_version)||
+       run.current_version===runningVersion||
+       typeof run.current_manifest_sha256!=="string"||
+       !HASH.test(run.current_manifest_sha256)||
+       typeof run.target_manifest_sha256!=="string"||
+       !HASH.test(run.target_manifest_sha256)||
+       claim.operation_id!==operationId||claim.device_id!==signedDeviceId||
+       claim.target_version!==runningVersion||
+       proof.operation_id!==operationId||proof.device_id!==signedDeviceId||
+       proof.target_version!==runningVersion||
+       proof.status!=="authenticated_wss")return null;
+    return "completed";
+  }catch{return null;}
+}
