@@ -113,6 +113,72 @@ linuxTest("active Agent gets same-identity quiescence consent before any restart
   assert.equal(calls.at(-1),"freeze:release");
  }finally{f.cleanup();}
 });
+linuxTest("remote Linux gate refuses an unreviewed target before any unit effects",async()=>{
+ const f=fixture();
+ try{
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   verifySignedReconnect:async()=>true,
+   systemctl:()=>{throw Error("systemd must not execute before reviewed protocol")}
+  }),/remote-upgrade protocol/);
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+ }finally{f.cleanup();}
+});
+linuxTest("remote signed reconnect verifier preserves backup until it proves the new service",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  const systemCalls=[];
+  let verified=0;
+  const result=await upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    systemCalls.push(args[0]);
+    return args[0]==="show"?"ActiveState=inactive\\nSubState=dead\\nMainPID=0":"";
+   },
+   verifySignedReconnect:async proof=>{
+    verified++;
+    assert.deepEqual(proof,{deviceId:uuid,version:"v0.1.21",
+      service:HISTORICAL_UNIT});
+    assert.equal(readFileSync(f.unitPath,"utf8"),unit(f.newRoot,f.home,endpoint));
+    assert.equal(readFileSync(f.unitPath+".upgrade-backup","utf8"),f.oldUnit,
+      "original unit backup must remain until real signed reconnect acceptance");
+    return true;
+   },
+  });
+  assert.equal(result.status,"active");
+  assert.equal(verified,1);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+  assert.deepEqual(systemCalls,["show","daemon-reload","restart","is-active","is-active"]);
+ }finally{f.cleanup();}
+});
+linuxTest("missing signed Linux reconnect refuses success and restores original systemd unit",async()=>{
+ const f=fixture();
+ try{
+  const manifest=path.join(f.newRoot,"bundle.json");
+  const entry=JSON.parse(readFileSync(manifest,"utf8"));
+  writeFileSync(manifest,JSON.stringify({...entry,upgrade_protocol:"owner-one-shot-v1"}),{mode:0o600});
+  let restarts=0;
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:args=>{
+    if(args[0]==="show")return "ActiveState=inactive\\nSubState=dead\\nMainPID=0";
+    if(args[0]==="restart")restarts++;
+    return "";
+   },
+   verifySignedReconnect:async()=>false,
+  }),/New signed Agent reconnect not verified/);
+  assert.equal(restarts,2,"real new service and original rollback service both restart");
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+  assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+ }finally{f.cleanup();}
+});
+
 linuxTest("busy Agent must not update unit or release another in-flight freeze",async()=>{
  const f=fixture();
  try{
