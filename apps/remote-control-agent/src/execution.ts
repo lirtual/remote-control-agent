@@ -765,11 +765,18 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         const identity = options.handoffDeviceId?.();
         const info = collectDeviceInfo();
         if (identity && info.upgrade_protocol === "owner-one-shot-v1" &&
-            info.agent_version &&
-            await readLinuxUpgradeOutcome(receipts.directory,id,info.agent_version,identity)
-              === "completed") {
-          receipt = await receipts.update(id,"completed",
-            "Linux watchdog, signed WSS and original identity verified.");
+            info.agent_version) {
+          const outcome=await readLinuxUpgradeOutcome(
+            receipts.directory,id,info.agent_version,identity);
+          if (outcome === "completed") {
+            receipt = await receipts.update(id,"completed",
+              "Linux watchdog, signed WSS and original identity verified.");
+          } else if (outcome === "rolled_back") {
+            // Only a verified old-unit restoration, not a generic failure,
+            // yields this exact message; Worker still checks a NEW WSS epoch.
+            receipt = await receipts.update(id,"failed",
+              "Original Linux unit and identity restored; signed owner reconciliation required.");
+          }
         }
       }
       return receipt && (handoff.isBlocked() || generation !== handoff.generation())
