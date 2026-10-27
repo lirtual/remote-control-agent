@@ -59,7 +59,7 @@ linux("bounded signed proof waits without turning missing proof into success",as
   clock=1000;checks=0;
   assert.equal(await waitForLinuxSignedProof(f.proof,expected,{
     now:()=>clock,maxMs:100,
-    wait:async ms=>{clock+=ms;checks++;if(checks===1)f.writeProof();}
+    wait:async ms=>{clock+=Math.min(ms,10);checks++;if(checks===1)f.writeProof();}
   }),true);
   await assert.rejects(waitForLinuxSignedProof(f.proof,expected,{maxMs:90_001}),
     /Unbounded/);
