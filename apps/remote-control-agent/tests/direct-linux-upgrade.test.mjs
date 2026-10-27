@@ -225,7 +225,7 @@ linuxTest("one-shot remote cutover observes pre-existing frozen Agent without a 
   const result=await upgradeExistingSignedService({
     home:f.home,newRoot:f.newRoot,endpoint,upgradeOperationId:"linux-approved-once",
     verifySignedReconnect:async()=>true,
-    systemctl:args=>args[0]==="show"?"ActiveState=active\\nSubState=running\\nMainPID=35":"",
+    systemctl:args=>args[0]==="show"?"ActiveState=active\nSubState=running\nMainPID=35":"",
     freeze:async(_,action)=>{calls.push(action);return action==="verify-frozen"?"ready":"busy";},
   });
   assert.equal(result.status,"active");
@@ -244,7 +244,7 @@ linuxTest("remote cutover refuses missing freeze while preserving the old unit",
   await assert.rejects(upgradeExistingSignedService({
     home:f.home,newRoot:f.newRoot,endpoint,upgradeOperationId:"linux-approved-once",
     verifySignedReconnect:async()=>true,
-    systemctl:args=>args[0]==="show"?"ActiveState=active\\nSubState=running\\nMainPID=35":"",
+    systemctl:args=>args[0]==="show"?"ActiveState=active\nSubState=running\nMainPID=35":"",
     freeze:async(_,action)=>{calls.push(action);return "busy";},
   }),/active or uncertain/);
   assert.deepEqual(calls,["verify-frozen"]);
