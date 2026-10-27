@@ -8,6 +8,7 @@ import { ReceiptStore } from "../src/operations.ts";
 import {
   admitOwnerApprovedUpgrade, localUpgradeFingerprint, parseRemoteUpgradeDispatch,
 } from "../src/remote-upgrade-admission.ts";
+import { collectDeviceInfo } from "../src/device-info.ts";
 
 const DEVICE = "2a83dae6-600c-49cc-b643-ab0d5ec7e0c8";
 const NOW = 1793100000000;
@@ -136,4 +137,10 @@ test("same moment concurrent approvals serialize through existing SQLite receipt
     assert.equal(attempts.filter(x=>x.status==="admitted").length,1);
     assert.equal(attempts.filter(x=>x.status==="unavailable").length,4);
   });
+});
+
+test("receipt-only native Agent never advertises upgrade execution readiness",()=>{
+  const info=collectDeviceInfo() as Record<string,unknown>;
+  assert.equal(Object.hasOwn(info,"upgrade_protocol"),false,
+    "a release without a proven one-shot updater may not enable remote owner approval");
 });
