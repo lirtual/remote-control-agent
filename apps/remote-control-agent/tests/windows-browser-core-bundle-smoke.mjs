@@ -30,7 +30,7 @@ try{
 }finally{
   await writeFile(nativeStageInstaller,verifiedStageInstaller);
 }
-assert.equal(inspectWindowsPreview(stage).files,47);
+assert.equal(inspectWindowsPreview(stage).files,43);
 
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
