@@ -118,6 +118,7 @@ linuxTest("remote Linux gate refuses an unreviewed target before any unit effect
  try{
   await assert.rejects(upgradeExistingSignedService({
    home:f.home,newRoot:f.newRoot,endpoint,
+   upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async()=>true,
    systemctl:()=>{throw Error("systemd must not execute before reviewed protocol")}
   }),/remote-upgrade protocol/);
@@ -139,9 +140,10 @@ linuxTest("remote signed reconnect verifier preserves backup until it proves the
     systemCalls.push(args[0]);
     return args[0]==="show"?"ActiveState=inactive\nSubState=dead\nMainPID=0":"";
    },
+   upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async proof=>{
     verified++;
-    assert.deepEqual(proof,{deviceId:uuid,version:"v0.1.21",
+    assert.deepEqual(proof,{operationId:"linux-one-shot-39",deviceId:uuid,version:"v0.1.21",
       service:HISTORICAL_UNIT});
     assert.equal(readFileSync(f.unitPath,"utf8"),unit(f.newRoot,f.home,endpoint));
     assert.equal(readFileSync(f.unitPath+".upgrade-backup","utf8"),f.oldUnit,
@@ -170,6 +172,7 @@ linuxTest("missing signed Linux reconnect refuses success and restores original 
     if(args[0]==="restart")restarts++;
     return "";
    },
+   upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async()=>false,
   }),/New signed Agent reconnect not verified/);
   assert.equal(restarts,2,"real new service and original rollback service both restart");
@@ -194,6 +197,7 @@ linuxTest("failed remote proof plus unsuccessful rollback retains owner-only rec
       throw Error("original service cannot be confirmed running");
     return "";
    },
+   upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async()=>false,
   }),/rollback uncertain; backup retained/);
   assert.equal(restarts,2);
