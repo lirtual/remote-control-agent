@@ -126,6 +126,30 @@ linux("Linux completion requires private claim, exact watchdog result and signed
   }finally{await f.cleanup();}
 });
 
+linux("confirmed original-service rollback needs exact durable claim and matching old runtime",async()=>{
+  const f=await fixture();
+  try{
+    const key=createHash("sha256").update(OP).digest("hex");
+    const claim=path.join(f.dir,"upgrade-exec-"+key+".json");
+    const outcome=path.join(f.dir,"upgrade-outcome-"+key+".json");
+    const executed={operation_id:OP,device_id:DEVICE,target_version:TARGET};
+    const restored={operation_id:OP,device_id:DEVICE,
+      original_version:CURRENT,target_version:TARGET,status:"rolled_back"};
+    assert.equal(await readLinuxUpgradeOutcome(f.dir,OP,CURRENT,DEVICE),null);
+    await writeFile(claim,JSON.stringify(executed),{mode:0o600});
+    await writeFile(outcome,JSON.stringify(restored),{mode:0o600});
+    assert.equal(await readLinuxUpgradeOutcome(f.dir,OP,CURRENT,DEVICE),"rolled_back");
+    assert.equal(await readLinuxUpgradeOutcome(f.dir,OP,TARGET,DEVICE),null,
+      "the new runtime cannot claim restoration of the previous version");
+    await writeFile(outcome,JSON.stringify({...restored,status:"needs_attention"}));
+    assert.equal(await readLinuxUpgradeOutcome(f.dir,OP,CURRENT,DEVICE),null);
+    await writeFile(outcome,JSON.stringify(restored));
+    await chmod(claim,0o644);
+    assert.equal(await readLinuxUpgradeOutcome(f.dir,OP,CURRENT,DEVICE),null,
+      "tampered one-shot claim cannot confirm rollback");
+  }finally{await f.cleanup();}
+});
+
 linux("malformed, foreign or guarded Linux outcomes never complete the receipt",async()=>{
   for(const variant of ["attention","foreign-device","wrong-target",
       "wrong-operation","foreign-original","claim-foreign",
