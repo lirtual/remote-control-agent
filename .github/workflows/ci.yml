@@ -537,7 +537,7 @@ jobs:
                 Start-Sleep -Milliseconds 500
                 $liveTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
                 $switched = [string]::Equals([string]$liveTask.Actions[0].Execute,
-                  (Join-Path $newDir 'bin\\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)
+                  (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)
               } while (-not $switched -and (Get-Date) -lt $deadline)
               if (-not $switched) {
                 if (Test-Path -LiteralPath $wmiLog) {
