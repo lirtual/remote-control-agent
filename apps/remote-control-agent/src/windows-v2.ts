@@ -512,9 +512,18 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   try {
     recordWindowsEvent(directory, "starting");
     process.stderr.write('{"service":"remote-control-windows-preview","event":"starting"}\n');
+    // SQLite upgrade receipts must inherit a Windows owner-only DACL, not
+    // rely on Node's POSIX 0700 mode (which is not an ACL on Windows).
+    // Existing stores are checked, NEVER silently repaired or replaced.
+    const receiptDirectory = path.win32.join(directory, "receipts");
+    if (!existsSync(receiptDirectory)) {
+      await mkdir(receiptDirectory);
+      assertPrivateStore("Seal", directory, "receipts");
+    }
+    assertPrivateStore("Check", directory);
     const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
-      receiptDirectory: path.win32.join(directory, "receipts"),
+      receiptDirectory,
       verifyHandoffPrerequisites: () => verifyWindowsHandoffPrerequisites(directory,() => assertPrivateStore("Check",directory)),
       sealHandoffEvidence: kind => sealWindowsRuntimeMarker(path.win32.join(directory,"receipts"),kind),
       ...(browser ? { browser } : {}),
