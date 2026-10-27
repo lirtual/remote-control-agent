@@ -467,11 +467,24 @@ jobs:
               throw 'Pinned browser upgrade candidate ZIP unavailable'
             }
             $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File apps/remote-control-agent/tests/fixtures/windows-stage-only.ps1 -Version $newVersion -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
-            if ($LASTEXITCODE -ne 0) { throw 'Second version real installer failed' }
-            $newCli = Join-Path $newDir 'rca.cmd'
+            # A real stage-only request must never stop or mutate the existing
+            # Task or bypass the local installer's default RawUI approval.
+            $originalTask = Get-ScheduledTask -TaskName ('RCA-Remote-Control-v2-' + ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value).Replace('-','_'))
+            $originalAction = [string]$originalTask.Actions[0].Execute
             $origId = (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash
             $origKey = (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash
+            # Source pin fields are mandatory even for CI's separately hashed
+            # offline archive; the offline branch is unavailable outside CI.
+            $ciCommit = 'a' * 40
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File install.ps1 -StageOnly -Version $newVersion -PinnedCommit $ciCommit -PinnedReleaseSha256 $secondDigest -OfflineArchive $secondZip -ExpectedSha256 $secondDigest
+            if ($LASTEXITCODE -ne 0) { throw 'Real installer stage-only candidate failed' }
+            $afterStaging = Get-ScheduledTask -TaskName $originalTask.TaskName
+            if (-not [string]::Equals([string]$afterStaging.Actions[0].Execute,$originalAction,[StringComparison]::OrdinalIgnoreCase) -or
+                (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
+                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
+              throw 'Stage-only changed the original Task or paired device'
+            }
+            $newCli = Join-Path $newDir 'rca.cmd'
             # Forced post-switch failure must restore original task's action.
             $badSwitch = Start-Process -FilePath powershell.exe -ArgumentList @(
               '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
