@@ -46,8 +46,13 @@ if ($manifest.version -cne $TargetVersion -or $manifest.upgrade_protocol -cne 'o
 # A proof file can only be produced by a NEW signed Agent WSS authentication
 # after Task restart. The watchdog never trusts its own local Switch output
 # as proof of success. The same-user Shell boundary is not an OS sandbox.
-$proof = [IO.Path]::Combine($receiptDir,'upgrade-auth-' + $OperationId + '.json')
-$outcome = [IO.Path]::Combine($receiptDir,'upgrade-outcome-' + $OperationId + '.json')
+$sha = [Security.Cryptography.SHA256]::Create()
+try {
+  $idHash = [BitConverter]::ToString($sha.ComputeHash(
+    [Text.Encoding]::UTF8.GetBytes($OperationId))).Replace('-','').ToLowerInvariant()
+} finally { $sha.Dispose() }
+$proof = [IO.Path]::Combine($receiptDir,'upgrade-auth-' + $idHash + '.json')
+$outcome = [IO.Path]::Combine($receiptDir,'upgrade-outcome-' + $idHash + '.json')
 $switched = $false
 $result = 'needs_attention'
 function Write-Outcome([string]$status) {
