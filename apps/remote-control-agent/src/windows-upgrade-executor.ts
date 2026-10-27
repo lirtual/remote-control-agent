@@ -116,7 +116,11 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
   const expression = "$ErrorActionPreference='Stop';" +
     "$created=Invoke-CimMethod -ClassName Win32_Process -MethodName Create " +
     "-Arguments @{CommandLine='"+escaped+"'};" +
-    "if($created.ReturnValue -ne 0 -or $created.ProcessId -le 0){exit 1}";
+    "if($created.ReturnValue -ne 0 -or $created.ProcessId -le 0){exit 1};" +
+    "$child=Get-CimInstance Win32_Process -Filter ('ProcessId = '+$created.ProcessId) -ErrorAction SilentlyContinue;" +
+    "if(-not $child){exit 1};" +
+    "$owner=(Invoke-CimMethod -InputObject $child -MethodName GetOwnerSid -ErrorAction Stop).Sid;" +
+    "if($owner -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){exit 1}";
   await (hooks.wmi ?? runPowerShell)(powershell,[
     "-NoProfile","-NonInteractive","-Command",expression,
   ]);
