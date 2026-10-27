@@ -126,7 +126,7 @@ export async function launchDetachedLinuxUpgrade({
   const args=["--user","--no-block","--collect","--quiet",
     "--service-type=exec","--unit="+unit,
     "--property=RuntimeMaxSec="+ONE_SHOT_MAX_SECONDS,
-    "--property=UMask=0077",
+    "--property=UMask=0077","--property=NoNewPrivileges=yes",
     "--setenv=NODE_OPTIONS=","--setenv=NODE_PATH=",
     "--",node,runner,"--operation-id",operationId];
   const outcome=await invoke("/usr/bin/systemd-run",args);
