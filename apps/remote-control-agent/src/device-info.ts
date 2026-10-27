@@ -51,8 +51,12 @@ export function collectDeviceInfo() {
   }
   const isWsl2 = system === "linux" && (/microsoft.*wsl2?/i.test(kernel) ||
     Boolean(process.env.WSL_DISTRO_NAME && /microsoft/i.test(kernel)));
-  const environment = isWsl2 ? "wsl2" : system === "linux" &&
-    (existsSync("/.dockerenv") || existsSync("/run/.containerenv")) ? "container" : "native";
+  // Containers hosted by WSL2 still are containers. Do not upgrade them
+  // under the native/WSL2 owner-once policy merely because the kernel string
+  // contains "microsoft"; the stricter environment classification wins.
+  const isContainer = system === "linux" &&
+    (existsSync("/.dockerenv") || existsSync("/run/.containerenv"));
+  const environment = isContainer ? "container" : isWsl2 ? "wsl2" : "native";
   const clean = (value: string, max: number) => value.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, max);
   const release = installedRelease();
   return {
