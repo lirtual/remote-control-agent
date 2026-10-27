@@ -80,10 +80,17 @@ try {
         if ($claim.operation_id -ceq $OperationId -and
             $claim.target_version -ceq $TargetVersion -and
             $claim.status -ceq 'authenticated_wss') {
-          & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status | Out-Null
+          $statusText = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status
           if ($LASTEXITCODE -eq 0) {
-            $result = 'completed'
-            break
+            $status = $statusText | ConvertFrom-Json
+            $current = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+            $expectedAction = [IO.Path]::Combine($target,'bin','rca-background.exe')
+            if ($status.installed -eq $true -and $status.running -eq $true -and
+                [string]::Equals([string]$current.Actions[0].Execute,$expectedAction,
+                  [StringComparison]::OrdinalIgnoreCase)) {
+              $result = 'completed'
+              break
+            }
           }
         }
       } catch { # Invalid proof cannot authorize success; remain bounded. }
