@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {mkdtempSync,mkdirSync,writeFileSync,readdirSync,readFileSync,rmSync} from "node:fs";
+import {mkdtempSync,mkdirSync,writeFileSync,readdirSync,readFileSync,rmSync,
+  chmodSync,symlinkSync,unlinkSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {createHash} from "node:crypto";
@@ -95,6 +96,7 @@ linux("approved reviewed Linux upgrade creates durable guard then launches separ
     assert.ok(args.includes("--service-type=exec"));
     assert.ok(args.includes("--property=RuntimeMaxSec="+ONE_SHOT_MAX_SECONDS));
     assert.ok(args.includes("--property=UMask=0077"));
+    assert.ok(args.includes("--property=NoNewPrivileges=yes"));
     assert.ok(!args.includes("--scope"),"scope mode must not inherit Agent cgroup");
     assert.ok(!args.includes("--wait"),"launcher cannot wait for service restart");
     assert.deepEqual(args.slice(-4),[
@@ -157,6 +159,30 @@ linux("identity, version and unreviewed manifest failures never ask user systemd
       await assert.rejects(launchDetachedLinuxUpgrade(options));
       assert.deepEqual(f.attempts(),[],mutation+" cannot consume approved operation");
       assert.deepEqual(f.calls,[],mutation+" cannot start a user service");
+    }finally{f.cleanup();}
+  }
+});
+
+linux("untrusted Linux executable/symlink/identity modes refuse before consuming operation",async()=>{
+  for(const mutation of ["world-readable-key","symlink-runner","world-writable-node","unsafe-state"]){
+    const f=fixture();
+    try{
+      const runner=path.join(f.current,"apps/remote-control-agent/scripts",
+        "linux-upgrade-watchdog.mjs");
+      if(mutation==="world-readable-key"){
+        chmodSync(path.join(f.home,".local/share/mcp-workers/remote-control",
+          "v2-identity.pem"),0o644);
+      }else if(mutation==="symlink-runner"){
+        unlinkSync(runner);
+        symlinkSync(path.join(f.current,"bundle.json"),runner);
+      }else if(mutation==="world-writable-node"){
+        chmodSync(path.join(f.current,"bin/node"),0o777);
+      }else{
+        chmodSync(f.state,0o755);
+      }
+      await assert.rejects(launchDetachedLinuxUpgrade(f.options),/Untrusted owner-only/);
+      assert.deepEqual(f.attempts(),[],mutation+" cannot create durable request");
+      assert.deepEqual(f.calls,[],mutation+" cannot create a service");
     }finally{f.cleanup();}
   }
 });
