@@ -77,7 +77,13 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
       try{
         const record=JSON.parse((await readPrivate(path.join(stateDirectory,name)))
           .toString("utf8")) as Record<string,unknown>;
-        if(typeof record.operation_id!=="string"||!OP.test(record.operation_id)||
+        // An extra or missing marker field, including a same-version claim,
+        // is never proof of an approved version transition. Keep exactly the
+        // durable schema written by the reviewed old-version launcher.
+        const expectedKeys=["operation_id","device_id","current_version",
+          "target_version","current_manifest_sha256","target_manifest_sha256"];
+        if(Object.keys(record).sort().join("|")!==expectedKeys.sort().join("|")||
+           typeof record.operation_id!=="string"||!OP.test(record.operation_id)||
            name!=="upgrade-run-"+createHash("sha256")
              .update(record.operation_id).digest("hex")+".json"||
            record.device_id!==deviceId||
@@ -86,6 +92,7 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
            record.target_manifest_sha256!==manifestDigest||
            typeof record.current_version!=="string"||
            !VERSION.test(record.current_version)||
+           record.current_version===runningVersion||
            !HASH.test(String(record.current_manifest_sha256))||
            !await isAdmitted(record.operation_id))continue;
         const key=createHash("sha256").update(record.operation_id).digest("hex");
