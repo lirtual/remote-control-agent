@@ -204,9 +204,19 @@ export async function upgradeExistingSignedService({
       // systemctl is-active alone is never a remote success receipt.
       const targetVersion=path.basename(plan.newRoot).split("-linux-")[0];
       if(verifySignedReconnect){
-        const verified=await verifySignedReconnect({
-          deviceId:identity.id,version:targetVersion,service:HISTORICAL_UNIT,
-        });
+        // The actual signed-session check belongs to the independent
+        // same-user watchdog. Bound even a stalled callback, and never delete
+        // the backup on timeout; the ordinary local upgrade path is unchanged.
+        let timeout;
+        let verified;
+        try{
+          verified=await Promise.race([
+            Promise.resolve().then(()=>verifySignedReconnect({
+              deviceId:identity.id,version:targetVersion,service:HISTORICAL_UNIT,
+            })),
+            new Promise(resolve=>{timeout=setTimeout(()=>resolve(false),90_000);}),
+          ]);
+        }finally{clearTimeout(timeout);}
         if(verified!==true)throw Error("New signed Agent reconnect not verified");
         systemctl(["is-active","--quiet",HISTORICAL_UNIT]);
         const after=await exactIdentity(plan.identity);
