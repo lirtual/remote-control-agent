@@ -636,16 +636,16 @@ jobs:
             if ($beforeOneShot.State -ne 'Running') {
               throw 'CI one-shot fixture cannot establish a running original Agent Task'
             }
-            # Exercise the ACTUAL bundled WMI one-shot watchdog using the
-            # already verified synthetic Task. CI writes a stand-in proof
-            # AFTER it observes restart: this tests local Task mechanics only,
-            # NOT genuine signed WSS authentication (covered separately).
-            $proofOperation = 'ci-watchdog-approved-once'
-            $shaAlgorithm = [Security.Cryptography.SHA256]::Create()
+            # This synthetic identity has NO signed cloud grant. It must
+            # never be able to satisfy the watchdog's authenticated reconnect.
+            # The preceding direct WMI CI already proved Task switch/rollback;
+            # this separate native test proves that NO proof means NO success.
+            $proofOperation = 'ci-watchdog-no-signed-wss'
+            $digest = [Security.Cryptography.SHA256]::Create()
             try {
-              $proofKey = [BitConverter]::ToString($shaAlgorithm.ComputeHash(
+              $proofKey = [BitConverter]::ToString($digest.ComputeHash(
                 [Text.Encoding]::UTF8.GetBytes($proofOperation))).Replace('-','').ToLowerInvariant()
-            } finally { $shaAlgorithm.Dispose() }
+            } finally { $digest.Dispose() }
             $receiptDirectory = Join-Path $root 'receipts'
             $null = New-Item -ItemType Directory -Path $receiptDirectory -Force
             $testPending = Join-Path $receiptDirectory ('upgrade-pending-' + $proofKey + '.json')
@@ -653,10 +653,8 @@ jobs:
             $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
             [IO.File]::WriteAllText($testPending,
               (@{operation_id=$proofOperation;target_version=$newVersion;source_version=$oldVersion} | ConvertTo-Json -Compress))
-            # Preserve bounded, synthetic-only preflight diagnostics without
-            # changing the packaged production watchdog or creating a service.
-            $watchdogLog = Join-Path $env:RUNNER_TEMP 'rca-one-shot-watchdog-ci.log'
-            $watchdogCommand = Join-Path $env:RUNNER_TEMP 'rca-one-shot-watchdog-ci.ps1'
+            $watchdogLog = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.log'
+            $watchdogCommand = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.ps1'
             $watchdogBody = @"
             try {
               & '$nativeWatchdog' -OperationId '$proofOperation' -OriginalVersion '$oldVersion' -TargetVersion '$newVersion' *>&1 |
@@ -672,64 +670,41 @@ jobs:
               CommandLine = $watchdogLine
             } -ErrorAction Stop
             if ($watchdogChild.ReturnValue -ne 0 -or $watchdogChild.ProcessId -le 0) {
-              throw 'CI independent watchdog could not start'
+              throw 'CI same-owner native watchdog could not start'
             }
             try {
-              $taskDeadline = (Get-Date).AddSeconds(45)
-              $matched = $false
-              while ((Get-Date) -lt $taskDeadline) {
-                Start-Sleep -Milliseconds 500
-                $nativeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-                if ($nativeTask.State -eq 'Running' -and [string]::Equals(
-                    [string]$nativeTask.Actions[0].Execute,(Join-Path $newDir 'bin\rca-background.exe'),
-                    [StringComparison]::OrdinalIgnoreCase)) {
-                  $matched = $true; break
+              # Production watchdog waits at most 90 seconds after an actual
+              # switch. The CI timeout leaves enough time to observe rollback.
+              $deadline = (Get-Date).AddSeconds(112)
+              $terminated = $false
+              do {
+                Start-Sleep -Seconds 2
+                $running = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $watchdogChild.ProcessId) -ErrorAction SilentlyContinue
+                $terminated = -not $running
+              } while (-not $terminated -and (Get-Date) -lt $deadline)
+              if (-not $terminated) { throw 'No-proof native watchdog exceeded its deadline' }
+              if (Test-Path -LiteralPath $testProof) {
+                throw 'Unauthenticated synthetic device fabricated WSS proof'
+              }
+              # Failure before the Task switch can produce no outcome file.
+              # This is a legitimate fail-closed refusal, not an upgrade PASS.
+              if (Test-Path -LiteralPath $testOutcome) {
+                $outcome = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
+                if ($outcome.operation_id -cne $proofOperation -or
+                    $outcome.status -notin @('rolled_back','needs_attention')) {
+                  throw 'Native no-proof watchdog claimed an upgrade completed'
                 }
+              } elseif (-not (Test-Path -LiteralPath $watchdogLog)) {
+                throw 'No native watchdog terminal result or refusal was observed'
               }
-              if (-not $matched) {
-                # Isolated synthetic CI: inspect only fixed Task state, result
-                # and exact old/new Action names, never private credentials.
-                $taskSnapshot = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-                $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
-                $exe = if ($taskSnapshot -and [string]::Equals(
-                    [string]$taskSnapshot.Actions[0].Execute,
-                    (Join-Path $newDir 'bin\rca-background.exe'),
-                    [StringComparison]::OrdinalIgnoreCase)) {'target'}
-                  elseif ($taskSnapshot -and [string]::Equals(
-                    [string]$taskSnapshot.Actions[0].Execute,
-                    (Join-Path $oldDir 'bin\rca-background.exe'),
-                    [StringComparison]::OrdinalIgnoreCase)) {'original'} else {'unexpected'}
-                Write-Output ('CI WATCHDOG TASK: ' + $exe + ' / state=' +
-                  [string]$taskSnapshot.State + ' / lastResult=' + [string]$taskInfo.LastTaskResult)
-                if (Test-Path -LiteralPath $testOutcome) {
-                  Get-Content -LiteralPath $testOutcome -Raw | Write-Output
-                }
-                if (Test-Path -LiteralPath $watchdogLog) {
-                  Get-Content -LiteralPath $watchdogLog -Tail 15 | Write-Output
-                }
-                throw 'Real independent watchdog did not start upgraded Task'
+              $safeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+              if (-not [string]::Equals([string]$safeTask.Actions[0].Execute,
+                  (Join-Path $oldDir 'bin\rca-background.exe'),
+                  [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'No-proof watchdog left upgraded Task active'
               }
-              # This fixture is not passed through the WSS transport; never
-              # count it as an authenticated integration acceptance.
-              [IO.File]::WriteAllText($testProof,
-                (@{operation_id=$proofOperation;target_version=$newVersion;status='authenticated_wss'} |
-                  ConvertTo-Json -Compress))
-              $finalDeadline = (Get-Date).AddSeconds(20)
-              while (-not (Test-Path -LiteralPath $testOutcome) -and (Get-Date) -lt $finalDeadline) {
-                Start-Sleep -Milliseconds 500
-              }
-              if (-not (Test-Path -LiteralPath $testOutcome)) {
-                throw 'Native watchdog did not persist terminal outcome'
-              }
-              $result = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
-              if ($result.operation_id -cne $proofOperation -or $result.status -cne 'completed' -or
-                  $result.target_version -cne $newVersion) {
-                throw 'Native watchdog outcome was not an exact successful transition'
-              }
-              & $newCli rollback --version $oldVersion
-              if ($LASTEXITCODE -ne 0) { throw 'Post-watchdog synthetic rollback failed' }
             } finally {
-              # Only test-owned files in this disposable fixture.
+              # Only fixture-created local evidence. Never change any real user Task.
               Remove-Item -LiteralPath $testPending,$testProof,$testOutcome -Force -ErrorAction SilentlyContinue
             }
             if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
