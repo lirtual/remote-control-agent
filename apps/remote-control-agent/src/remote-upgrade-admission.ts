@@ -43,7 +43,7 @@ export function localUpgradeFingerprint(privateKeyPem: string): string {
  */
 function newerWindowsVersion(next: string, current: string): boolean {
   const parse = (value: string): number[] | null => {
-    const parts = /^v([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:-[a-z0-9][a-z0-9.-]*)?$/.exec(value);
+    const parts = /^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-[a-z0-9][a-z0-9.-]*)?$/.exec(value);
     if (!parts) return null;
     const out = parts.slice(1, 4).map(Number);
     return out.every(Number.isSafeInteger) ? out : null;
