@@ -190,12 +190,17 @@ export async function upgradeExistingSignedService({
   if(!active&&!offline)throw Error("Agent state uncertain; upgrade refused");
   let frozen=false;
   if(active){
-    const answer=await freeze(plan.identity,"freeze");
+    // One-shot WSS owner admission already froze the active Agent before
+    // staging. Check that freeze without taking/releasing it a second time.
+    const remotelyApproved=!!verifySignedReconnect;
+    const answer=await freeze(plan.identity,
+      remotelyApproved?"verify-frozen":"freeze");
     if(answer!=="ready"){
-      if(answer!=="busy")await freeze(plan.identity,"release").catch(()=>{});
+      if(answer!=="busy" && !remotelyApproved)
+        await freeze(plan.identity,"release").catch(()=>{});
       throw Error("Agent has active or uncertain operations; upgrade refused");
     }
-    frozen=true;
+    frozen=!remotelyApproved;
   }
   try{
     if((await exactIdentity(plan.identity)).digest!==identity.digest ||
