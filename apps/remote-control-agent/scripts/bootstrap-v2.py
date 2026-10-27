@@ -342,9 +342,12 @@ def clean_orphaned_staging(parent):
             entry.unlink()
 
 
-def preflight(tag, commit, endpoint):
+def preflight(tag, commit, endpoint, stage_only=False):
+    # Remote staging is data-only; the existing manual installer still demands
+    # a real console, and no noninteractive path may pair or switch systemd.
     if (sys.platform != "linux" or os.getuid() == 0
-            or not sys.stdin.isatty() or not sys.stdout.isatty()):
+            or (not stage_only and
+                (not sys.stdin.isatty() or not sys.stdout.isatty()))):
         raise ValueError("Run as a non-root Linux user in a real interactive terminal")
     cpu = platform.machine().lower()
     if cpu not in ("x86_64", "aarch64"):
@@ -365,8 +368,15 @@ def preflight(tag, commit, endpoint):
     return "linux-" + ("x64" if cpu == "x86_64" else "arm64") + "-glibc"
 
 
-def install(tag, commit, endpoint, name=None, upgrade=False):
-    target = preflight(tag, commit, endpoint)
+def install(tag, commit, endpoint, name=None, upgrade=False,
+            stage_only=False, asset_sha256=None):
+    if stage_only:
+        if name is not None or upgrade or not isinstance(asset_sha256, str) or \
+                not re.fullmatch(r"[0-9a-f]{64}", asset_sha256):
+            raise ValueError("Stage-only requires exactly one reviewed SHA-256 and no install action")
+    elif asset_sha256 is not None:
+        raise ValueError("An asset SHA-256 is only accepted for stage-only verification")
+    target = preflight(tag, commit, endpoint, stage_only=stage_only)
     print("==> Detected Linux target: " + target + " | Release " + tag, flush=True)
     location = program_home(os.path.expanduser("~"))
     version = location / (tag + "-" + target)
@@ -380,6 +390,10 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
         clean_orphaned_staging(location)
         print("==> Resolving immutable GitHub Release and exact source commit", flush=True)
         pinned = resolve_pinned(tag, commit, target)
+        # Release API metadata is insufficient by itself: independent owner
+        # review of the exact architecture's asset SHA-256 is mandatory.
+        if stage_only and pinned["digest"] != asset_sha256:
+            raise ValueError("Reviewed SHA-256 differs from immutable GitHub Release metadata")
         archive_path = None
         try:
             with tempfile.NamedTemporaryFile(prefix=".download-", dir=location, delete=False) as f:
@@ -394,6 +408,14 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
                 os.fsync(f.fileno())
             print("==> SHA-256 verified; inspecting archive and system ABI", flush=True)
             records = inspect_archive(archive_path, tag, target)
+            if stage_only:
+                with tarfile.open(archive_path, "r:gz") as tf:
+                    manifest = json.load(tf.extractfile(tf.getmember("bundle.json")))
+                if manifest.get("upgrade_profile") != "paired-full-v1" or \
+                        manifest.get("upgrade_protocol") != "owner-one-shot-v1" or \
+                        manifest.get("device_protocol") != 2 or \
+                        manifest.get("receipt_schema") != 1:
+                    raise ValueError("Linux one-shot release lacks reviewed protocol readiness")
             if version.exists() or version.is_symlink():
                 verify_existing_program(archive_path, version, records)
             else:
@@ -402,6 +424,9 @@ def install(tag, commit, endpoint, name=None, upgrade=False):
             if archive_path is not None:
                 archive_path.unlink(missing_ok=True)
         print("==> Verified runtime staged: " + str(version), flush=True)
+        if stage_only:
+            # No install-v2, systemctl, identity mutation, approval or pairing.
+            return
         binary = version / "bin/node"
         command = [str(binary), str(version / APP / "scripts/install-v2.mjs"),
                    "--endpoint", endpoint]
@@ -720,11 +745,14 @@ def main():
     parser.add_argument("--endpoint")
     actions=parser.add_mutually_exclusive_group()
     actions.add_argument("--status", action="store_true")
+    actions.add_argument("--stage-only", action="store_true",
+                         help="verify and stage a separately pinned immutable Linux upgrade; never switch")
     actions.add_argument("--uninstall", action="store_true")
     actions.add_argument("--purge-local-identity", action="store_true",
                          help="separate explicit v2 key/ID purge after uninstall; shared SQLite retained")
     parser.add_argument("--name")
     parser.add_argument("--upgrade", action="store_true", help="manual owned v2 program upgrade only")
+    parser.add_argument("--asset-sha256", help="independently reviewed architecture SHA-256 for --stage-only")
     args = parser.parse_args()
     try:
         if args.status:
@@ -775,7 +803,8 @@ def main():
         else:
             if not args.tag or not args.commit or not args.endpoint:
                 raise ValueError("Pinned --tag, --commit, and --endpoint are required")
-            install(args.tag, args.commit, args.endpoint, args.name, args.upgrade)
+            install(args.tag, args.commit, args.endpoint, args.name, args.upgrade,
+                    args.stage_only, args.asset_sha256)
     except ValueError as exc:
         # Only messages from explicitly authored validation branches.
         print("Standalone v2 install refused: " + str(exc), file=sys.stderr)
