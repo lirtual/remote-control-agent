@@ -43,7 +43,8 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
   untrusted: unknown, paths: NativeUpgradePaths, hooks: UpgradeLaunchHooks={},
 ):Promise<"launched"> {
   const op = parseRemoteUpgradeDispatch(untrusted);
-  if (!op || process.platform!=="win32" || process.arch!=="x64" ||
+  if (!op || !("windows_asset_sha256" in op.target) ||
+      process.platform!=="win32" || process.arch!=="x64" ||
       !path.win32.isAbsolute(paths.installedRoot) ||
       !path.win32.isAbsolute(paths.stateRoot) ||
       !path.win32.isAbsolute(paths.systemRoot) ||
