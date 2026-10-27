@@ -521,6 +521,7 @@ jobs:
             if ($oldRunning.State -ne 'Running') {
               $lastTask = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction Stop
               Write-Output ('CI synthetic Task state=' + $oldRunning.State + '; last_result=' + $lastTask.LastTaskResult)
+              & $program logs | Select-Object -Last 12 | Write-Output
               throw 'Synthetic Agent Task did not remain active before WMI upgrade'
             }
             $powershellPath = (Get-Command powershell.exe -ErrorAction Stop).Source
