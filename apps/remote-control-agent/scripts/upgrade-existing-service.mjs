@@ -148,6 +148,9 @@ async function safeProgram(root){
 export async function upgradeExistingSignedService({
   home=os.homedir(),newRoot,endpoint,
   systemctl=system,freeze=requestUpgradeConsent,
+  // Optional, locally supplied by a future independent one-shot updater.
+  // Never derived from MCP arguments or an Agent-provided version string.
+  verifySignedReconnect,
 }={}){
   if(process.platform!=="linux"||process.getuid()===0)throw Error("Linux non-root owner required");
   const unitDir=path.join(home,".config/systemd/user");
@@ -191,9 +194,25 @@ export async function upgradeExistingSignedService({
       const same=await exactIdentity(plan.identity);
       if(same.id!==identity.id||same.digest!==identity.digest)
         throw Error("Device identity changed during upgrade");
+      // Remote one-shot mode retains the original unit backup until the
+      // trusted same-owner updater has verified a NEW signed WSS session.
+      // systemctl is-active alone is never a remote success receipt.
+      const targetVersion=path.basename(plan.newRoot).split("-linux-")[0];
+      if(verifySignedReconnect){
+        const verified=await verifySignedReconnect({
+          deviceId:identity.id,version:targetVersion,service:HISTORICAL_UNIT,
+        });
+        if(verified!==true)throw Error("New signed Agent reconnect not verified");
+        systemctl(["is-active","--quiet",HISTORICAL_UNIT]);
+        const after=await exactIdentity(plan.identity);
+        if(after.id!==identity.id||after.digest!==identity.digest)
+          throw Error("Device identity changed after reconnect");
+        if(await readFile(unitPath,"utf8")!==plan.newUnit)
+          throw Error("Agent unit changed after signed reconnect");
+      }
       await rm(backup);await syncParent(backup);
       return {status:"active",deviceId:identity.id,service:HISTORICAL_UNIT,
-        version:path.basename(plan.newRoot).split("-linux-")[0],identityPreserved:true};
+        version:targetVersion,identityPreserved:true};
     }catch(error){
       try{
         await atomicWrite(unitPath,previous);
