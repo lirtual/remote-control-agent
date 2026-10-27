@@ -160,7 +160,8 @@ export function buildWindowsPreview(args) {
   writeFileSync(path.join(stage, "bundle.json"), JSON.stringify({
     name: "remote-control-agent", version: args.version, target: "windows-x64",
     node: EXPECTED_NODE_VERSION, device_protocol: 2, artifact_schema: 1,
-    upgrade_profile: "paired-full-v1", preview: true, modules, hashes,
+    upgrade_profile: "paired-full-v1", upgrade_protocol: "owner-one-shot-v1",
+    preview: true, modules, hashes,
     ...(browserRuntime ? {browser_runtime:browserRuntime} : {}),
   }, null, 2) + "\n", { mode: 0o600 });
   return {
