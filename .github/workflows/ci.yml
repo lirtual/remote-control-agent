@@ -687,6 +687,23 @@ jobs:
                 }
               }
               if (-not $matched) {
+                # Isolated synthetic CI: inspect only fixed Task state, result
+                # and exact old/new Action names, never private credentials.
+                $taskSnapshot = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+                $taskInfo = Get-ScheduledTaskInfo -TaskName $taskName -ErrorAction SilentlyContinue
+                $exe = if ($taskSnapshot -and [string]::Equals(
+                    [string]$taskSnapshot.Actions[0].Execute,
+                    (Join-Path $newDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {'target'}
+                  elseif ($taskSnapshot -and [string]::Equals(
+                    [string]$taskSnapshot.Actions[0].Execute,
+                    (Join-Path $oldDir 'bin\rca-background.exe'),
+                    [StringComparison]::OrdinalIgnoreCase)) {'original'} else {'unexpected'}
+                Write-Output ('CI WATCHDOG TASK: ' + $exe + ' / state=' +
+                  [string]$taskSnapshot.State + ' / lastResult=' + [string]$taskInfo.LastTaskResult)
+                if (Test-Path -LiteralPath $testOutcome) {
+                  Get-Content -LiteralPath $testOutcome -Raw | Write-Output
+                }
                 if (Test-Path -LiteralPath $watchdogLog) {
                   Get-Content -LiteralPath $watchdogLog -Tail 15 | Write-Output
                 }
