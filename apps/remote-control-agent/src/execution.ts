@@ -14,6 +14,8 @@ import {
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
 import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote-upgrade-admission.ts";
+import { stageAndLaunchApprovedWindowsUpgrade } from "./windows-upgrade-executor.ts";
+import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
@@ -641,17 +643,51 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           activeCalls > 0 || inFlight.size > 0 ||
           (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
           !sessions.isQuiescentForUpgrade()) return { status: "unavailable" };
-      // Prevent ordinary operations racing the durable receipt admission.
-      // No switch or updater is permitted here: this lock is released as
-      // soon as the admitted record is fsync-committed.
       upgradeFrozen = true;
       try {
         await ensureReceipts();
-        return await admitOwnerApprovedUpgrade(receipts,input,{
+        const receipt = await admitOwnerApprovedUpgrade(receipts,input,{
           ...local,platform:process.platform,
         });
-      } catch { return { status: "unavailable" }; }
-      finally { upgradeFrozen = false; }
+        if (receipt.status !== "admitted" || !receipt.operation_id) {
+          upgradeFrozen = false;
+          return receipt;
+        }
+        // The WSS operation ACK is an ADMISSION, never an upgrade success.
+        // Subsequent staging occurs independently; the Agent remains frozen
+        // until the Task switch stops it or failure is recorded locally.
+        const approvedId = receipt.operation_id;
+        const task = (async () => {
+          try {
+            await receipts.update(approvedId,"running","Immutable release staging pending.");
+            const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..","..","..");
+            const receiptRoot = options.receiptDirectory;
+            if (!receiptRoot) throw Error("Missing installed native receipts directory.");
+            const result = await stageAndLaunchApprovedWindowsUpgrade(input,{
+              installedRoot:sourceRoot,
+              stateRoot:path.dirname(receiptRoot),
+              systemRoot:process.env.SystemRoot ?? "",
+            });
+            if (result !== "launched") throw Error("No isolated updater was launched.");
+            // Do not mark completed until a NEW authenticated WSS incarnation
+            // proves the installed target and watchdog records a local result.
+          } catch {
+            try {
+              // The child could have started before WMI transport returned;
+              // unknown must remain replay-guarded even on a timeout.
+              await receipts.update(approvedId,"unknown","Native upgrade effect needs reconciliation.");
+            } catch { /* Never declare success after a persistence failure. */ }
+            upgradeFrozen = false;
+          }
+        })();
+        // Keep shutdown waiting for pre-switch staging, but never request
+        // or simulate a local console Y confirmation.
+        void task.catch(()=>{upgradeFrozen=false;});
+        return receipt;
+      } catch {
+        upgradeFrozen = false;
+        return { status: "unavailable" };
+      }
     },
     handoffGeneration: () => handoff.generation(),
     handoffBlocked: () => handoff.isBlocked(),
