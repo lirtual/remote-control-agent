@@ -195,7 +195,7 @@ export function build(args) {
      /(?:readOnly|writeFile|shell)\s*:/.test(entrySource) ||
      !/const full = options\.capability !== "read-only"/.test(lifecycleSource) ||
      !/if \(!full && options\.browser\) throw Error/.test(lifecycleSource) ||
-     !/const execution = createAgentExecutionEngine\(\{\s*receiptDirectory:\s*options\.receiptDirectory,\s*browser:\s*options\.browser,/.test(lifecycleSource) ||
+     !/const execution = full\s*\?\s*createAgentExecutionEngine\(\{\s*receiptDirectory:\s*options\.receiptDirectory,\s*browser:\s*options\.browser,?\s*\}\)\s*:\s*undefined/.test(lifecycleSource) ||
      !/startUpgradeControl\(execution(?:!)?, keyPath\)/.test(lifecycleSource) ||
      !/executeV2FileOperation\(execution,/.test(lifecycleSource) ||
      !/executeV2SessionRead\(execution,/.test(lifecycleSource)) {
