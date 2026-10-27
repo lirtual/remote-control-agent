@@ -17,6 +17,7 @@ import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote
 import { stageAndLaunchApprovedWindowsUpgrade, readNativeUpgradeOutcome } from "./windows-upgrade-executor.ts";
 import { collectDeviceInfo } from "./device-info.ts";
 import { readLinuxUpgradeOutcome } from "./linux-upgrade-reconnect.ts";
+import { stageAndLaunchApprovedLinuxUpgrade } from "./linux-upgrade-executor.ts";
 import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -37,6 +38,8 @@ export interface AgentExecutionOptions {
   sealHandoffEvidence?: (kind: "directory" | "pending") => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
+  /** Configured outbound authenticated Worker origin; never an MCP argument. */
+  signedEndpoint?: string;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
@@ -648,8 +651,12 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       upgradeFrozen = true;
       try {
         await ensureReceipts();
+        const info=collectDeviceInfo();
         const receipt = await admitOwnerApprovedUpgrade(receipts,input,{
-          ...local,platform:process.platform,
+          ...local,platform:process.platform,arch:process.arch,
+          environment:info.environment,
+          linuxProtocolReady:info.upgrade_protocol==="owner-one-shot-v1" &&
+            info.os==="linux" && ["native","wsl2"].includes(info.environment),
         });
         if (receipt.status !== "admitted" || !receipt.operation_id) {
           upgradeFrozen = false;
@@ -663,13 +670,27 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           try {
             await receipts.update(approvedId,"running","Immutable release staging pending.");
             const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..","..","..");
-            const receiptRoot = options.receiptDirectory;
-            if (!receiptRoot) throw Error("Missing installed native receipts directory.");
-            const result = await stageAndLaunchApprovedWindowsUpgrade(input,{
-              installedRoot:sourceRoot,
-              stateRoot:path.dirname(receiptRoot),
-              systemRoot:process.env.SystemRoot ?? "",
-            });
+            let result:"launched";
+            if (process.platform==="linux") {
+              if (!options.signedEndpoint) throw Error("Signed Linux endpoint missing.");
+              const endpoint=new URL(options.signedEndpoint).origin+"/";
+              result=await stageAndLaunchApprovedLinuxUpgrade(input,{
+                installedRoot:sourceRoot,endpoint,
+                readAdmission:async operationId=>{
+                  const row=await receipts.get(operationId);
+                  return row?.tool_name==="upgrade_agent" &&
+                    row.state==="running" && operationId===approvedId;
+                },
+              });
+            } else {
+              const receiptRoot = options.receiptDirectory;
+              if (!receiptRoot) throw Error("Missing installed native receipts directory.");
+              result = await stageAndLaunchApprovedWindowsUpgrade(input,{
+                installedRoot:sourceRoot,
+                stateRoot:path.dirname(receiptRoot),
+                systemRoot:process.env.SystemRoot ?? "",
+              });
+            }
             if (result !== "launched") throw Error("No isolated updater was launched.");
             // Do not mark completed until a NEW authenticated WSS incarnation
             // proves the installed target and watchdog records a local result.
