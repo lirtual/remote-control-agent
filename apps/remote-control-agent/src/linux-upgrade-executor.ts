@@ -44,8 +44,9 @@ export async function stageAndLaunchApprovedLinuxUpgrade(
   },
 ):Promise<"launched">{
   const request=parseRemoteUpgradeDispatch(untrusted);
+  const uid=process.getuid?.();
   if(!request||!("linux_asset_sha256" in request.target)||
-     process.platform!=="linux"||process.getuid?.()===0||
+     process.platform!=="linux"||typeof uid!=="number"||uid===0||
      !["x64","arm64"].includes(process.arch)||
      request.target.linux_arch!==process.arch||
      typeof home!=="string"||!path.isAbsolute(home)||
@@ -65,13 +66,13 @@ export async function stageAndLaunchApprovedLinuxUpgrade(
   for(const directory of [programs,source]){
     const stat=await lstat(directory);
     if(!stat.isDirectory()||stat.isSymbolicLink()||
-       stat.uid!==process.getuid()||(stat.mode&0o077)!==0)
+       stat.uid!==uid||(stat.mode&0o077)!==0)
       throw Error("Untrusted installed Linux program directory.");
   }
   const script=path.join(source,"apps/remote-control-agent/scripts/bootstrap-v2.py");
   const stat=await lstat(script);
   if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||
-     stat.uid!==process.getuid()||(stat.mode&0o077)!==0)
+     stat.uid!==uid||(stat.mode&0o077)!==0)
     throw Error("Untrusted immutable Linux bootstrap script.");
   // The historical SQLite admission has already been durably claimed by
   // the WSS handler; re-read it before ANY download or native launch.
