@@ -180,7 +180,7 @@ linuxTest("missing signed Linux reconnect refuses success and restores original 
    },
    upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async()=>false,
-  }),/New signed Agent reconnect not verified/);
+  }),/Original signed Linux service restored/);
   assert.equal(restarts,2,"real new service and original rollback service both restart");
   assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
   assert.equal(requireBackupAbsent(f.unitPath),true);
