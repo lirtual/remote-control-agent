@@ -14,7 +14,8 @@ import {
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
 import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote-upgrade-admission.ts";
-import { stageAndLaunchApprovedWindowsUpgrade } from "./windows-upgrade-executor.ts";
+import { stageAndLaunchApprovedWindowsUpgrade, readNativeUpgradeOutcome } from "./windows-upgrade-executor.ts";
+import { collectDeviceInfo } from "./device-info.ts";
 import { fileURLToPath } from "node:url";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -708,7 +709,21 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     getReceipt: async (id: string) => {
       const generation = handoff.generation();
       await ensureReceipts();
-      const receipt = await receipts.get(id);
+      let receipt = await receipts.get(id);
+      if (receipt?.tool_name === "upgrade_agent" &&
+          ["admitted","running","unknown"].includes(receipt.state) &&
+          options.receiptDirectory && process.platform === "win32" &&
+          !handoff.isBlocked() && generation === handoff.generation()) {
+        const observed = await readNativeUpgradeOutcome(
+          options.receiptDirectory,id,collectDeviceInfo().agent_version);
+        if (observed === "completed") {
+          receipt = await receipts.update(id,"completed",
+            "New Agent signed WSS, exact native Task and watchdog outcome verified.");
+        } else if (observed === "rolled_back") {
+          receipt = await receipts.update(id,"failed",
+            "Watchdog restored original native user Task; owner review required.");
+        }
+      }
       return receipt && (handoff.isBlocked() || generation !== handoff.generation())
         ? {operation_id:receipt.operation_id,state:receipt.state} : receipt;
     },
