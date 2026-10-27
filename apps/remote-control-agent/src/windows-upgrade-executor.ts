@@ -4,12 +4,12 @@
  * The detached WMI child uses the same SID and no new Task or service.
  */
 import { spawn } from "node:child_process";
-import { readFile, writeFile, lstat, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { open, readFile, writeFile, lstat } from "node:fs/promises";
 import path from "node:path";
 import { parseRemoteUpgradeDispatch } from "./remote-upgrade-admission.ts";
 
 const OP = /^(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}$/;
-const PIN = /^[a-f0-9]{64}$/;
 const STAGE_TIMEOUT_MS = 180_000;
 
 export interface UpgradeLaunchHooks {
@@ -85,12 +85,15 @@ export async function stageAndLaunchApprovedWindowsUpgrade(
   const receiptDir=path.win32.join(paths.stateRoot,"receipts");
   const info=await lstat(receiptDir);
   if(!info.isDirectory() || info.isSymbolicLink())throw Error("Unsafe native receipt directory.");
-  const pending=path.win32.join(receiptDir,"upgrade-pending-"+op.operation_id+".json");
-  // Existing-file refusal and fsync-free CreateNew leave a conservative
-  // guarded receipt if native process launch reports an unknown outcome.
+  const key=createHash("sha256").update(op.operation_id,"utf8").digest("hex");
+  const pending=path.win32.join(receiptDir,"upgrade-pending-"+key+".json");
+  // Atomic owner-only create + fsync before WMI launch; a timeout preserves
+  // guarded evidence rather than authorizing a blind retry.
   const evidence=JSON.stringify({operation_id:op.operation_id,
     target_version:op.target.tag,source_version:op.current_version});
-  await writeFile(pending,evidence,{flag:"wx",mode:0o600});
+  const file=await open(pending,"wx",0o600);
+  try { await file.writeFile(evidence,"utf8"); await file.sync(); }
+  finally { await file.close(); }
   // Only AFTER immutable release staging succeeded may a separate same-user
   // WMI child switch the user's existing Task.
   const childLine = '"' + powershell + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
@@ -123,16 +126,18 @@ export async function acknowledgeAuthenticatedUpgrade(
   let files:string[];
   try { files=await readdir(receiptDir); } catch { return 0; }
   let acknowledged=0;
-  for(const file of files.filter(x=>/^upgrade-pending-(?!\.{1,2}$)[A-Za-z0-9._:-]{1,128}\.json$/.test(x)).slice(0,8)) {
+  for(const file of files.filter(x=>/^upgrade-pending-[a-f0-9]{64}\.json$/.test(x)).slice(0,64)) {
     try{
       const p=path.win32.join(receiptDir,file);
       const st=await lstat(p);
       if(!st.isFile() || st.isSymbolicLink() || st.size>2048)continue;
       const pending=JSON.parse(await readFile(p,"utf8")) as {operation_id?:unknown;target_version?:unknown};
       if(typeof pending.operation_id!=="string" || !OP.test(pending.operation_id) ||
+         file!=="upgrade-pending-"+createHash("sha256").update(pending.operation_id).digest("hex")+".json" ||
          pending.target_version!==runningVersion ||
          !await isAdmitted(pending.operation_id))continue;
-      const proof=path.win32.join(receiptDir,"upgrade-auth-"+pending.operation_id+".json");
+      const key=createHash("sha256").update(pending.operation_id).digest("hex");
+      const proof=path.win32.join(receiptDir,"upgrade-auth-"+key+".json");
       const body=JSON.stringify({operation_id:pending.operation_id,
         target_version:runningVersion,status:"authenticated_wss"});
       await writeFile(proof,body,{flag:"wx",mode:0o600});
