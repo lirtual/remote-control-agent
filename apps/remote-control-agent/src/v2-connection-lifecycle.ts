@@ -4,7 +4,6 @@
  * All supported file, Shell and session tools are available after pairing.
  * Hibernation heartbeat responses do not wake the DO.
  */
-import { HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,7 +30,6 @@ export async function executeV2SessionRead(
     const answer = await execution.executeTool({ tool, arguments: args }, signal);
     if (answer?.status !== 200) return null;
     const body = answer.body as { result?: { content?: Array<{ text?: unknown }> } };
-    if ((HANDOFF_TOOLS as readonly string[]).includes(tool)) return JSON.stringify(answer.body);
     const text = body?.result?.content?.[0]?.text;
     return typeof text === "string" && text.length <= 65_536 ? text : null;
   } catch { return null; }
@@ -103,7 +101,6 @@ export function monitorDeviceSocket(
   operation?: (tool: V2FileOperation, args: unknown, operationId: string, signal: AbortSignal) => Promise<Record<string, unknown> | null>,
   allowShell = false,
   revokeCleanup?: () => Promise<"confirmed" | "uncertain">,
-  barrier?: Pick<AgentExecutionEngine,"handoffGeneration" | "handoffBlocked">,
 ): Promise<SocketEnd> {
   const authEvery = timing.authIntervalMs ?? AUTH_INTERVAL_MS;
   if (!Number.isFinite(timing.intervalMs) || timing.intervalMs <= 0 ||
@@ -204,7 +201,6 @@ export function monitorDeviceSocket(
           return;
         }
         const readParsers: Record<string, (args: unknown) => unknown> = {
-          ...Object.fromEntries(HANDOFF_TOOLS.map(tool => [tool,(args: unknown) => parseHandoffArguments(tool,args)])),
           read_file: parseLocalRead, read_multiple_files: parseReadMultiple,
           list_directory: parseListDirectory, get_file_info: parseFileInfo,
           start_search: parseSearchStart, get_more_search_results: parseSearchSessionId,
@@ -233,13 +229,10 @@ export function monitorDeviceSocket(
             return;
           }
           readsInFlight++;
-          const generation = barrier?.handoffGeneration();
           void Promise.resolve().then(() => readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
               if (settled || signal.aborted || socket.readyState !== WebSocket.OPEN) return;
-              const safe = (HANDOFF_TOOLS as readonly string[]).includes(tool) ||
-                (!barrier?.handoffBlocked() && generation === barrier?.handoffGeneration());
-              const valid = safe && typeof text === "string" && text.length <= 65_536;
+              const valid = typeof text === "string" && text.length <= 65_536;
               socket.send(JSON.stringify({
                 kind: "read_result", request_id: id,
                 status: valid ? "completed" : "failed",
@@ -314,15 +307,9 @@ export function monitorDeviceSocket(
           const requestId = request.request_id;
           const operationId = request.operation_id;
           const tool = request.tool as V2FileOperation;
-          const generation = barrier?.handoffGeneration();
           void Promise.resolve().then(() => operation(tool, request.arguments, operationId, socketWork.signal))
             .then(result => {
               if (settled || socketWork.signal.aborted || socket.readyState !== WebSocket.OPEN) return;
-              if (barrier?.handoffBlocked() || generation !== barrier?.handoffGeneration()) {
-                // Redact even results already resolved by an async adapter before
-                // this transport microtask. Receipts preserve the intent ID/state.
-                result = {operation_id:operationId,status:tool === "get_operation_status" ? result?.status ?? "unavailable" : "unavailable"};
-              }
               const wire = JSON.stringify({ kind: "operation_result", request_id: requestId,
                 result: result ?? { operation_id: operationId, status: "unavailable" } });
               if (wire.length > 65_536) throw new Error("operation response too large");
@@ -388,8 +375,6 @@ export async function maintainAuthenticatedDeviceSession(
     launchLinuxUpgrade?: import("./execution.ts").AgentExecutionOptions["launchLinuxUpgrade"];
     /** Optional, locally created browser. Absent by default; never from remote frames. */
     browser?: BrowserBackend;
-    verifyHandoffPrerequisites?: () => import("./protected-tunnel.ts").ProtectedTunnelConfig | void;
-    sealHandoffEvidence?: (kind: "directory" | "pending") => void;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
   } = {},
@@ -411,9 +396,7 @@ export async function maintainAuthenticatedDeviceSession(
     receiptDirectory: options.receiptDirectory, browser: options.browser,
     signedEndpoint:baseAddress,
     launchLinuxUpgrade:options.launchLinuxUpgrade,
-    verifyHandoffPrerequisites: options.verifyHandoffPrerequisites,
-    sealHandoffEvidence: options.sealHandoffEvidence,
-    handoffDeviceId: () => authenticatedDeviceId,
+    authenticatedDeviceId: () => authenticatedDeviceId,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
   if (full && process.platform !== "win32") {
@@ -476,7 +459,7 @@ export async function maintainAuthenticatedDeviceSession(
       try {
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
-            if (!full && (["list_sessions","read_process_output","browser_status","browser_snapshot","browser_tabs",...HANDOFF_TOOLS] as string[]).includes(tool)) return null;
+            if (!full && (["list_sessions","read_process_output","browser_status","browser_snapshot","browser_tabs"] as string[]).includes(tool)) return null;
             return executeV2SessionRead(execution,tool,args,requestSignal);
           },
           full && execution
@@ -495,7 +478,7 @@ export async function maintainAuthenticatedDeviceSession(
             }
             : undefined,
           full,
-          full && execution ? () => execution.stopOwnedForRevocation() : undefined, execution);
+          full && execution ? () => execution.stopOwnedForRevocation() : undefined);
       } finally {
         await execution.resetReadSessions();
       }
