@@ -95,6 +95,9 @@ try {
   # within the existing 90-second signed-reconnect deadline.
   $runningSamples = 0
   for ($index=0; $index -lt 90; $index++) {
+    # All failed proof/Status/Task checks invalidate the consecutive run:
+    # even one missing or malformed sample resets the liveness evidence.
+    $liveSample = $false
     if (Test-Path -LiteralPath $proof -PathType Leaf) {
       try {
         $claim = Get-Content -LiteralPath $proof -Raw | ConvertFrom-Json
@@ -106,23 +109,21 @@ try {
             $status = $statusText | ConvertFrom-Json
             $current = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
             $expectedAction = [IO.Path]::Combine($target,'bin','rca-background.exe')
-            if ($status.installed -eq $true -and $status.running -eq $true -and
-                $current.State -eq 'Running' -and
-                [string]::Equals([string]$current.Actions[0].Execute,$expectedAction,
-                  [StringComparison]::OrdinalIgnoreCase)) {
-              $runningSamples++
-              if ($runningSamples -ge 3) {
-                $result = 'completed'
-                break
-              }
-            } else {
-              $runningSamples = 0
-            }
+            $liveSample = $status.installed -eq $true -and $status.running -eq $true -and
+              $current.State -eq 'Running' -and
+              [string]::Equals([string]$current.Actions[0].Execute,$expectedAction,
+                [StringComparison]::OrdinalIgnoreCase)
           }
         }
       } catch {
-        # Invalid proof or an unavailable Task resets consecutive liveness.
-        $runningSamples = 0
+        # A failed verifier cannot contribute even one liveness observation.
+      }
+    }
+    if ($liveSample) {
+      $runningSamples++
+      if ($runningSamples -ge 3) {
+        $result = 'completed'
+        break
       }
     } else {
       $runningSamples = 0
