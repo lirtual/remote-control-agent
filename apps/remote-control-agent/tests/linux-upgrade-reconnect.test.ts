@@ -57,6 +57,7 @@ linux("wrong device, target, approval, protocol, pin or unsafe state cannot sign
   for(const variant of [
     "wrong-device","wrong-version","receipt-refused","altered-manifest",
     "foreign-pin","unreviewed-protocol","unsafe-state","unsafe-attempt",
+    "same-version","extra-field",
   ]){
     const f=await fixture();
     try{
@@ -70,6 +71,12 @@ linux("wrong device, target, approval, protocol, pin or unsafe state cannot sign
       if(variant==="foreign-pin")
         await writeFile(f.pending,JSON.stringify({...f.record,
           target_manifest_sha256:"f".repeat(64)}));
+      if(variant==="same-version")
+        await writeFile(f.pending,JSON.stringify({...f.record,
+          current_version:TARGET}));
+      if(variant==="extra-field")
+        await writeFile(f.pending,JSON.stringify({...f.record,
+          unreviewed:true}));
       if(variant==="unreviewed-protocol"){
         const manifest=JSON.parse(await readFile(f.manifest,"utf8"));
         delete manifest.upgrade_protocol;
