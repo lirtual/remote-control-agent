@@ -137,7 +137,7 @@ linuxTest("remote signed reconnect verifier preserves backup until it proves the
    home:f.home,newRoot:f.newRoot,endpoint,
    systemctl:args=>{
     systemCalls.push(args[0]);
-    return args[0]==="show"?"ActiveState=inactive\\nSubState=dead\\nMainPID=0":"";
+    return args[0]==="show"?"ActiveState=inactive\nSubState=dead\nMainPID=0":"";
    },
    verifySignedReconnect:async proof=>{
     verified++;
@@ -166,7 +166,7 @@ linuxTest("missing signed Linux reconnect refuses success and restores original 
   await assert.rejects(upgradeExistingSignedService({
    home:f.home,newRoot:f.newRoot,endpoint,
    systemctl:args=>{
-    if(args[0]==="show")return "ActiveState=inactive\\nSubState=dead\\nMainPID=0";
+    if(args[0]==="show")return "ActiveState=inactive\nSubState=dead\nMainPID=0";
     if(args[0]==="restart")restarts++;
     return "";
    },
