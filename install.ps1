@@ -6,7 +6,8 @@ param(
   [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{40}$')][string]$PinnedCommit,
   [Parameter(Mandatory=$true)][ValidatePattern('^[a-f0-9]{64}$')][string]$PinnedReleaseSha256,
   [string]$OfflineArchive,
-  [string]$ExpectedSha256
+  [string]$ExpectedSha256,
+  [switch]$StageOnly
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -301,7 +302,7 @@ try {
       Write-Output ("Task: {0} (state preserved)" -f $task.State)
       # Console key comes from RawUI, not redirected pipeline stdin.
       # Any key other than Y (including Enter) is a safe cancellation.
-      if (-not (Confirm-Upgrade $Host.UI)) {
+      if (-not $StageOnly -and -not (Confirm-Upgrade $Host.UI)) {
         Write-Output 'Cancelled. No changes.'
         return
       }
@@ -310,12 +311,19 @@ try {
   } elseif ($task) {
     throw 'Existing user-logon task without an approved local identity; refusing new pairing'
   }
+  if ($StageOnly -and -not $upgradeExisting) {
+    throw 'Staging requires an existing paired device with a strictly newer target version'
+  }
   if (Test-Path -LiteralPath $target) {
     Assert-PrivateFolder $target
     $nodeExisting = [IO.Path]::Combine($target,'bin','node.exe')
     $verifyExisting = [IO.Path]::Combine($target,'apps','remote-control-agent','scripts','verify-windows-preview.mjs')
     & $nodeExisting $verifyExisting $target | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Existing program manifest failed verification' }
+    if ($StageOnly) {
+      Write-Output ('Verified staging already exists: ' + $Version)
+      return
+    }
     if ($upgradeExisting) {
       & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
       if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
@@ -358,6 +366,10 @@ try {
   [IO.Directory]::Move($stage, $target)
   $promoted = $true
   Write-Output "Installed: $Version"
+  if ($StageOnly) {
+    Write-Output ('Verified staging complete; running Agent task unchanged: ' + $Version)
+    return
+  }
   if ($upgradeExisting) {
     & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
