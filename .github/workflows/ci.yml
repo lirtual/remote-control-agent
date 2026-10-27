@@ -508,15 +508,15 @@ jobs:
             $wmiLog = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-diagnostic.log'
             $wmiCommand = Join-Path $env:RUNNER_TEMP 'rca-wmi-switch-once.ps1'
             $wmiBody = @"
-`$ErrorActionPreference = 'Stop'
-try {
-  & '$switchScript' -Action Switch -Version '$newVersion' -Direction Upgrade *>&1 |
-    Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
-} catch {
-  (`$_ | Out-String) | Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
-  exit 1
-}
-"@
+            `$ErrorActionPreference = 'Stop'
+            try {
+              & '$switchScript' -Action Switch -Version '$newVersion' -Direction Upgrade *>&1 |
+                Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+            } catch {
+              (`$_ | Out-String) | Out-File -LiteralPath '$wmiLog' -Encoding utf8 -Append
+              exit 1
+            }
+            "@
             [IO.File]::WriteAllText($wmiCommand, $wmiBody)
             $launchLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $wmiCommand + '"'
             $launchAt = Get-Date
