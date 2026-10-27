@@ -13,6 +13,7 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
+import { admitOwnerApprovedUpgrade, type RemoteUpgradeAdmission } from "./remote-upgrade-admission.ts";
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
@@ -54,6 +55,12 @@ export interface AgentExecutionEngine {
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined>;
   getReceipt(id: string): Promise<(Partial<OperationReceipt> & Pick<OperationReceipt,"operation_id" | "state">) | null>;
+  /** Only callable by an authenticated WSS upgrade handler after owner-DO claim.
+   * Validates and records but does NOT yet spawn an updater or switch versions. */
+  admitUpgrade(input: unknown, local: {
+    signedDeviceId: string; originalVersion: string; privateKeyPem: string;
+    confirmedByAuthenticatedWorker: boolean;
+  }): Promise<RemoteUpgradeAdmission>;
   handoffGeneration(): number;
   handoffBlocked(): boolean;
   resetReadSessions(): Promise<void>;
@@ -629,6 +636,23 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
 
   return {
     executeTool,
+    admitUpgrade: async (input, local) => {
+      if (stopped || upgradeFrozen || handoff.isBlocked() ||
+          activeCalls > 0 || inFlight.size > 0 ||
+          (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
+          !sessions.isQuiescentForUpgrade()) return { status: "unavailable" };
+      // Prevent ordinary operations racing the durable receipt admission.
+      // No switch or updater is permitted here: this lock is released as
+      // soon as the admitted record is fsync-committed.
+      upgradeFrozen = true;
+      try {
+        await ensureReceipts();
+        return await admitOwnerApprovedUpgrade(receipts,input,{
+          ...local,platform:process.platform,
+        });
+      } catch { return { status: "unavailable" }; }
+      finally { upgradeFrozen = false; }
+    },
     handoffGeneration: () => handoff.generation(),
     handoffBlocked: () => handoff.isBlocked(),
     resetReadSessions: () => searches.close(),
