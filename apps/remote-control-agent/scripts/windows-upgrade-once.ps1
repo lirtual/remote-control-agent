@@ -122,6 +122,20 @@ try {
     try {
       & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Switch -Direction Rollback -Version $OriginalVersion | Out-Null
       if ($LASTEXITCODE -ne 0) { throw 'Rollback rejected' }
+      # A successful Switch exit is not enough: verify the original Task is
+      # again running under its original executable before recording rollback.
+      $restoredTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+      if ($restoredTask.State -ne 'Running' -or
+          -not [string]::Equals([string]$restoredTask.Actions[0].Execute,
+            $oldAction,[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Original Agent Task was not restored to Running'
+      }
+      $restoredStatusText = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $taskScript -Action Status
+      if ($LASTEXITCODE -ne 0) { throw 'Restored Task identity verification failed' }
+      $restoredStatus = $restoredStatusText | ConvertFrom-Json
+      if ($restoredStatus.installed -ne $true -or $restoredStatus.running -ne $true) {
+        throw 'Restored Task failed native liveness verification'
+      }
       $result = 'rolled_back'
     } catch { $result = 'needs_attention' }
   } else {
