@@ -513,24 +513,23 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Failed switch did not restore old executable'
             }
-            # A formally reviewed, staged release with no owner-one-shot
-            # protocol MUST be rejected before touching the existing Task.
-            # This uses the real packaged watchdog and synthetic fixture.
+            # An unstaged/unreviewed target MUST fail before any Task effect.
+            # This uses the real bundled watchdog against the CI-only Task.
             $nativeWatchdog = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-upgrade-once.ps1'
             $unsupportedTarget = Start-Process -FilePath powershell.exe -ArgumentList @(
               '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
-              $nativeWatchdog,'-OperationId','legacy-target-denial',
-              '-OriginalVersion',$oldVersion,'-TargetVersion',$newVersion
-            ) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'legacy-protocol-refusal.txt')
+              $nativeWatchdog,'-OperationId','unstaged-target-denial',
+              '-OriginalVersion',$oldVersion,'-TargetVersion','v0.0.2-ci'
+            ) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'unstaged-protocol-refusal.txt')
             if ($unsupportedTarget.ExitCode -eq 0) {
-              throw 'Watchdog accepted target with no reviewed owner-one-shot upgrade protocol'
+              throw 'Watchdog accepted a target without an immutable staged Release'
             }
             $noOpTask = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$noOpTask.Actions[0].Execute,
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase) -or
                 (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
                 (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
-              throw 'Legacy target refusal changed Task or protected device identity'
+              throw 'Unstaged target refusal changed Task or protected device identity'
             }
             # The existing CI-only user Task is the process that an updater
             # will need to stop. WMI spawns under the same SID *outside* its
