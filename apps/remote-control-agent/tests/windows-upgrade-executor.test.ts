@@ -54,8 +54,8 @@ test("reviewed WMI watchdog has valid native PowerShell syntax without running T
     "System32","WindowsPowerShell","v1.0","powershell.exe");
   const script="$tokens=$null;$errors=$null;[Management.Automation.Language.Parser]::ParseFile('"+
     source.replaceAll("'","''")+"',[ref]$tokens,[ref]$errors)|Out-Null;"+
-    "if($errors.Count -gt 0){exit 1}";
+    "if($errors.Count -gt 0){$errors|Select-Object -First 3|ForEach-Object {Write-Error $_.Message};exit 1}";
   const result=spawnSync(powershell,["-NoProfile","-NonInteractive","-Command",script],{
     encoding:"utf8",windowsHide:true,timeout:10000,maxBuffer:4096});
-  assert.equal(result.status,0,"Native watchdog must parse without executing any Task command");
+  assert.equal(result.status,0,"Native watchdog must parse without executing any Task command: "+(result.stderr??"").slice(0,800));
 });
