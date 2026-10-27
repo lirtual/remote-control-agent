@@ -384,6 +384,8 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
+    /** Fixed local Linux runtime launcher; absent on Windows packages. */
+    launchLinuxUpgrade?: import("./execution.ts").AgentExecutionOptions["launchLinuxUpgrade"];
     /** Optional, locally created browser. Absent by default; never from remote frames. */
     browser?: BrowserBackend;
     verifyHandoffPrerequisites?: () => import("./protected-tunnel.ts").ProtectedTunnelConfig | void;
@@ -408,6 +410,7 @@ export async function maintainAuthenticatedDeviceSession(
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory, browser: options.browser,
     signedEndpoint:baseAddress,
+    launchLinuxUpgrade:options.launchLinuxUpgrade,
     verifyHandoffPrerequisites: options.verifyHandoffPrerequisites,
     sealHandoffEvidence: options.sealHandoffEvidence,
     handoffDeviceId: () => authenticatedDeviceId,
