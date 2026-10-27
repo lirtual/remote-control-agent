@@ -549,7 +549,12 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined> {
-    if (stopped) return {status:503,body:{status:"failed"}};
+    // Revocation keeps historical session reads available but never admits new effects.
+    if (stopped && ([
+      "write_file","create_directory","edit_block","move_file","delete_file",
+      "start_process","interact_with_process","force_terminate",
+    ].includes(String(body.tool)) || BROWSER_EFFECT_TOOLS.has(String(body.tool))))
+      return {status:200,body:{status:"failed"}};
     if (upgradeFrozen) return {status:503,body:{status:"unavailable"}};
     activeCalls++;
     try {
