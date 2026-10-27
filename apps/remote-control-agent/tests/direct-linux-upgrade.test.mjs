@@ -118,6 +118,12 @@ linuxTest("remote Linux gate refuses an unreviewed target before any unit effect
  try{
   await assert.rejects(upgradeExistingSignedService({
    home:f.home,newRoot:f.newRoot,endpoint,
+   upgradeOperationId:"../wrong-device-op",
+   verifySignedReconnect:async()=>true,
+   systemctl:()=>{throw Error("invalid operation must not reach systemd")}
+  }),/Invalid locally verified one-shot/);
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
    upgradeOperationId:"linux-one-shot-39",
    verifySignedReconnect:async()=>true,
    systemctl:()=>{throw Error("systemd must not execute before reviewed protocol")}
