@@ -6,7 +6,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { acknowledgeAuthenticatedUpgrade } from "../src/windows-upgrade-executor.ts";
+import { acknowledgeAuthenticatedUpgrade, readNativeUpgradeOutcome } from "../src/windows-upgrade-executor.ts";
 
 const VERSION="v0.1.32-rc.1";
 const OPERATION="approved:one-shot-39";
@@ -58,4 +58,37 @@ test("reviewed WMI watchdog has valid native PowerShell syntax without running T
   const result=spawnSync(powershell,["-NoProfile","-NonInteractive","-Command",script],{
     encoding:"utf8",windowsHide:true,timeout:10000,maxBuffer:4096});
   assert.equal(result.status,0,"Native watchdog must parse without executing any Task command: "+(result.stderr??"").slice(0,800));
+});
+
+test("completed native outcome requires new-version WSS proof and exact operation",{
+  skip:process.platform!=="win32",
+},async()=>{
+  await fixture(async dir=>{
+    const outcome=path.win32.join(dir,"upgrade-outcome-"+key+".json");
+    const row={operation_id:OPERATION,original_version:"v0.1.31-rc.1",
+      target_version:VERSION,status:"completed"};
+    await writeFile(outcome,JSON.stringify(row));
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,VERSION),null,
+      "local switch output cannot bypass signed WSS proof");
+    const proof=path.win32.join(dir,"upgrade-auth-"+key+".json");
+    await writeFile(proof,JSON.stringify({operation_id:OPERATION,
+      target_version:VERSION,status:"authenticated_wss"}));
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,"v0.1.31-rc.1"),null);
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,VERSION),"completed");
+    assert.equal(await readNativeUpgradeOutcome(dir,"other:operation",VERSION),null);
+    await writeFile(outcome,JSON.stringify({...row,operation_id:"different"}));
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,VERSION),null,
+      "mismatching durable result cannot complete operation");
+  });
+});
+test("confirmed rollback is not silently treated as upgrade success",{
+  skip:process.platform!=="win32",
+},async()=>{
+  await fixture(async dir=>{
+    await writeFile(path.win32.join(dir,"upgrade-outcome-"+key+".json"),
+      JSON.stringify({operation_id:OPERATION,original_version:"v0.1.31-rc.1",
+        target_version:VERSION,status:"rolled_back"}));
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,VERSION),null);
+    assert.equal(await readNativeUpgradeOutcome(dir,OPERATION,"v0.1.31-rc.1"),"rolled_back");
+  });
 });
