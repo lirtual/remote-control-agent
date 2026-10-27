@@ -121,7 +121,7 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
 export async function readLinuxUpgradeOutcome(
   stateDirectory:string,operationId:string,runningVersion:string,
   signedDeviceId:string,
-):Promise<"completed"|null>{
+):Promise<"completed"|"rolled_back"|null>{
   if(process.platform!=="linux"||process.getuid?.()===0||
      !["x64","arm64"].includes(process.arch)||
      typeof stateDirectory!=="string"||!path.isAbsolute(stateDirectory)||
@@ -139,32 +139,37 @@ export async function readLinuxUpgradeOutcome(
     const outcome=await load("outcome");
     const run=await load("run");
     const claim=await load("exec");
-    const proof=await load("auth");
     if(!exact(outcome,["operation_id","device_id","original_version",
           "target_version","status"])||
        !exact(run,["operation_id","device_id","current_version","target_version",
           "current_manifest_sha256","target_manifest_sha256"])||
-       !exact(claim,["operation_id","device_id","target_version"])||
-       !exact(proof,["operation_id","device_id","target_version","status"]))
+       !exact(claim,["operation_id","device_id","target_version"]))
       return null;
     if(outcome.operation_id!==operationId||
        outcome.device_id!==signedDeviceId||
-       outcome.status!=="completed"||
-       outcome.target_version!==runningVersion||
+       !["completed","rolled_back"].includes(String(outcome.status))||
        outcome.original_version!==run.current_version||
+       outcome.target_version!==run.target_version||
        run.operation_id!==operationId||run.device_id!==signedDeviceId||
-       run.target_version!==runningVersion||
-       typeof run.current_version!=="string"||
-       !VERSION.test(run.current_version)||
-       run.current_version===runningVersion||
+       typeof run.current_version!=="string"||!VERSION.test(run.current_version)||
+       typeof run.target_version!=="string"||!VERSION.test(run.target_version)||
+       run.current_version===run.target_version||
        typeof run.current_manifest_sha256!=="string"||
        !HASH.test(run.current_manifest_sha256)||
        typeof run.target_manifest_sha256!=="string"||
        !HASH.test(run.target_manifest_sha256)||
        claim.operation_id!==operationId||claim.device_id!==signedDeviceId||
-       claim.target_version!==runningVersion||
+       claim.target_version!==run.target_version)return null;
+    if(outcome.status==="rolled_back"){
+      // A verified local service rollback is NOT an upgrade success. The
+      // Worker must independently fence a fresh signed OLD-version WSS epoch.
+      return runningVersion===run.current_version?"rolled_back":null;
+    }
+    if(runningVersion!==run.target_version)return null;
+    const proof=await load("auth");
+    if(!exact(proof,["operation_id","device_id","target_version","status"])||
        proof.operation_id!==operationId||proof.device_id!==signedDeviceId||
-       proof.target_version!==runningVersion||
+       proof.target_version!==run.target_version||
        proof.status!=="authenticated_wss")return null;
     return "completed";
   }catch{return null;}
