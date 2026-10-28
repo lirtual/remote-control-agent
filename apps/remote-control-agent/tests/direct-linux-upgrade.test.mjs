@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {test} from "node:test";
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from "node:fs";
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,readlinkSync,symlinkSync,rmSync} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {inspectInstalledSignedUnit,upgradeExistingSignedService,HISTORICAL_UNIT} from "../scripts/upgrade-existing-service.mjs";
@@ -42,6 +42,8 @@ function fixture({legacy=false,oldEnv=false}={}){
  for(const root of [oldRoot,newRoot]){
   mkdirSync(path.join(root,"bin"),{recursive:true,mode:0o700});
   mkdirSync(path.join(root,"apps/remote-control-agent/src"),{recursive:true,mode:0o700});
+  mkdirSync(path.join(root,"apps/remote-control-agent/scripts"),{recursive:true,mode:0o700});
+  writeFileSync(path.join(root,"apps/remote-control-agent/scripts/rca.sh"),"#!/bin/sh\nexit 0\n",{mode:0o700});
   mkdirSync(path.join(root,"apps/remote-control-agent/.build"),{recursive:true,mode:0o700});
   for(const name of ["bin/node","apps/remote-control-agent/src/v2-main.js","apps/remote-control-agent/.build/session-supervisor"])
    writeFileSync(path.join(root,name),"test",{mode:0o600});
@@ -52,13 +54,19 @@ function fixture({legacy=false,oldEnv=false}={}){
  }
  mkdirSync(dir,{recursive:true,mode:0o700});
  mkdirSync(base,{recursive:true,mode:0o700});
+ const cliDir=path.join(home,".local/bin");
+ mkdirSync(cliDir,{recursive:true,mode:0o700});
+ const cli=path.join(cliDir,"rca");
+ const oldCli=path.join(oldRoot,"apps/remote-control-agent/scripts/rca.sh");
+ const newCli=path.join(newRoot,"apps/remote-control-agent/scripts/rca.sh");
+ symlinkSync(oldCli,cli);
  const unitPath=path.join(dir,HISTORICAL_UNIT);
  const oldUnit=unit(oldRoot,home,endpoint,{legacy,oldEnv});
  writeFileSync(unitPath,oldUnit,{mode:0o600});
  const key=path.join(base,"v2-identity.pem");
  writeFileSync(key,"identity stays",{mode:0o600});
  writeFileSync(key+".device-id",uuid+"\n",{mode:0o600});
- return {home,unitPath,oldRoot,newRoot,oldUnit,key,cleanup:()=>rmSync(home,{recursive:true,force:true})};
+ return {home,unitPath,oldRoot,newRoot,oldUnit,key,cli,oldCli,newCli,cleanup:()=>rmSync(home,{recursive:true,force:true})};
 }
 linuxTest("old signed and direct-upgraded units are exactly recognized without loopback and Tunnel",()=>{
  const f=fixture({legacy:true,oldEnv:true});
@@ -94,6 +102,7 @@ linuxTest("offline direct upgrade preserves identity and receipt-independent ser
   assert.equal(updated,unit(f.newRoot,f.home,endpoint));
   assert.equal(readFileSync(f.key,"utf8"),"identity stays");
   assert.equal(readFileSync(f.key+".device-id","utf8"),uuid+"\n");
+  assert.equal(readlinkSync(f.cli),f.newCli,"the local CLI must follow the active Agent");
   assert.equal(requireBackupAbsent(f.unitPath),true);
  }finally{f.cleanup();}
 });
@@ -111,6 +120,7 @@ linuxTest("active Agent gets same-identity quiescence consent before any restart
    freeze:async(key,action)=>{assert.equal(key,f.key);calls.push("freeze:"+action);return "ready";}
   });
   assert.equal(result.status,"active");
+  assert.equal(readlinkSync(f.cli),f.newCli);
   assert.ok(calls.indexOf("freeze:freeze")<calls.indexOf("system:restart"));
   assert.equal(calls.at(-1),"freeze:release");
  }finally{f.cleanup();}
@@ -302,7 +312,32 @@ linuxTest("failed activation rolls back the exact unit and leaves key unchanged"
   assert.equal(restarts,2);
   assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
   assert.equal(readFileSync(f.key,"utf8"),"identity stays");
+  assert.equal(readlinkSync(f.cli),f.oldCli,"rollback must restore exact old CLI");
   assert.equal(requireBackupAbsent(f.unitPath),true);
+ }finally{f.cleanup();}
+});
+linuxTest("preflight rejects a foreign CLI without changing the signed unit",async()=>{
+ const f=fixture();
+ try {
+  rmSync(f.cli);writeFileSync(f.cli,"foreign",{mode:0o600});
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:()=>{throw Error("systemd should not run");}
+  }),/foreign rca command/);
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(requireBackupAbsent(f.unitPath),true);
+ }finally{f.cleanup();}
+});
+linuxTest("preflight rejects a missing versioned CLI without changing systemd",async()=>{
+ const f=fixture();
+ try {
+  rmSync(f.newCli);
+  await assert.rejects(upgradeExistingSignedService({
+   home:f.home,newRoot:f.newRoot,endpoint,
+   systemctl:()=>{throw Error("systemd should not run");}
+  }),/ENOENT|manager executable/);
+  assert.equal(readFileSync(f.unitPath,"utf8"),f.oldUnit);
+  assert.equal(readlinkSync(f.cli),f.oldCli);
  }finally{f.cleanup();}
 });
 linuxTest("a foreign canonical unit, existing backup or drop-in blocks before changes",async()=>{
