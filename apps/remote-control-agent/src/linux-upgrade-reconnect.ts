@@ -63,7 +63,7 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
     const dir=await lstat(stateDirectory);
     if(!ownerOnly(dir,true))return 0;
     const manifestBytes=await readPrivate(manifestPath);
-    const manifest=JSON.parse(manifestBytes.toString("utf8")) as Record<string,unknown>;
+    const manifest=JSON.parse(manifestBytes.toString()) as Record<string,unknown>;
     if(manifest.name!=="remote-control-agent"||
        manifest.version!==runningVersion||
        manifest.target!=="linux-"+process.arch+"-glibc"||
@@ -77,7 +77,7 @@ export async function acknowledgeAuthenticatedLinuxUpgrade({
     for(const name of candidates){
       try{
         const record=JSON.parse((await readPrivate(path.join(stateDirectory,name)))
-          .toString("utf8")) as Record<string,unknown>;
+          .toString()) as Record<string,unknown>;
         // An extra or missing marker field, including a same-version claim,
         // is never proof of an approved version transition. Keep exactly the
         // durable schema written by the reviewed old-version launcher.
@@ -136,7 +136,7 @@ export async function readLinuxUpgradeOutcome(
     const digest=createHash("sha256").update(operationId,"utf8").digest("hex");
     const load=async(type:string):Promise<unknown> =>
       JSON.parse((await readPrivate(path.join(stateDirectory,
-        "upgrade-"+type+"-"+digest+".json"))).toString("utf8"));
+        "upgrade-"+type+"-"+digest+".json"))).toString());
     const outcome=await load("outcome");
     const run=await load("run");
     const claim=await load("exec");
