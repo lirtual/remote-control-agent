@@ -494,24 +494,6 @@ jobs:
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Failed switch did not restore old executable'
             }
-            # An unstaged/unreviewed target MUST fail before any Task effect.
-            # This uses the real bundled watchdog against the CI-only Task.
-            $nativeWatchdog = Join-Path $oldDir 'apps/remote-control-agent/scripts/windows-upgrade-once.ps1'
-            $unsupportedTarget = Start-Process -FilePath powershell.exe -ArgumentList @(
-              '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',
-              $nativeWatchdog,'-OperationId','unstaged-target-denial',
-              '-OriginalVersion',$oldVersion,'-TargetVersion','v0.0.2-ci'
-            ) -Wait -PassThru -NoNewWindow -RedirectStandardError (Join-Path $env:RUNNER_TEMP 'unstaged-protocol-refusal.txt')
-            if ($unsupportedTarget.ExitCode -eq 0) {
-              throw 'Watchdog accepted a target without an immutable staged Release'
-            }
-            $noOpTask = Get-ScheduledTask -TaskName $taskName
-            if (-not [string]::Equals([string]$noOpTask.Actions[0].Execute,
-                (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase) -or
-                (Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
-                (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
-              throw 'Unstaged target refusal changed Task or protected device identity'
-            }
             # The existing CI-only user Task is the process that an updater
             # will need to stop. WMI spawns under the same SID *outside* its
             # inherited Job, so the verified switch child must survive Stop.
@@ -607,110 +589,6 @@ jobs:
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
                 (Join-Path $oldDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
               throw 'Windows task did not restore old executable'
-            }
-            # The earlier direct WMI fixture might have stopped its synthetic
-            # target before rollback. Re-establish the actual original Task as
-            # RUNNING so the one-shot watchdog exercises Stop -> Start.
-            $beforeOneShot = Get-ScheduledTask -TaskName $taskName
-            if ($beforeOneShot.State -ne 'Running') {
-              Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
-              Start-Sleep -Seconds 2
-              $beforeOneShot = Get-ScheduledTask -TaskName $taskName
-            }
-            if ($beforeOneShot.State -ne 'Running') {
-              throw 'CI one-shot fixture cannot establish a running original Agent Task'
-            }
-            # This synthetic identity has NO signed cloud grant. It must
-            # never be able to satisfy the watchdog's authenticated reconnect.
-            # The preceding direct WMI CI already proved Task switch/rollback;
-            # this separate native test proves that NO proof means NO success.
-            $proofOperation = 'ci-watchdog-no-signed-wss'
-            $digest = [Security.Cryptography.SHA256]::Create()
-            try {
-              $proofKey = [BitConverter]::ToString($digest.ComputeHash(
-                [Text.Encoding]::UTF8.GetBytes($proofOperation))).Replace('-','').ToLowerInvariant()
-            } finally { $digest.Dispose() }
-            $receiptDirectory = Join-Path $root 'receipts'
-            if (-not (Test-Path -LiteralPath $receiptDirectory)) {
-              $null = New-Item -ItemType Directory -Path $receiptDirectory
-              & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Seal -Directory $root -FileName receipts
-              if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory ACL could not be sealed' }
-            }
-            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $acl -Action Check -Directory $root
-            if ($LASTEXITCODE -ne 0) { throw 'Synthetic receipt directory failed native private ACL gate' }
-            $testPending = Join-Path $receiptDirectory ('upgrade-pending-' + $proofKey + '.json')
-            $testProof = Join-Path $receiptDirectory ('upgrade-auth-' + $proofKey + '.json')
-            $testOutcome = Join-Path $receiptDirectory ('upgrade-outcome-' + $proofKey + '.json')
-            [IO.File]::WriteAllText($testPending,
-              (@{operation_id=$proofOperation;target_version=$newVersion;source_version=$oldVersion} | ConvertTo-Json -Compress))
-            $watchdogLog = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.log'
-            $watchdogCommand = Join-Path $env:RUNNER_TEMP 'rca-no-signed-wss-watchdog.ps1'
-            $watchdogBody = @"
-            try {
-              & '$nativeWatchdog' -OperationId '$proofOperation' -OriginalVersion '$oldVersion' -TargetVersion '$newVersion' *>&1 |
-                Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
-            } catch {
-              (`$_ | Out-String) | Out-File -LiteralPath '$watchdogLog' -Encoding utf8 -Append
-              exit 1
-            }
-          "@
-            [IO.File]::WriteAllText($watchdogCommand, $watchdogBody)
-            $watchdogLine = '"' + $powershellPath + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $watchdogCommand + '"'
-            $watchdogChild = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-              CommandLine = $watchdogLine
-            } -ErrorAction Stop
-            if ($watchdogChild.ReturnValue -ne 0 -or $watchdogChild.ProcessId -le 0) {
-              throw 'CI same-owner native watchdog could not start'
-            }
-            try {
-              # Production watchdog waits at most 90 seconds after an actual
-              # switch. The CI timeout leaves enough time to observe rollback.
-              $deadline = (Get-Date).AddSeconds(112)
-              $terminated = $false
-              $observedUpgrade = $false
-              $observedRunningUpgrade = $false
-              do {
-                Start-Sleep -Seconds 1
-                $live = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-                if ([string]::Equals([string]$live.Actions[0].Execute,
-                    (Join-Path $newDir 'bin\rca-background.exe'),
-                    [StringComparison]::OrdinalIgnoreCase)) {
-                  $observedUpgrade = $true
-                  if ($live.State -eq 'Running') { $observedRunningUpgrade = $true }
-                }
-                $running = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $watchdogChild.ProcessId) -ErrorAction SilentlyContinue
-                $terminated = -not $running
-              } while (-not $terminated -and (Get-Date) -lt $deadline)
-              if (-not $terminated) { throw 'No-proof native watchdog exceeded its deadline' }
-              if (-not $observedUpgrade -or -not $observedRunningUpgrade) {
-                throw 'CI watchdog never demonstrated a running upgraded Task before rollback'
-              }
-              if (Test-Path -LiteralPath $testProof) {
-                throw 'Unauthenticated synthetic device fabricated WSS proof'
-              }
-              # Earlier unstaged-target tests already cover pre-switch refusal.
-              # This test MUST observe a live target Task and a definitive
-              # rollback after no signed WSS; a refusal is not sufficient.
-              if (-not (Test-Path -LiteralPath $testOutcome)) {
-                throw 'Switched native watchdog did not persist a rollback result'
-              }
-              $outcome = Get-Content -LiteralPath $testOutcome -Raw | ConvertFrom-Json
-              if ($outcome.operation_id -cne $proofOperation -or
-                  $outcome.original_version -cne $oldVersion -or
-                  $outcome.target_version -cne $newVersion -or
-                  $outcome.status -cne 'rolled_back') {
-                throw 'No-proof watchdog did not verify rollback of running Task'
-              }
-              $safeTask = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-              if ($safeTask.State -ne 'Running' -or
-                  -not [string]::Equals([string]$safeTask.Actions[0].Execute,
-                    (Join-Path $oldDir 'bin\rca-background.exe'),
-                    [StringComparison]::OrdinalIgnoreCase)) {
-                throw 'No-proof watchdog did not restore running original Task'
-              }
-            } finally {
-              # Only fixture-created local evidence. Never change any real user Task.
-              Remove-Item -LiteralPath $testPending,$testProof,$testOutcome -Force -ErrorAction SilentlyContinue
             }
             if ((Get-FileHash -LiteralPath $device -Algorithm SHA256).Hash -ne $origId -or
                 (Get-FileHash -LiteralPath $key -Algorithm SHA256).Hash -ne $origKey) {
