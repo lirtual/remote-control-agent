@@ -4,8 +4,6 @@
  * transport with an explicit capability grant may invoke executeTool().
  * T02 intentionally does not connect this engine to unauthenticated v2 WSS.
  */
-import { createManagedHandoff, type ProtectedTunnelConfig } from "./protected-tunnel.ts";
-import { BrowserHandoff, HANDOFF_TOOLS, parseHandoffArguments } from "./browser-handoff.ts";
 import { appendFile, link, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
@@ -30,12 +28,8 @@ import {
 
 export interface AgentExecutionOptions {
   log?: (event: string) => void;
-  /** Native deployment validation, never selected through MCP. */
-  verifyHandoffPrerequisites?: () => ProtectedTunnelConfig | void;
-  /** Bound only after signed device authentication. */
-  handoffDeviceId?: () => string | undefined;
-  /** Windows-only private receipt ACL sealing; never controlled by MCP. */
-  sealHandoffEvidence?: (kind: "directory" | "pending") => void;
+  /** Verified signed WSS identity, retained for independent upgrade receipt reconciliation. */
+  authenticatedDeviceId?: () => string | undefined;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
   /** Configured outbound authenticated Worker origin; never an MCP argument. */
@@ -49,8 +43,6 @@ export interface AgentExecutionOptions {
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
-  /** Test-only managed Tunnel factory; production always uses createManagedHandoff. */
-  handoffFactory?: typeof createManagedHandoff;
   /** Local-only test seam: production uses the 60-minute deadline. */
   sessionMaxLifetimeMs?: number;
   /** Local-only storage error probe, never routed through MCP. */
@@ -67,15 +59,13 @@ export interface AgentExecutionEngine {
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined>;
-  getReceipt(id: string): Promise<(Partial<OperationReceipt> & Pick<OperationReceipt,"operation_id" | "state">) | null>;
+  getReceipt(id: string): Promise<OperationReceipt | null>;
   /** Only callable by an authenticated WSS upgrade handler after owner-DO claim.
    * Validates and records but does NOT yet spawn an updater or switch versions. */
   admitUpgrade(input: unknown, local: {
     signedDeviceId: string; originalVersion: string; privateKeyPem: string;
     confirmedByAuthenticatedWorker: boolean;
   }): Promise<RemoteUpgradeAdmission>;
-  handoffGeneration(): number;
-  handoffBlocked(): boolean;
   resetReadSessions(): Promise<void>;
   stopOwnedForRevocation(): Promise<"confirmed" | "uncertain">;
   freezeForUpgrade(): boolean;
@@ -110,12 +100,9 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
-  const handoff = new BrowserHandoff(receipts.directory, options.sealHandoffEvidence);
   let activeCalls = 0;
   let upgradeFrozen = false;
   let stopped = false;
-  // Detached preparation must join shutdown before SQLite receipts are closed.
-  let handoffPreparation: Promise<void> | undefined;
   const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
@@ -562,96 +549,20 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     body: { tool?: unknown; arguments?: unknown; operation_id?: unknown },
     signal: AbortSignal,
   ): Promise<AgentExecutionReply | undefined> {
-    if ((HANDOFF_TOOLS as readonly unknown[]).includes(body.tool)) {
-      if (!parseHandoffArguments(String(body.tool),body.arguments)) return {status:400,body:{status:"bad_request"}};
-      if (body.tool === "browser_handoff_status") return {status:200,body:handoff.status()};
-      if (body.tool === "browser_handoff_return") {
-        return {status:200,body:await handoff.explicitReturn(async () => {
-          if (activeCalls || browser?.hasPending() || inFlight.size) throw Error("Effects still pending.");
-          // Once the human controller has been revoked and all input has settled,
-          // explicit owner return may reconcile an uncertain human input without
-          // replaying it. Invalidation forces a new tab list and fresh snapshot.
-          if (options.browser?.status() && !options.browser.invalidateHandoffReferences) throw Error("Reference invalidation unavailable.");
-          await options.browser?.invalidateHandoffReferences?.();
-          await searches.close();
-        })};
-      }
-      if (stopped || upgradeFrozen) return {status:503,body:{status:"unavailable"}};
-      if (!options.browser && !handoff.isBlocked()) return {status:503,body:{status:"unavailable"}};
-      const sessionId = (body.arguments as {session_id:string}).session_id;
-      // Same authorized owner/session may claim an already prepared URL only once.
-      // A claim never spawns another Tunnel and consumes the in-memory link
-      // synchronously before the WSS response is sent.
-      if (!handoff.begin(sessionId)) {
-        const link=handoff.claim(sessionId);
-        return {status:200,body:{...handoff.status(),...(link ?? {})}};
-      }
-      const handoffGeneration = handoff.generation();
-      // First call must return immediately: ChatGPT/MCP ingress may time out
-      // before the bounded 90s Cloudflare challenge finishes. The device-wide
-      // barrier and durable marker were written synchronously by begin().
-      const preparation=(async () => {
-        try {
-          // Block first, then allow previously admitted work to settle. Never
-          // replay an external browser effect after a transport timeout.
-          const drainDeadline=Date.now()+10_000;
-          while (!stopped && !handoff.preparationCancelled() && (activeCalls || browser?.hasPending() || inFlight.size) && Date.now()<drainDeadline)
-            await new Promise(resolve=>setTimeout(resolve,20));
-          if (stopped || handoff.preparationCancelled()) throw Error("handoff_cancelled");
-          const current=options.browser?.status();
-          if (activeCalls || browser?.hasPending() || inFlight.size || current?.uncertain) {
-            handoff.failed("in_flight_effect_unknown"); return;
-          }
-          if (!current || current.session_id!==sessionId) {
-            handoff.failed("browser_session_unavailable"); return;
-          }
-          await ensureReceipts();
-          if (stopped || handoff.preparationCancelled()) throw Error("handoff_cancelled");
-          if (receipts.hasUnresolvedBrowserOperations(sessionId)) {
-            handoff.failed("browser_receipt_unknown"); return;
-          }
-          const config=options.verifyHandoffPrerequisites?.();
-          const deviceId=options.handoffDeviceId?.();
-          if (!config || !deviceId || !options.browser || stopped || handoff.preparationCancelled()) throw Error("handoff_prerequisites_unverified");
-          const access=(options.handoffFactory ?? createManagedHandoff)({
-            directory:receipts.directory,config,browser:options.browser,deviceId,sessionId,
-            connected:()=>handoff.connected(),
-            diagnostic:code=>handoff.reportControllerDiagnostic(code,handoffGeneration),
-            explicitReturn:async()=>executeTool({tool:"browser_handoff_return",arguments:{}},new AbortController().signal),
-          });
-          handoff.attach(access);
-          const ready=await access.start();
-          if (stopped || handoff.preparationCancelled()) { await handoff.stopAccess(); throw Error("handoff_cancelled"); }
-          handoff.ready(access,ready.expiresAt,{sessionId,url:ready.url});
-        } catch {
-          const cleanup=await handoff.stopAccess();
-          handoff.failed(cleanup==="confirmed" ? "protected_tunnel_readiness_unverified" : "cleanup_unknown");
-        }
-      })().catch(()=>handoff.failed("cleanup_unknown"));
-      handoffPreparation=preparation;
-      void preparation.then(()=>{ if (handoffPreparation===preparation) handoffPreparation=undefined; });
-      return {status:200,body:handoff.status()};
-    }
-    if (stopped) return {status:503,body:{status:"failed"}};
-    if (handoff.isBlocked()) return {status:423,body:{status:"handoff_blocked"}};
-    const generation = handoff.generation();
+    // Revocation is a synchronous, engine-wide admission tombstone.
+    // Deny every new read and effect before any await or tool dispatch.
+    if (stopped) return {status:200,body:{status:"failed"}};
     if (upgradeFrozen) return {status:503,body:{status:"unavailable"}};
     activeCalls++;
     try {
-      const result = await executeToolCore(body, signal);
-      // A call admitted before handoff can never return its old sensitive payload,
-      // even if explicit return completed while the result was being computed.
-      return generation !== handoff.generation() || handoff.isBlocked()
-        ? {status:423,body:{status:"handoff_blocked",
-          ...(typeof body.operation_id === "string" ? {operation_id:body.operation_id} : {})}}
-        : result;
+      return await executeToolCore(body, signal);
     } finally { activeCalls--; }
   }
 
   return {
     executeTool,
     admitUpgrade: async (input, local) => {
-      if (stopped || upgradeFrozen || handoff.isBlocked() ||
+      if (stopped || upgradeFrozen ||
           activeCalls > 0 || inFlight.size > 0 ||
           (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
           !sessions.isQuiescentForUpgrade()) return { status: "unavailable" };
@@ -721,11 +632,9 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         return { status: "unavailable" };
       }
     },
-    handoffGeneration: () => handoff.generation(),
-    handoffBlocked: () => handoff.isBlocked(),
     resetReadSessions: () => searches.close(),
     freezeForUpgrade: () => {
-      if (upgradeFrozen || handoff.isBlocked()) return false;
+      if (upgradeFrozen) return false;
       // Setting this first excludes any new admission in the same JS event loop.
       upgradeFrozen = true;
       if (activeCalls > 0 || inFlight.size > 0 ||
@@ -736,19 +645,17 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       }
       return true;
     },
-    verifyUpgradeFreeze: () => upgradeFrozen && !stopped && !handoff.isBlocked() &&
+    verifyUpgradeFreeze: () => upgradeFrozen && !stopped &&
       activeCalls === 0 && inFlight.size === 0 &&
       !(browser?.hasPending() ?? false) && !Boolean(options.browser?.status()) &&
       sessions.isQuiescentForUpgrade(),
     releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
-      const generation = handoff.generation();
       await ensureReceipts();
       let receipt = await receipts.get(id);
       if (receipt?.tool_name === "upgrade_agent" &&
           ["admitted","running","unknown"].includes(receipt.state) &&
-          options.receiptDirectory && process.platform === "win32" &&
-          !handoff.isBlocked() && generation === handoff.generation()) {
+          options.receiptDirectory && process.platform === "win32") {
         const observed = await readNativeUpgradeOutcome(
           options.receiptDirectory,id,collectDeviceInfo().agent_version);
         if (observed === "completed") {
@@ -765,9 +672,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       // can report completion to the epoch-fenced Worker owner ledger.
       if (receipt?.tool_name === "upgrade_agent" &&
           ["admitted","running","unknown"].includes(receipt.state) &&
-          process.platform === "linux" && !handoff.isBlocked() &&
-          generation === handoff.generation()) {
-        const identity = options.handoffDeviceId?.();
+          process.platform === "linux") {
+        const identity = options.authenticatedDeviceId?.();
         const info = collectDeviceInfo();
         if (identity && info.upgrade_protocol === "owner-one-shot-v1" &&
             info.agent_version) {
@@ -784,16 +690,13 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           }
         }
       }
-      return receipt && (handoff.isBlocked() || generation !== handoff.generation())
-        ? {operation_id:receipt.operation_id,state:receipt.state} : receipt;
+      return receipt;
     },
     stopOwnedForRevocation: async () => {
       stopped = true;
       // Operations already admitted before the tombstone may still be
       // starting a supervised process: never overclaim complete cleanup.
-      const accessOutcome = await handoff.stopAccess();
-      await handoffPreparation;
-      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false) || accessOutcome !== "confirmed";
+      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false);
       let browserOutcome: "confirmed" | "uncertain" = "confirmed";
       const active = options.browser?.status();
       if (options.browser?.stopOwnedForRevocation) {
@@ -808,8 +711,6 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     },
     close: async () => {
       stopped = true;
-      await handoff.stopAccess();
-      await handoffPreparation;
       await searches.close();
       // Agent shutdown must not leave an owned Chromium behind merely because
       // a page navigation holds the ordinary browser operation mutex.

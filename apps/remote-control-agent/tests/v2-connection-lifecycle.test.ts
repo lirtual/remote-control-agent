@@ -621,6 +621,78 @@ test("disconnect aborts in-flight read-only work without aborting the long-lived
   assert.equal(session.signal.aborted, false, "reconnect controller must remain reusable");
 });
 
+test("revocation cancels queued read and effect dispatch before local admission", async () => {
+  const socket = new FakeSocket();
+  const requestId = randomUUID();
+  let calls = 0;
+  const monitored = monitorDeviceSocket(socket as unknown as WebSocket,
+    new AbortController().signal, { intervalMs: 60_000, timeoutMs: 10_000 },
+    async () => { calls++; return "MUST_NOT_READ"; },
+    async () => { calls++; return { status: "completed" }; },
+    true, async () => "confirmed");
+  // Deliver both frames in one event loop turn so neither callback has started.
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: randomUUID(), tool: "read_file",
+    arguments: { path: path.join(os.tmpdir(), "revocation-queued-read") },
+  }) });
+  socket.event("message", { data: JSON.stringify({
+    kind: "operation", request_id: randomUUID(), tool: "write_file",
+    operation_id: "revoked-" + randomUUID(),
+    arguments: { path: path.join(os.tmpdir(), "revocation-queued-write"),
+      content: "MUST_NOT_WRITE", mode: "rewrite" },
+  }) });
+  socket.event("message", { data: JSON.stringify({
+    kind: "revoke_cleanup", request_id: requestId,
+  }) });
+  assert.equal(await monitored, "policy");
+  assert.equal(calls, 0, "queued callbacks must not run after the revoke frame");
+  assert.deepEqual(socket.sent.map(wire => JSON.parse(wire)), [{
+    kind: "revoke_cleanup_result", request_id: requestId, status: "confirmed",
+  }]);
+});
+
+test("revocation suppresses a pending read reply while owned cleanup is still in progress", async () => {
+  const socket = new FakeSocket();
+  const session = new AbortController();
+  const requestId = randomUUID();
+  const revocationId = randomUUID();
+  let readStarted!: () => void;
+  const readAdmitted = new Promise<void>(resolve => { readStarted = resolve; });
+  let finishRead!: (value: string) => void;
+  const pendingRead = new Promise<string>(resolve => { finishRead = resolve; });
+  let finishCleanup!: () => void;
+  const cleanupBlocked = new Promise<void>(resolve => { finishCleanup = resolve; });
+  let readSignal: AbortSignal | undefined;
+  const monitored = monitorDeviceSocket(socket as unknown as WebSocket, session.signal,
+    { intervalMs: 60_000, timeoutMs: 10_000 },
+    async (_tool, _args, signal) => {
+      readSignal = signal;
+      readStarted();
+      return pendingRead;
+    }, undefined, true,
+    async () => { await cleanupBlocked; return "confirmed"; });
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: requestId, tool: "read_file",
+    arguments: { path: path.join(os.tmpdir(), "revocation-read-test") },
+  }) });
+  await readAdmitted;
+  assert.equal(readSignal?.aborted, false);
+  socket.event("message", { data: JSON.stringify({
+    kind: "revoke_cleanup", request_id: revocationId,
+  }) });
+  assert.equal(readSignal?.aborted, true, "revocation cancels socket-owned reads immediately");
+  // A previously accepted read may finish before revocation cleanup
+  // closes the socket; its contents must still never leave the device.
+  finishRead("MUST_NOT_LEAK_AFTER_REVOCATION");
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(socket.sent.length, 0, "no late read response, even before cleanup ACK");
+  finishCleanup();
+  assert.equal(await monitored, "policy");
+  assert.deepEqual(socket.sent.map(wire => JSON.parse(wire)), [{
+    kind: "revoke_cleanup_result", request_id: revocationId, status: "confirmed",
+  }]);
+});
+
 test("a signed-socket revocation closes policy after bounded owned-session cleanup ACK", async () => {
   const socket = new FakeSocket();
   const controller = new AbortController();

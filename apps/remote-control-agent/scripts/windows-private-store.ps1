@@ -4,7 +4,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
   [Parameter(Mandatory=$true)][string]$Directory,
-  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','browser-handoff-config.json','browser-handoff-child.json','browser-handoff-tunnel.yml','browser-handoff-pending.json','receipts','receipts\browser-handoff-child.json','receipts\browser-handoff-tunnel.yml','receipts\browser-handoff-pending.json')][string]$FileName
+  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','receipts')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -121,7 +121,7 @@ if ($Action -eq 'Seal') {
   Assert-PrivateAcl $file $false
   return
 }
-foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.device-id.pending', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending','browser-handoff-config.json','browser-handoff-child.json','browser-handoff-tunnel.yml','browser-handoff-pending.json')) {
+foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.device-id.pending', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending')) {
   $file = [IO.Path]::Combine($expected, $name)
   if ([IO.File]::Exists($file) -or [IO.Directory]::Exists($file)) {
     Assert-PrivateAcl $file $false
@@ -133,8 +133,4 @@ $receipts = [IO.Path]::Combine($expected, 'receipts')
 if ([IO.Directory]::Exists($receipts) -or [IO.File]::Exists($receipts)) {
   # Inheritance from the already-checked private root is allowed; all grants still checked.
   Assert-PrivateAcl $receipts $true $false
-  foreach ($name in @('browser-handoff-child.json','browser-handoff-pending.json','browser-handoff-tunnel.yml')) {
-    $file = [IO.Path]::Combine($receipts,$name)
-    if ([IO.File]::Exists($file) -or [IO.Directory]::Exists($file)) { Assert-PrivateAcl $file $false }
-  }
 }

@@ -213,8 +213,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         });
         return;
       }
-      const receiptGeneration = execution.handoffGeneration();
-      let receipt: Partial<OperationReceipt> | null;
+      let receipt: OperationReceipt | null;
       try {
         receipt = await execution.getReceipt(id);
       } catch {
@@ -227,8 +226,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         return;
       }
       emit(log, "status");
-      sendJson(response, 200, execution.handoffBlocked() || receiptGeneration !== execution.handoffGeneration()
-        ? {operation_id:receipt.operation_id,state:receipt.state} : receipt);
+      sendJson(response, 200, receipt);
       return;
     }
 
@@ -264,16 +262,10 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
         return;
       }
 
-      const generation = execution.handoffGeneration();
       const result = await execution.executeTool(
         parsed as { tool?: unknown; arguments?: unknown; operation_id?: unknown }, requestAbort.signal,
       );
       if (!result || requestAbort.signal.aborted) return;
-      const tool = (parsed as {tool?:unknown}).tool;
-      if (!["browser_handoff_request","browser_handoff_status","browser_handoff_return"].includes(String(tool)) &&
-          (execution.handoffBlocked() || generation !== execution.handoffGeneration())) {
-        sendJson(response,423,{status:"handoff_blocked"}); return;
-      }
       sendJson(response, result.status, result.body);
       return;
     }

@@ -214,7 +214,7 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   // The default paired profile is full; explicit read-only callers may still be denied.
   assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
   assert.match(lifecycle, /full && execution/);
-  assert.match(await readFile(path.join(testDir, "..", "src", "execution.ts"), "utf8"), /const searches = new SearchSessions\(/);
+  assert.match(lifecycle, /await execution\.resetReadSessions\(\)/);
   assert.match(lifecycle, /executeV2FileOperation\(execution,/);
   assert.match(lifecycle, /executeV2SessionRead\(execution,/);
   assert.ok(!entry.includes("REMOTE_CONTROL_DEVICE_TOKEN"));

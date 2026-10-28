@@ -1,5 +1,7 @@
 # Browser P1: direct Playwright inside existing Remote Control Agent
 
+> **Cancelled — Spec #280 (2026-10-28):** The Browser Handoff / Quick Tunnel OTP mobile-takeover proposal and historical H1–H24 decisions below are withdrawn and **must not be treated as accepted implementation requirements**. Their original discussion remains only as an audit trail. Do not recreate a human/Agent handoff state machine, dedicated tunnel, OTP controller or handoff MCP tools based on this document. The existing independent Remote Control browser automation and owner-approved Agent upgrade protocol (#39) remain in scope.
+
 ## Owner-accepted browser handoff and system-default selection — new Grill With Docs round 1 (2026-10-21)
 
 Design-only amendment H1–H4, from the new interview's **Q1=A, Q2=A, Q3=A, Q4=B** (do not confuse with the previous browser project's Q1–Q52). Primary design record: [mcp-workers browser architecture PR #117](https://github.com/lirtual/mcp-workers/blob/docs/browser-automation-grilling-20261020/docs/remote-control/BROWSER-ARCHITECTURE-REVIEW-20261020.md#windows-browser-handoff-and-default-selection--new-grill-with-docs-round-1-2026-10-21).
