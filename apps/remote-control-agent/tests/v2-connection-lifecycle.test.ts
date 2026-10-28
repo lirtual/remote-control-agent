@@ -621,6 +621,36 @@ test("disconnect aborts in-flight read-only work without aborting the long-lived
   assert.equal(session.signal.aborted, false, "reconnect controller must remain reusable");
 });
 
+test("revocation cancels queued read and effect dispatch before local admission", async () => {
+  const socket = new FakeSocket();
+  const requestId = randomUUID();
+  let calls = 0;
+  const monitored = monitorDeviceSocket(socket as unknown as WebSocket,
+    new AbortController().signal, { intervalMs: 60_000, timeoutMs: 10_000 },
+    async () => { calls++; return "MUST_NOT_READ"; },
+    async () => { calls++; return { status: "completed" }; },
+    true, async () => "confirmed");
+  // Deliver both frames in one event loop turn so neither callback has started.
+  socket.event("message", { data: JSON.stringify({
+    kind: "read", request_id: randomUUID(), tool: "read_file",
+    arguments: { path: path.join(os.tmpdir(), "revocation-queued-read") },
+  }) });
+  socket.event("message", { data: JSON.stringify({
+    kind: "operation", request_id: randomUUID(), tool: "write_file",
+    operation_id: "revoked-" + randomUUID(),
+    arguments: { path: path.join(os.tmpdir(), "revocation-queued-write"),
+      content: "MUST_NOT_WRITE", mode: "rewrite" },
+  }) });
+  socket.event("message", { data: JSON.stringify({
+    kind: "revoke_cleanup", request_id: requestId,
+  }) });
+  assert.equal(await monitored, "policy");
+  assert.equal(calls, 0, "queued callbacks must not run after the revoke frame");
+  assert.deepEqual(socket.sent.map(wire => JSON.parse(wire)), [{
+    kind: "revoke_cleanup_result", request_id: requestId, status: "confirmed",
+  }]);
+});
+
 test("revocation suppresses a pending read reply while owned cleanup is still in progress", async () => {
   const socket = new FakeSocket();
   const session = new AbortController();

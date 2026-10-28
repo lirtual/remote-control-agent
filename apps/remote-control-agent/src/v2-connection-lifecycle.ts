@@ -229,7 +229,8 @@ export function monitorDeviceSocket(
             return;
           }
           readsInFlight++;
-          void Promise.resolve().then(() => readOnly(tool, request.arguments, socketWork.signal))
+          void Promise.resolve().then(() => socketWork.signal.aborted
+              ? null : readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
               if (settled || socketWork.signal.aborted || socket.readyState !== WebSocket.OPEN) return;
               const valid = typeof text === "string" && text.length <= 65_536;
@@ -307,7 +308,8 @@ export function monitorDeviceSocket(
           const requestId = request.request_id;
           const operationId = request.operation_id;
           const tool = request.tool as V2FileOperation;
-          void Promise.resolve().then(() => operation(tool, request.arguments, operationId, socketWork.signal))
+          void Promise.resolve().then(() => socketWork.signal.aborted
+              ? null : operation(tool, request.arguments, operationId, socketWork.signal))
             .then(result => {
               if (settled || socketWork.signal.aborted || socket.readyState !== WebSocket.OPEN) return;
               const wire = JSON.stringify({ kind: "operation_result", request_id: requestId,
