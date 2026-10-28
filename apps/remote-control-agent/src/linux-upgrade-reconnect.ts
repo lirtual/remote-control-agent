@@ -6,6 +6,7 @@
  * No Linux bundle advertises owner-one-shot-v1 yet. This routine is inert
  * until a separately reviewed immutable Release supports the full protocol.
  */
+import type {Buffer} from "node:buffer";
 import {createHash} from "node:crypto";
 import {constants} from "node:fs";
 import {lstat,open,readdir,readFile} from "node:fs/promises";
