@@ -36,8 +36,8 @@ test('only the main-only unified workflow can publish Releases', () => {
   for (const target of ['linux-x64-glibc', 'linux-arm64-glibc', 'windows-x64']) {
     assert.ok(workflow.includes(`remote-control-agent-$RELEASE_TAG-${target}`));
   }
-  // Both immutable artifacts must advertise owner-one-shot-v1 before Release promotion.
-  assert.equal((workflow.match(/\.upgrade_protocol == "owner-one-shot-v1"/g) ?? []).length, 2);
+  // New immutable Releases must not advertise the retired remote-upgrade protocol.
+  assert.equal((workflow.match(/\.upgrade_protocol == null/g) ?? []).length, 2);
   assert.equal((workflow.match(/\.upgrade_profile == "paired-full-v1"/g) ?? []).length, 2);
   assert.match(workflow, /unzip -p "\$archive" bundle\.json \| jq -e/);
   assert.match(workflow, /tar -xzOf "\$archive" bundle\.json \| jq -e/);

@@ -55,7 +55,6 @@ export function inspectWindowsPreview(root) {
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-stage-install.ps1") ||
-      !expected.has("apps/remote-control-agent/scripts/windows-upgrade-once.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
       expected.size < 9 || expected.size > 43 ||
       expected.get("bin/node.exe") !==

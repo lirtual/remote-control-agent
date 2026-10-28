@@ -112,7 +112,7 @@ export function buildWindowsPreview(args) {
   const installerBytes = readFileSync(path.join(root, "..", "..", "install.ps1"));
   writeFileSync(path.join(stage, stageInstaller), installerBytes, { mode: 0o600 });
   hashes[stageInstaller] = digest(installerBytes);
-  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "windows-upgrade-once.ps1", "verify-windows-preview.mjs"];
+  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "verify-windows-preview.mjs"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
     const bytes = readFileSync(path.join(root, "scripts", name));
@@ -160,7 +160,7 @@ export function buildWindowsPreview(args) {
   writeFileSync(path.join(stage, "bundle.json"), JSON.stringify({
     name: "remote-control-agent", version: args.version, target: "windows-x64",
     node: EXPECTED_NODE_VERSION, device_protocol: 2, artifact_schema: 1,
-    upgrade_profile: "paired-full-v1", upgrade_protocol: "owner-one-shot-v1",
+    upgrade_profile: "paired-full-v1",
     preview: true, modules, hashes,
     ...(browserRuntime ? {browser_runtime:browserRuntime} : {}),
   }, null, 2) + "\n", { mode: 0o600 });
