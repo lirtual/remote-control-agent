@@ -1173,7 +1173,7 @@ export async function preflightManagerLauncher(home, program) {
 /** Publish only our own user-local launcher. Never overwrite foreign commands.
  * Called after successful service activation, not at download or pairing time.
  */
-export async function installManagerLauncher(home, program) {
+export async function installManagerLauncher(home, program, {updateShellProfile=true}={}) {
   await preflightManagerLauncher(home, program);
   const parent = path.join(home, ".local");
   const bin = path.join(parent, "bin");
@@ -1216,6 +1216,8 @@ export async function installManagerLauncher(home, program) {
   await symlink(target, temporary);
   try { await rename(temporary, launcher); }
   finally { await rm(temporary, {force:true}); }
+  // A historical systemd upgrade must never mutate Bash profile state.
+  if(updateShellProfile){
   // User-local Bash convenience only. No modification of unknown/symlinked rc files.
   const rc=path.join(home, ".bashrc");
   try {
@@ -1232,6 +1234,7 @@ export async function installManagerLauncher(home, program) {
     }
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
+  }
   }
   return launcher;
 }

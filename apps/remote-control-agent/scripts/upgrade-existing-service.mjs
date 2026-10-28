@@ -5,12 +5,12 @@
  */
 import {spawnSync} from "node:child_process";
 import {constants} from "node:fs";
-import {lstat,readFile,open,rename,rm} from "node:fs/promises";
+import {lstat,readFile,readlink,open,rename,rm,symlink} from "node:fs/promises";
 import {createHash} from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 import {fileURLToPath} from "node:url";
-import {requestUpgradeConsent} from "./install-v2.mjs";
+import {requestUpgradeConsent,preflightManagerLauncher,installManagerLauncher} from "./install-v2.mjs";
 
 export const HISTORICAL_UNIT="remote-control-v2-agent.service";
 /** Only confirms original systemd unit, running service and key were restored.
@@ -181,6 +181,27 @@ export async function upgradeExistingSignedService({
   if(await safeExisting(unitPath+".d"))throw Error("Unexpected service drop-in");
   await safeProgram(plan.oldRoot);
   await safeProgram(plan.newRoot,{remoteTarget:!!verifySignedReconnect});
+  // Reject foreign launchers or missing target binaries before changing systemd.
+  await preflightManagerLauncher(home,plan.newRoot);
+  const launcher=path.join(home,".local/bin/rca");
+  let priorLauncher=null;
+  try { priorLauncher=await readlink(launcher); }
+  catch(error){ if(error.code!=="ENOENT")throw error; }
+  const nextLauncher=path.join(plan.newRoot,APP,"scripts/rca.sh");
+  async function restoreLauncher() {
+    let current=null;
+    try { current=await readlink(launcher); }
+    catch(error){ if(error.code!=="ENOENT")throw error; }
+    if(current===priorLauncher)return;
+    if(current!==nextLauncher)throw Error("CLI changed during rollback");
+    if(priorLauncher===null) {
+      await rm(launcher); await syncParent(launcher); return;
+    }
+    const stage=launcher+".restore-stage";
+    await symlink(priorLauncher,stage);
+    try { await rename(stage,launcher); await syncParent(launcher); }
+    finally { await rm(stage,{force:true}); }
+  }
   await compatibleReceipts(home);
   const identity=await exactIdentity(plan.identity);
   const status=systemctl(["show",HISTORICAL_UNIT,"-p","ActiveState","-p","SubState","-p","MainPID"]);
@@ -242,10 +263,17 @@ export async function upgradeExistingSignedService({
         if(await readFile(unitPath,"utf8")!==plan.newUnit)
           throw Error("Agent unit changed after signed reconnect");
       }
+      // Treat the local CLI as part of the verified service cutover.
+      await installManagerLauncher(home,plan.newRoot,{updateShellProfile:false});
+      if(await readlink(launcher)!==nextLauncher)
+        throw Error("Local CLI is not the reviewed new Agent");
+      await syncParent(launcher);
       await rm(backup);await syncParent(backup);
       return {status:"active",deviceId:identity.id,service:HISTORICAL_UNIT,
         version:targetVersion,identityPreserved:true};
     }catch(error){
+      let restoredLauncher=true;
+      try { await restoreLauncher(); } catch { restoredLauncher=false; }
       try{
         await atomicWrite(unitPath,previous);
         systemctl(["daemon-reload"]);
@@ -255,6 +283,7 @@ export async function upgradeExistingSignedService({
         const restored=await exactIdentity(plan.identity);
         if(restored.id!==identity.id||restored.digest!==identity.digest)
           throw Error("Rollback identity changed");
+        if(!restoredLauncher)throw Error("CLI rollback uncertain");
         await rm(backup);await syncParent(backup);
       }catch{
         throw Error("Upgrade failed; rollback uncertain; backup retained for manual recovery");
