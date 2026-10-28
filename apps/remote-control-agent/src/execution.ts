@@ -23,6 +23,8 @@ import {
 
 export interface AgentExecutionOptions {
   log?: (event: string) => void;
+  searchSessionTtlMs?: number;
+  receiptDirectory?: string;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
