@@ -231,7 +231,7 @@ export function monitorDeviceSocket(
           readsInFlight++;
           void Promise.resolve().then(() => readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
-              if (settled || signal.aborted || socket.readyState !== WebSocket.OPEN) return;
+              if (settled || socketWork.signal.aborted || socket.readyState !== WebSocket.OPEN) return;
               const valid = typeof text === "string" && text.length <= 65_536;
               socket.send(JSON.stringify({
                 kind: "read_result", request_id: id,
@@ -239,7 +239,7 @@ export function monitorDeviceSocket(
                 ...(valid ? { text } : {}),
               }));
             }).catch(() => {
-              if (!settled && !signal.aborted && socket.readyState === WebSocket.OPEN) {
+              if (!settled && !socketWork.signal.aborted && socket.readyState === WebSocket.OPEN) {
                 try { socket.send(JSON.stringify({ kind: "read_result", request_id: id, status: "failed" })); }
                 catch { finish("offline"); }
               }
