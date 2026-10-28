@@ -144,15 +144,19 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     candidate = root / "candidate"
     module.unpack_verified(archive, candidate, records, tag, target)
     manifest = json.loads((candidate / "bundle.json").read_text("utf-8"))
-    # Candidate-only CI must validate the complete one-shot runtime from the
-    # archive itself; this does NOT approve publishing or a live device switch.
-    if manifest.get("upgrade_protocol") != "owner-one-shot-v1":
-        raise SystemExit("Candidate archive lacks reviewed owner-one-shot-v1 protocol")
-    for helper in ("bootstrap-v2.py", "linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"):
-        entry = candidate / "apps/remote-control-agent/scripts" / helper
-        meta = entry.lstat()
-        if not entry.is_file() or entry.is_symlink() or meta.st_mode & 0o777 != 0o600:
-            raise SystemExit("Required inert Linux one-shot helper is absent or untrusted")
+    # Future owner-local bundles must not advertise or ship retired MCP
+    # remote-upgrade helpers. Published historical archives remain supported
+    # separately by their strict manifest-aware verifiers.
+    if "upgrade_protocol" in manifest:
+        raise SystemExit("Candidate archive still advertises retired remote upgrade")
+    scripts = candidate / "apps/remote-control-agent/scripts"
+    for retired in ("linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"):
+        if (scripts / retired).exists():
+            raise SystemExit("Retired remote-upgrade helper leaked into local bundle")
+    entry = scripts / "bootstrap-v2.py"
+    meta = entry.lstat()
+    if not entry.is_file() or entry.is_symlink() or meta.st_mode & 0o777 != 0o600:
+        raise SystemExit("Required owner-local bootstrap is absent or untrusted")
     if (candidate / "apps/remote-control-agent/scripts/bootstrap-v2.py").read_bytes() != bootstrap.read_bytes():
         raise SystemExit("Packaged Linux staging bootstrap differs from reviewed source")
     node = candidate / "bin/node"
@@ -162,8 +166,7 @@ with tempfile.TemporaryDirectory(prefix="remote-agent-package-test-") as work:
     for argv in ([str(node), "--version"], [str(helper), "--probe"],
                  [str(node), "--check", str(script)],
                  [str(node), "--check", str(installer)],
-                 *([str(node), "--check", str(candidate / "apps/remote-control-agent/scripts" / helper)]
-                   for helper in ("linux-upgrade-detached.mjs", "linux-upgrade-watchdog.mjs"))):
+                 [str(node), "--check", str(scripts / "bootstrap-node.mjs")]):
         proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, timeout=10, check=False,
                               start_new_session=True)
