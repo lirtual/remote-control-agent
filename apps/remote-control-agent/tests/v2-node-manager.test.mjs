@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -60,6 +60,38 @@ test("Node-only rca status and version preserve identity and receipts",()=>{
     assert.equal(readFileSync(path.join(f.ids,"v2-identity.pem.device-id"),"utf8"),UUID);
   }finally{cleanup(f);}
 });
+test("Node manager recognizes a retained historical signed unit without re-pairing",()=>{
+  const f=fixture();
+  try{
+    const historic=path.join(path.dirname(f.unit),"remote-control-v2-agent.service");
+    renameSync(f.unit,historic);
+    const options={home:f.home,source:f.manager};
+    const inventory=localManagerInventory(options);
+    assert.equal(inventory.unitName,"remote-control-v2-agent.service");
+    assert.equal(inventory.ids.permanent,UUID);
+    const calls=[];
+    const status=localManagerStatus(options,(bin,args)=>{
+      calls.push([bin,...args]);return {status:0,error:null};
+    });
+    assert.equal(status.local_permanent_service,"active");
+    assert.deepEqual(calls,[["systemctl","--user","is-active","--quiet",
+      "remote-control-v2-agent.service"]]);
+    const stdout={text:"",write(s){this.text+=s;}};
+    assert.equal(dispatchLocalManager(["logs"],{
+      inventory:()=>inventory,stdin:{isTTY:true},stdout:{
+        isTTY:true,write(s){stdout.write(s);}
+      },invoke:(bin,args)=>{calls.push([bin,...args]);return {status:0};}
+    }),0);
+    assert.equal(calls.at(-1)[0],"journalctl");
+    assert.ok(calls.at(-1).includes("remote-control-v2-agent.service"));
+    // A conflicting newer unit must fail closed, never select one by order.
+    writeFileSync(f.unit,readFileSync(historic),{mode:0o600});
+    assert.throws(()=>localManagerInventory(options),/Ambiguous installed Agent services/);
+    assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
+    assert.equal(readFileSync(path.join(f.ids,"v2-identity.pem.device-id"),"utf8"),UUID);
+  }finally{cleanup(f);}
+});
+
 test("Node manager recognizes the immutable paired-full profile without optional switches",()=>{
   const f=fixture();
   try{

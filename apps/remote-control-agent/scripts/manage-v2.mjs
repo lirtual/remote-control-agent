@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 
 const STORE=".local/share/mcp-workers/remote-control";
 const UNIT="remote-control-agent.service";
+// Direct signed-service upgrades retain this historical systemd unit name.
+const HISTORICAL_UNIT="remote-control-v2-agent.service";
 const MARKER="# Managed by Remote Control Agent installer.";
 const VERSION=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-glibc$/;
 const ID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -89,8 +91,14 @@ export function localManagerInventory({home=os.homedir(),source=fileURLToPath(im
     checkedPath(path.join(home,part),{directory:true,optional:true,privatePath:false});
   }
   checkedPath(path.join(home,STORE,"temporary"),{directory:true,optional:true});
-  const unitFile=path.join(home,".config/systemd/user",UNIT);
-  const unit=checkedPath(unitFile,{optional:true})?readFileSync(unitFile,"utf8"):null;
+  const unitDir=path.join(home,".config/systemd/user");
+  const canonicalFile=path.join(unitDir,UNIT);
+  const historicalFile=path.join(unitDir,HISTORICAL_UNIT);
+  const canonical=checkedPath(canonicalFile,{optional:true});
+  const historical=checkedPath(historicalFile,{optional:true});
+  if(canonical&&historical)throw Error("Ambiguous installed Agent services");
+  const unitName=canonical?UNIT:historical?HISTORICAL_UNIT:null;
+  const unit=unitName?readFileSync(path.join(unitDir,unitName),"utf8"):null;
   if(unit){
     if(!unit.startsWith(MARKER+"\n")||unit.length>16384)
       throw Error("Foreign user service");
@@ -109,13 +117,13 @@ export function localManagerInventory({home=os.homedir(),source=fileURLToPath(im
   }
   const permanent=readDeviceId(home,"v2-identity.pem");
   const temporary=readDeviceId(home,"temporary/v2-identity.pem");
-  return {info,root,versions:versions.sort(),unit,ids:{...(permanent?{permanent}:{}),...(temporary?{temporary}:{})}};
+  return {info,root,versions:versions.sort(),unit,unitName,ids:{...(permanent?{permanent}:{}),...(temporary?{temporary}:{})}};
 }
 export function localManagerStatus(options={},invoke=spawnSync){
-  const {info,versions,unit,ids}=localManagerInventory(options);
+  const {info,versions,unit,unitName,ids}=localManagerInventory(options);
   let service="not_installed";
   if(unit){
-    const p=invoke("systemctl",["--user","is-active","--quiet",UNIT],
+    const p=invoke("systemctl",["--user","is-active","--quiet",unitName],
       {encoding:"utf8",timeout:5000,stdio:"ignore"});
     service=!p.error&&p.status===0?"active":"inactive_or_unconfirmed";
   }
@@ -181,7 +189,7 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
     if(!state.unit){stdout.write("No installed Agent service.\n");return 0;}
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Logs require the local terminal");
     stdout.write("Local systemd logs may contain sensitive details; redact before sharing.\n");
-    const result=invoke("journalctl",["--user","--unit",UNIT,"--no-pager",
+    const result=invoke("journalctl",["--user","--unit",state.unitName,"--no-pager",
       "--lines","40","--output","short-iso"],{stdio:"inherit",timeout:12000});
     return result.error||result.status!==0?1:0;
   }
