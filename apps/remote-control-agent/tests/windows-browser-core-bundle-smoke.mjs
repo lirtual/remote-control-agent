@@ -15,7 +15,7 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 // The StageOnly installer is packaged from the reviewed root source as a pinned file.
-assert.equal(results.files,40,"Unexpected reviewed Windows Playwright file inventory");
+assert.equal(results.files,39,"Unexpected reviewed Windows Playwright file inventory");
 assert.deepEqual(
   await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
   await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
@@ -30,10 +30,12 @@ try{
 }finally{
   await writeFile(nativeStageInstaller,verifiedStageInstaller);
 }
-assert.equal(inspectWindowsPreview(stage).files,40);
+assert.equal(inspectWindowsPreview(stage).files,39);
 
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
+assert.equal(Object.hasOwn(manifest.hashes,"apps/remote-control-agent/scripts/windows-upgrade-once.ps1"),false,"Do not ship retired remote-upgrade script");
+assert.equal(Object.hasOwn(manifest,"upgrade_protocol"),false,"New Release must not advertise retired remote upgrade");
 assert.equal(Object.hasOwn(manifest.hashes ?? {}, "apps/remote-control-agent/src/linux-upgrade-reconnect.js"),false,
   "Retired remote-upgrade proof must not be required in the Windows runtime");
 const infoModule=path.join(stage,"apps/remote-control-agent/src/device-info.js");
