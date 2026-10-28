@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.35",
+  "source_sha": "3ef5a9c4d8741cba89b28f525dab4692826482f8",
+  "candidate_run_id": 40632272185,
+  "release_title": "Remote Control Agent v0.1.35 — local CLI upgrade and cleanup",
+  "release_notes": ".github/release-notes/v0.1.35.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.35-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.35-linux-x64-glibc.tar.gz",
+      "sha256": "9f110bbeda33027482a55d7c577ca2975e1b850380f3e57390b2ae4a59c74b1b"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.35-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.35-linux-arm64-glibc.tar.gz",
+      "sha256": "3c5586f7020e45e4deb4848509175e006d82b8f079535de6d936d9e4938b444f"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.35-windows-x64",
+      "name": "remote-control-agent-v0.1.35-windows-x64.zip",
+      "sha256": "0ee9b58b8a5972ea8ac5497e35765798d7e293f4e104f4050b4cea2a2fd4561c"
+    }
+  ]
+}
