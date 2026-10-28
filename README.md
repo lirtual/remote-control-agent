@@ -1,24 +1,25 @@
 # Remote Control Agent
 
-Standalone Remote Control Agent for Linux x64/ARM64 and Linux running under WSL2. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
+Standalone Remote Control Agent for Linux x64/ARM64 (including WSL2) and native Windows x64. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Current Linux release
+## Current release (verified 2026-10-28)
 
-Native Windows x64 full-tools and the pinned Playwright browser runtime are packaged separately from the Linux Agent. Publication requires a reviewed, single-file approval commit on `main` after Agent CI succeeds. Merging source does not install, upgrade or re-pair any device.
+The immutable **v0.1.35** Agent Release includes Linux x64/ARM64 and native
+Windows x64 archives with SHA256SUMS. The Remote Control Worker serves
+version-pinned public installers. Production Windows and WSL2 permanently
+paired devices were independently confirmed online on v0.1.35 with their
+original device identities preserved.
 
+Agent CI/Release publication, Worker deployment, device-local interactive
+upgrades and authenticated device pairing are separate operations. Browser
+Handoff (Spec #280) and MCP-initiated `upgrade_agent` were retired; existing
+paired-device tools and Agent-owned browser automation remain supported.
 
-The published immutable **v0.1.12** Linux Agent enables file reads, file writes,
-Shell and managed sessions for approved paired devices. It runs as the user's
-systemd service and authenticates to the approved Worker over signed outbound
-WSS. There are no per-feature switches and no need to pair again during an
-approved version upgrade.
+## One-command onboarding and local upgrades
 
-## New one-command onboarding (Spec #24 · source under review)
-
-The canonical public entry point is intended to be `https://rca.lirtual.dpdns.org/`,
-served by the existing Remote Control Worker. It will display the OS-specific
-commands and the three steps: **install → approve once through authenticated
-Remote Control MCP → verify online through authenticated MCP**.
+The existing Remote Control Worker serves the public installers at
+`https://rca.lirtual.dpdns.org/`. For a new device, the workflow is
+**install → approve once through authenticated MCP → verify online**.
 
 - Windows PowerShell: `irm https://rca.lirtual.dpdns.org/install.ps1 | iex`
 - Linux x64/ARM64, including WSL2: `curl -fsSL https://rca.lirtual.dpdns.org/install.sh | sh`
@@ -29,14 +30,10 @@ script, the empty `sh` may still exit 0. Inspect download errors, and never
 treat pipeline success as proof of installation, approval or online status;
 confirm the device through authenticated MCP before declaring success.
 
-**These commands describe the proposed public contract, not a claim of working
-production onboarding.** The new Windows bootstrap requires a reviewed, immutable
-Windows Release that contains the `onboard` CLI, a separately checked source
-commit, source-script SHA-256 and official ZIP SHA-256. Until those artifacts are
-published and explicitly pinned by the Worker, `/install.ps1` returns HTTP 503.
-The landing page and updated Linux script also require a separately authorized
-Worker deployment. Merely merging an Agent PR does not install, deploy, update,
-or pair anything.
+As of 2026-10-28, both production installers are pinned to the reviewed
+v0.1.35 source and immutable Release assets. A successful script download or
+local install does not prove remote approval, connectivity or successful
+upgrade; verify the signed device through authenticated MCP.
 
 The CLI's two options are **永久** (user-logon task on Windows, systemd user unit
 on Linux) and **临时** (foreground, with existing 24-hour cloud grant). Selection
@@ -86,11 +83,11 @@ service is busy, has foreign systemd modifications, or state is uncertain,
 the upgrade fails closed. Activation failure restores the prior unit, with
 owner-private recovery evidence kept if rollback itself fails.
 
-These instructions apply once a Release containing the direct-upgrade path
-is published and the Worker pin has been updated to it. Existing immutable
-Release assets are not changed retroactively. Verify the same device ID,
-signed WSS/MCP connectivity, file and Shell tools, and durable receipts after
-upgrade. Do not stop an Agent using the Shell of that same Agent.
+The published, Worker-pinned Agent supports the local direct-upgrade path.
+Existing immutable Release assets are never changed retroactively. Verify
+the same device ID, signed WSS/MCP connectivity, file and Shell tools, and
+durable receipts after each locally approved upgrade. Do not stop an Agent
+using the Shell of that same Agent.
 
 ## Native Windows x64 installation and upgrade
 
@@ -144,22 +141,19 @@ remain available for exceptional operator diagnostics.
 
 ## Platform and trust requirements
 
-- Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features; WSL2 can use the Linux Agent while the distribution is running. Native Windows/macOS, WSL1 and musl are not covered by this release.
+- Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features; WSL2 can use the Linux Agent while the distribution is running. Native Windows x64 is supported by a separate reviewed package; macOS, WSL1 and musl are not supported.
 - A non-root interactive terminal; the installer requires a real local TTY.
 - A trusted HTTPS Worker origin with authorized owner-mediated pairing. No direct public Shell listener is created.
 - Do not copy or paste device private keys, access tokens, or unredacted logs.
 - `rca status` reports local state and does not independently prove remote signed-WSS connectivity. Verify that via authenticated MCP.
 - Local uninstall preserves identity and SQLite receipts and **does not revoke** the remote grant. Revoke the device separately through authenticated MCP.
 
-## Next release checklist
+## Release and verification
 
-1. Review the one-time offline v0.1.11 cutover and future in-process freeze.
-2. Verify safe rejection, exact identity and receipt preservation, rollback,
-   and native x64/ARM64 archive tests under existing Agent CI.
-3. After the reviewed three-platform candidate CI succeeds, commit one exact
-   `.github/release-pins/<tag>.json` on `main`. GitHub Actions automatically
-   publishes that pinned Release after verifying source, artifacts and SHA-256.
-   Ordinary source pushes do not publish Releases; existing pins can also be
-   dispatched manually. The Worker Release pins and deployment remain separate.
-
-A source PR and passing CI do not update the installed v0.1.11 Agent.
+Use the existing Linux x64/ARM64 and native Windows x64 CI to validate each
+candidate. Publish only through the established immutable, reviewed Release
+pin workflow, then separately update the Worker's installer pins and deploy
+through its existing manual workflow. A source commit, Release or Worker
+rollout never updates installed devices; after an explicitly approved local
+upgrade, verify the original device identity, signed connection, service/task
+state and retained SQLite operation receipts.
