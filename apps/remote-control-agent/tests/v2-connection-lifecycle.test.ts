@@ -10,6 +10,15 @@ import { collectDeviceInfo } from "../src/device-info.ts";
 import { createAgentExecutionEngine } from "../src/execution.ts";
 import type { BrowserBackend } from "../src/browser-backend.ts";
 
+test("MCP remote Agent upgrade dispatch is absent; local upgrade freeze stays",async()=>{
+  const lifecycle=await readFile(new URL("../src/v2-connection-lifecycle.ts",import.meta.url),"utf8");
+  const engine=await readFile(new URL("../src/execution.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(lifecycle,/upgrade_agent|parseRemoteUpgradeDispatch|launchLinuxUpgrade/);
+  assert.doesNotMatch(engine,/admitOwnerApprovedUpgrade|stageAndLaunchApprovedWindowsUpgrade|readLinuxUpgradeOutcome/);
+  assert.equal(Object.hasOwn(collectDeviceInfo(),"upgrade_protocol"),false);
+  assert.match(lifecycle,/startUpgradeControl\(execution(?:!)?, keyPath\)/);
+});
+
 class FakeSocket extends EventTarget {
   readyState: number = WebSocket.OPEN;
   protocol = "rc-v2";
