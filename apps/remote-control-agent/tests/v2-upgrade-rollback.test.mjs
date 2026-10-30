@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { installUnit, recoverInterruptedUpgrade, renderV2Service, UNIT } from "../scripts/install-v2.mjs";
+import { installUnit, recoverInterruptedUpgrade, renderV2Service, installerCommandTimeoutMs, UNIT } from "../scripts/install-v2.mjs";
 import { ReceiptStore } from "../src/operations.ts";
 
 async function withFakeUserService(callback, {blockRestart = false} = {}) {
@@ -113,6 +113,14 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
     await rm(root, {recursive:true, force:true});
   }
 }
+
+test("#539 manual Agent upgrade gives systemd restart time beyond its 15-second stop budget", () => {
+  assert.equal(installerCommandTimeoutMs("systemctl", ["--user", "restart", UNIT]), 45_000);
+  assert.equal(installerCommandTimeoutMs("systemctl", ["--user", "daemon-reload"]), 15_000);
+  assert.equal(installerCommandTimeoutMs("systemctl", ["--user", "is-active", "--quiet", UNIT]), 15_000);
+  assert.equal(installerCommandTimeoutMs("systemd-analyze", ["--user", "verify", UNIT]), 15_000);
+  assert.equal(installerCommandTimeoutMs("systemctl", ["--system", "restart", UNIT]), 15_000);
+});
 
 test("#77 SIGKILL during unit activation is recovered from a durable previous-unit backup", async()=> {
   await withFakeUserService(async ({unitPath,from,to,key,receipt,beforeReceiptBytes,home,restartReached,releaseRestart})=> {
