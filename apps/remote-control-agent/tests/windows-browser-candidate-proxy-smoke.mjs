@@ -68,7 +68,8 @@ try {
   );
   const page=context.pages()[0]??await context.newPage();
   const response=await page.goto("http://public.example.com/private",{
-    waitUntil:"domcontentloaded",timeout:10000,
+    // Assert the HTTP 403 as soon as the response commits; DOM may stall.
+    waitUntil:"commit",timeout:10000,
   });
   assert.equal(response?.status(),403,"Private DNS target must return 403 from actual candidate proxy.");
   // HTTPS CONNECT for this same apparently public name must be refused as
