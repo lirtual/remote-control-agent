@@ -439,8 +439,18 @@ export function assertExistingServiceEndpoint(unit, endpoint) {
   }
 }
 
+// A managed Agent may consume the full 15-second TimeoutStopSec during
+// restart. The installer must not time out before systemd finishes and
+// incorrectly roll back an otherwise successful, approved upgrade.
+export function installerCommandTimeoutMs(binary, args) {
+  return binary === "systemctl" && args[0] === "--user" && args[1] === "restart"
+    ? 45_000 : 15_000;
+}
+
 function run(binary, args) {
-  const result = spawnSync(binary, args, { encoding: "utf8", timeout: 15_000 });
+  const result = spawnSync(binary, args, {
+    encoding: "utf8", timeout: installerCommandTimeoutMs(binary, args),
+  });
   if (result.error || result.status !== 0) {
     if (binary === "cc") throw new Error("Missing or unusable cc compiler.");
     if (binary === "systemctl") throw new Error("The systemd user manager or requested user service action is unavailable.");
