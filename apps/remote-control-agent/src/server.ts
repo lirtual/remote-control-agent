@@ -60,6 +60,8 @@ export interface StartAgentOptions {
   sessionMaxLifetimeMs?: number;
   /** Local-only failure injection for existing Agent HTTP tests. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
+  /** Local-only staged-write probe for authenticated integration tests. */
+  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
   /** Operator-verified historical JSON snapshot for one-time SQLite migration. */
   receiptHistoricalBackupPath?: string;
 }
@@ -155,6 +157,7 @@ export async function startAgent(options: StartAgentOptions): Promise<RunningAge
     shellPath: options.shellPath,
     sessionMaxLifetimeMs: options.sessionMaxLifetimeMs,
     receiptFaultForTests: options.receiptFaultForTests,
+    fileStageForTests: options.fileStageForTests,
     receiptHistoricalBackupPath: options.receiptHistoricalBackupPath,
   });
 

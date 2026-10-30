@@ -4,8 +4,9 @@
  * transport with an explicit capability grant may invoke executeTool().
  * T02 intentionally does not connect this engine to unauthenticated v2 WSS.
  */
-import { appendFile, link, lstat, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { appendFile, link, lstat, mkdir, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { NoTargetEffectError, rewriteFile } from "./file-rewrite.ts";
 import {
   parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock,
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
@@ -34,6 +35,8 @@ export interface AgentExecutionOptions {
   sessionMaxLifetimeMs?: number;
   /** Local-only storage error probe, never routed through MCP. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
+  /** Local-only staged-write interruption and race probe. */
+  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
   /** Explicit operator-verified historical backup, never selected by remote callers. */
   receiptHistoricalBackupPath?: string;
 }
@@ -81,6 +84,22 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     throw error;
   }));
   const inFlight = new Map<string, Promise<OperationReceipt | undefined>>();
+  // Separate operation IDs do not serialize edits to the same file.
+  // Queue only local file mutations at their resolved path, not all commands.
+  const fileMutationTails = new Map<string, Promise<void>>();
+  async function withFileMutation<T>(filePath: string, action: () => Promise<T>): Promise<T> {
+    const previous = fileMutationTails.get(filePath);
+    let release!: () => void;
+    const tail = new Promise<void>(resolve => { release = resolve; });
+    fileMutationTails.set(filePath, tail);
+    try {
+      if (previous) await previous;
+      return await action();
+    } finally {
+      release();
+      if (fileMutationTails.get(filePath) === tail) fileMutationTails.delete(filePath);
+    }
+  }
   let activeCalls = 0;
   let upgradeFrozen = false;
   let stopped = false;
@@ -94,18 +113,33 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     | NonNullable<ReturnType<typeof parseLocalMoveFile>>
     | NonNullable<ReturnType<typeof parseLocalDeleteFile>>;
 
-  async function performMutation(id: string, tool: MutationTool, args: MutationArgs): Promise<OperationReceipt | undefined> {
+  function performMutation(id: string, tool: MutationTool, args: MutationArgs): Promise<OperationReceipt | undefined> {
+    if (tool === "write_file" &&
+        (args as NonNullable<ReturnType<typeof parseLocalWriteFile>>).mode === "rewrite") {
+      return withFileMutation((args as NonNullable<ReturnType<typeof parseLocalWriteFile>>).path,
+        () => performMutationUnlocked(id, tool, args));
+    }
+    if (tool === "edit_block") {
+      return withFileMutation((args as NonNullable<ReturnType<typeof parseLocalEditBlock>>).filePath,
+        () => performMutationUnlocked(id, tool, args));
+    }
+    return performMutationUnlocked(id, tool, args);
+  }
+
+  async function performMutationUnlocked(id: string, tool: MutationTool, args: MutationArgs): Promise<OperationReceipt | undefined> {
     await receipts.update(id, "running", "Operation is in progress.");
     try {
       if (tool === "write_file") {
         const write = args as NonNullable<ReturnType<typeof parseLocalWriteFile>>;
         if (write.mode === "append") await appendFile(write.path, write.content, "utf8");
-        else await writeFile(write.path, write.content, "utf8");
+        else await rewriteFile(write.path, write.content, { fileStageForTests: options.fileStageForTests });
       } else if (tool === "create_directory") {
         await mkdir((args as NonNullable<ReturnType<typeof parseLocalCreateDirectory>>).path);
       } else if (tool === "edit_block") {
         const edit = args as NonNullable<ReturnType<typeof parseLocalEditBlock>>;
-        const originalBytes = await readFile(edit.filePath);
+        const originalBytes = await readFile(edit.filePath).catch(() => {
+          throw new NoTargetEffectError("Could not read original file.");
+        });
         const original = Buffer.from(originalBytes).toString("utf8");
         if (!Buffer.from(original, "utf8").equals(originalBytes)) {
           await receipts.update(id, "failed", "The file is not valid UTF-8 text.", undefined, true);
@@ -119,7 +153,9 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           emit(log, "edit_failed");
           return await receipts.get(id) ?? undefined;
         }
-        await writeFile(edit.filePath, original.split(edit.oldString).join(edit.newString), "utf8");
+        await rewriteFile(edit.filePath, original.split(edit.oldString).join(edit.newString), {
+          expectedOriginal: originalBytes, fileStageForTests: options.fileStageForTests,
+        });
       } else if (tool === "delete_file") {
         const target = (args as NonNullable<ReturnType<typeof parseLocalDeleteFile>>).path;
         const info = await lstat(target);
@@ -159,7 +195,14 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       }
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      const knownNoEffect = ["EACCES", "EPERM", "ENOENT", "EISDIR", "ENOTDIR", "EEXIST", "EINVAL", "EXDEV", "EOPNOTSUPP", "ENOTSUP"].includes(code ?? "");
+      // Append remains on the original path and retains its prior receipt
+      // classification. Rewrite/edit errors are stage-aware instead.
+      const legacyClassification = tool !== "edit_block" &&
+        (tool !== "write_file" ||
+          (args as NonNullable<ReturnType<typeof parseLocalWriteFile>>).mode === "append");
+      const knownNoEffect = error instanceof NoTargetEffectError ||
+        (legacyClassification &&
+          ["EACCES", "EPERM", "ENOENT", "EISDIR", "ENOTDIR", "EEXIST", "EINVAL", "EXDEV", "EOPNOTSUPP", "ENOTSUP"].includes(code ?? ""));
       emit(log, tool === "write_file" ? "write_failed" : tool === "create_directory" ? "directory_failed" : tool === "edit_block" ? "edit_failed" : tool === "delete_file" ? "delete_failed" : "move_failed");
       try {
         return await receipts.update(id, knownNoEffect ? "failed" : "unknown", "Operation did not complete.", undefined, knownNoEffect);

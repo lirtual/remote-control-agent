@@ -15,7 +15,7 @@ if(process.platform!=="win32" || !stage || !path.isAbsolute(stage))
 const results=inspectWindowsPreview(stage);
 assert.equal(results.version,process.env.RCA_EXPECTED_BUNDLE_VERSION ?? "v0.0.1-ci");
 // The StageOnly installer is packaged from the reviewed root source as a pinned file.
-assert.equal(results.files,42,"Unexpected reviewed Windows Playwright file inventory");
+assert.equal(results.files,43,"Unexpected reviewed Windows Playwright file inventory");
 assert.deepEqual(
   await readFile(path.join(stage,"apps/remote-control-agent/scripts/windows-stage-install.ps1")),
   await readFile(fileURLToPath(new URL("../../../install.ps1",import.meta.url))),
@@ -30,10 +30,12 @@ try{
 }finally{
   await writeFile(nativeStageInstaller,verifiedStageInstaller);
 }
-assert.equal(inspectWindowsPreview(stage).files,42);
+assert.equal(inspectWindowsPreview(stage).files,43);
 
 const manifestFile=path.join(stage,"bundle.json");
 const manifest=JSON.parse(await readFile(manifestFile,"utf8"));
+assert.ok(Object.hasOwn(manifest.hashes,"apps/remote-control-agent/src/file-rewrite.js"),
+  "Spec #539 file mutation executor must be included in the verified Windows runtime");
 assert.ok(Object.hasOwn(manifest.hashes,"apps/remote-control-agent/scripts/windows-capture.ps1"),
   "Reviewed Windows candidate must include the immutable screenshot helper");
 assert.equal(Object.hasOwn(manifest.hashes,"apps/remote-control-agent/scripts/windows-upgrade-once.ps1"),false,"Do not ship retired remote-upgrade script");
