@@ -221,6 +221,28 @@ test("compatible rewrite stages privately and reports a pre-commit failure witho
   }
 });
 
+test("eligible private rewrite preserves mode despite a restrictive process umask", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-umask-"));
+  const target = path.join(root, "private.txt");
+  await writeFile(target, "before", { mode: 0o600 });
+  await chmod(target, 0o600);
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts") });
+  const originalUmask = process.umask();
+  try {
+    process.umask(0o200);
+    const result = await call(agent, { tool: "write_file", operation_id: "private-umask-rewrite",
+      arguments: { path: target, content: "after", mode: "rewrite" } });
+    assert.equal((result.json as { status: string }).status, "completed");
+    assert.equal(await readFile(target, "utf8"), "after");
+    assert.equal((await stat(target)).mode & 0o777, 0o600);
+  } finally {
+    process.umask(originalUmask);
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("replace_text rejects source changed during staged edit and retains the newer contents", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-stale-"));

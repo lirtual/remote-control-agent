@@ -134,6 +134,7 @@ export async function rewriteFile(
       owned = await handle.stat();
       await handle.writeFile(content, "utf8");
       if (route === "create") await handle.chmod(0o666 & ~process.umask());
+      else await handle.chmod(0o600);
     } finally {
       await handle.close();
     }
