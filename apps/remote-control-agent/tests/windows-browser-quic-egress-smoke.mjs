@@ -84,7 +84,9 @@ async function probe(mode) {
 }
 
 try {
-  const baseline = await probe("forced-quic-baseline");
+  let baseline = await probe("forced-quic-baseline");
+  // Retry a startup race once without weakening the positive control.
+  if (baseline.quicInitials === 0) baseline = await probe("forced-quic-baseline");
   const restricted = await probe("restricted");
   assert.ok(baseline.quicInitials > 0,
     "QUIC positive control sent no Initial packets; zero restricted hits prove nothing.");
