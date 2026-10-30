@@ -54,6 +54,7 @@ export function inspectWindowsPreview(root) {
       !expected.has("apps/remote-control-agent/scripts/verify-windows-preview.mjs") ||
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
+      !expected.has("apps/remote-control-agent/scripts/windows-capture.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-stage-install.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
       expected.size < 9 || expected.size > 43 ||
@@ -91,7 +92,7 @@ export function inspectWindowsPreview(root) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
-      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
+      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$/.test(name) ||
           Object.hasOwn(PINNED_WINDOWS_PLAYWRIGHT_FILES,name) ||
           Object.hasOwn(PINNED_WINDOWS_BROWSER_MODULES,name)) ||
           seen.has(name) || !expected.has(name) ||

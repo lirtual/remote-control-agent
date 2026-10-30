@@ -12,6 +12,8 @@ import { startUpgradeControl } from "./upgrade-control.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
 import { parseStartProcess, parseListSessions, parseReadProcessOutput, parseInteractWithProcess, parseForceTerminate } from "./sessions.ts";
 import { parseBrowserArguments, browserToolIsRead } from "./browser-operations.ts";
+import { readDesktopGrant } from "./desktop-grant.ts";
+import { captureDesktopImage, parseDesktopObserve, validDesktopImage, isDesktopObservationError, IMAGE_CHUNK_SIZE, type DesktopObservation } from "./desktop-observe.ts";
 
 /** One bounded Session read adapter, shared by the Agent and MCP/WSS tests. */
 export async function executeV2SessionRead(
@@ -19,8 +21,24 @@ export async function executeV2SessionRead(
   tool: string,
   args: unknown,
   signal: AbortSignal,
-): Promise<string | null> {
+  desktopDirectory?: string,
+): Promise<string | DesktopObservation | null> {
   try {
+    if (tool === "computer_observe") {
+      if (!desktopDirectory || !parseDesktopObserve(args)) return null;
+      return captureDesktopImage(desktopDirectory,args,signal);
+    }
+    if (tool === "computer_status") {
+      if (!args || typeof args !== "object" || Array.isArray(args) ||
+          Object.keys(args).length !== 0) return null;
+      if (!desktopDirectory || (process.platform !== "win32" && process.platform !== "darwin")) {
+        return JSON.stringify({ desktop_grant: "stopped", operable: false, reason: "unsupported" });
+      }
+      const grant = await readDesktopGrant(desktopDirectory);
+      // Neither a signed socket nor a Desktop Grant proves a GUI session or OS permission.
+      return JSON.stringify({ desktop_grant: grant.state, operable: false,
+        reason: grant.state === "stopped" ? "desktop_stopped" : "desktop_session_unverified" });
+    }
     const answer = await execution.executeTool({ tool, arguments: args }, signal);
     if (answer?.status !== 200) return null;
     const body = answer.body as { result?: { content?: Array<{ text?: unknown }> } };
@@ -29,7 +47,7 @@ export async function executeV2SessionRead(
   } catch { return null; }
 }
 
-type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option";
+type V2FileOperation = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file" | "start_process" | "interact_with_process" | "force_terminate" | "get_operation_status" | "browser_start" | "browser_navigate" | "browser_close" | "browser_tabs" | "browser_click" | "browser_fill" | "browser_press_key" | "browser_select_option" | "computer_stop";
 
 /** One adapter shared by production and tests; no new mutation executor. */
 export async function executeV2FileOperation(
@@ -75,7 +93,7 @@ export function monitorDeviceSocket(
   timing: { intervalMs: number; timeoutMs: number; authIntervalMs?: number } = {
     intervalMs: HEARTBEAT_INTERVAL_MS, timeoutMs: HEARTBEAT_TIMEOUT_MS,
   },
-  readOnly?: (tool: string, args: unknown, signal: AbortSignal) => Promise<string | null>,
+  readOnly?: (tool: string, args: unknown, signal: AbortSignal) => Promise<string | DesktopObservation | null>,
   operation?: (tool: V2FileOperation, args: unknown, operationId: string, signal: AbortSignal) => Promise<Record<string, unknown> | null>,
   allowShell = false,
   revokeCleanup?: () => Promise<"confirmed" | "uncertain">,
@@ -184,6 +202,8 @@ export function monitorDeviceSocket(
           start_search: parseSearchStart, get_more_search_results: parseSearchSessionId,
           stop_search: parseSearchSessionId,
           list_sessions: parseListSessions, read_process_output: parseReadProcessOutput,
+          computer_status: args => !!args && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 0 ? args : null,
+          computer_observe: parseDesktopObserve,
           browser_status: args => parseBrowserArguments("browser_status", args),
           browser_snapshot: args => parseBrowserArguments("browser_snapshot", args),
           browser_tabs: args => browserToolIsRead("browser_tabs", args) ? parseBrowserArguments("browser_tabs", args) : null,
@@ -211,12 +231,24 @@ export function monitorDeviceSocket(
               ? null : readOnly(tool, request.arguments, socketWork.signal))
             .then(text => {
               if (settled || socketWork.signal.aborted || socket.readyState !== WebSocket.OPEN) return;
-              const valid = typeof text === "string" && text.length <= 65_536;
-              socket.send(JSON.stringify({
-                kind: "read_result", request_id: id,
-                status: valid ? "completed" : "failed",
-                ...(valid ? { text } : {}),
-              }));
+              if (tool === "computer_observe" && isDesktopObservationError(text)) {
+                socket.send(JSON.stringify({kind:"read_result",request_id:id,status:"failed",error:text.code}));
+              } else if (validDesktopImage(text) && tool === "computer_observe") {
+                for (let at=0, seq=0; at<text.data.length; at+=IMAGE_CHUNK_SIZE,seq++) {
+                  socket.send(JSON.stringify({
+                    kind:"image_chunk",request_id:id,seq,chunk:text.data.slice(at,at+IMAGE_CHUNK_SIZE),
+                  }));
+                }
+                const {data,...metadata}=text;
+                socket.send(JSON.stringify({kind:"image_result",request_id:id,status:"completed",metadata}));
+              } else {
+                const valid = typeof text === "string" && text.length <= 65_536;
+                socket.send(JSON.stringify({
+                  kind: "read_result", request_id: id,
+                  status: valid ? "completed" : "failed",
+                  ...(valid ? { text } : {}),
+                }));
+              }
             }).catch(() => {
               if (!settled && !socketWork.signal.aborted && socket.readyState === WebSocket.OPEN) {
                 try { socket.send(JSON.stringify({ kind: "read_result", request_id: id, status: "failed" })); }
@@ -230,6 +262,8 @@ export function monitorDeviceSocket(
           edit_block: parseLocalEditBlock, move_file: parseLocalMoveFile,
           delete_file: parseLocalDeleteFile, start_process: parseStartProcess,
           interact_with_process: parseInteractWithProcess, force_terminate: parseForceTerminate,
+          computer_stop: args => args && typeof args === "object" && !Array.isArray(args) &&
+            Object.keys(args).length === 0 ? args : null,
           browser_start: args => parseBrowserArguments("browser_start", args),
           browser_navigate: args => parseBrowserArguments("browser_navigate", args),
           browser_close: args => parseBrowserArguments("browser_close", args),
@@ -350,6 +384,8 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
+    /** Protected device-local state directory, never selected by MCP. */
+    desktopDirectory?: string;
     /** Optional, locally created browser. Absent by default; never from remote frames. */
     browser?: BrowserBackend;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -370,7 +406,7 @@ export async function maintainAuthenticatedDeviceSession(
   if (!full && options.browser) throw Error("Read-only Agent cannot attach browser capabilities.");
   let authenticatedDeviceId: string | undefined;
   const execution = createAgentExecutionEngine({
-    receiptDirectory: options.receiptDirectory, browser: options.browser,
+    receiptDirectory: options.receiptDirectory, desktopDirectory: options.desktopDirectory, browser: options.browser,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
   if (full && process.platform !== "win32") {
@@ -400,7 +436,7 @@ export async function maintainAuthenticatedDeviceSession(
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
             if (!full && (["list_sessions","read_process_output","browser_status","browser_snapshot","browser_tabs"] as string[]).includes(tool)) return null;
-            return executeV2SessionRead(execution,tool,args,requestSignal);
+            return executeV2SessionRead(execution,tool,args,requestSignal,options.desktopDirectory);
           },
           full && execution
             ? async (tool, args, operationId, requestSignal) =>

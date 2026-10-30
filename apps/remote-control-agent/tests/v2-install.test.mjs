@@ -210,7 +210,7 @@ test("v2 startup enables full paired-device tools without feature flags", async 
   assert.match(lifecycle, /const full = options\.capability !== "read-only"/);
   // Match the actual capability and durable-receipt contract regardless of
   // line wrapping, and ensure browser injection remains an explicit local input.
-  assert.match(lifecycle, /const execution = createAgentExecutionEngine\(\{[\s\S]{0,160}receiptDirectory: options\.receiptDirectory,\s*browser: options\.browser/);
+  assert.match(lifecycle, /const execution = createAgentExecutionEngine\(\{[\s\S]{0,160}receiptDirectory: options\.receiptDirectory,\s*desktopDirectory: options\.desktopDirectory,\s*browser: options\.browser/);
   // The default paired profile is full; explicit read-only callers may still be denied.
   assert.match(lifecycle, /startUpgradeControl\(execution!, keyPath\)/);
   assert.match(lifecycle, /full && execution/);
@@ -943,4 +943,29 @@ test("#70 pidfd capability probe is isolated and refuses unsupported syscall bef
   for (const errorResult of [{ status: 125 }, { status: null, error: new Error("ENOSYS") }]) {
     assert.throws(() => assertNativeSupervisorProbe(binary, () => errorResult), /pidfd.*unavailable/);
   }
+});
+
+// #505: A Windows package with an approved screenshot helper must remain
+// accepted by each immutable stage/upgrade gate, not only the bundle verifier.
+test("Windows Computer Use screenshot helper is included in every native staging allowlist", async () => {
+  const testDir = path.dirname(fileURLToPath(import.meta.url));
+  const agentRoot = path.resolve(testDir, "..");
+  const repoRoot = path.resolve(agentRoot, "../..");
+  const expected = "windows-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once";
+  const installer = await readFile(path.join(repoRoot, "install.ps1"), "utf8");
+  const stageFixture = await readFile(path.join(testDir, "fixtures/windows-stage-only.ps1"), "utf8");
+  const packageBuilder = await readFile(path.join(agentRoot, "scripts/build-windows-preview.mjs"), "utf8");
+  const verifier = await readFile(path.join(agentRoot, "scripts/verify-windows-preview.mjs"), "utf8");
+  const helper = await readFile(path.join(agentRoot, "scripts/windows-capture.ps1"), "utf8");
+  assert.ok(installer.includes(expected), "production installer must accept bundled screenshot script");
+  assert.ok(stageFixture.includes(expected), "native StageOnly fixture must use the same approved scripts");
+  assert.match(packageBuilder, /"windows-capture\.ps1"/);
+  assert.match(verifier, /expected\.has\("apps\/remote-control-agent\/scripts\/windows-capture\.ps1"\)/);
+  assert.match(helper, /OpenInputDesktop/);
+  assert.match(helper, /ImageCodecInfo.*GetImageEncoders/,
+    "Windows screenshot must select its JPEG encoder explicitly");
+  assert.match(helper, /foreach \(\$quality in @\(75L,55L,35L,20L\)\)/,
+    "JPEG must retry bounded quality settings rather than returning oversized data");
+  assert.match(helper, /\$stream\.Length -ge 8 -and \$stream\.Length -le 524288/,
+    "Only a bounded final frame can be returned");
 });
