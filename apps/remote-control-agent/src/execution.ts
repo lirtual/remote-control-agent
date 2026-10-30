@@ -11,6 +11,7 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
+import { stopDesktopGrant } from "./desktop-grant.ts";
 
 import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
@@ -25,6 +26,7 @@ export interface AgentExecutionOptions {
   log?: (event: string) => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
+  desktopDirectory?: string;
   shellPath?: string;
   /** Source-staged, explicitly injected browser backend; absent in production. */
   browser?: BrowserBackend;
@@ -232,6 +234,52 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   ): Promise<AgentExecutionReply | undefined> {
     let reply: AgentExecutionReply | undefined;
     const respond = (status: number, result: unknown): void => { reply = { status, body: result }; };
+    if (body.tool === "computer_stop") {
+      // Remote Stop is a one-way tightening operation. Never expose Enable.
+      const id = typeof body.operation_id === "string" ? body.operation_id : "";
+      if (!parseOperationId({ operation_id: id }) ||
+          !body.arguments || typeof body.arguments !== "object" ||
+          Array.isArray(body.arguments) || Object.keys(body.arguments).length !== 0) {
+        respond(400, { status: "bad_request" });
+        return reply;
+      }
+      if (!options.desktopDirectory) {
+        respond(503, { operation_id: id, status: "unavailable" });
+        return reply;
+      }
+      let admitted: Awaited<ReturnType<typeof receipts.admit>>;
+      try {
+        await ensureReceipts();
+        admitted = await receipts.admit(id, "computer_stop", operationDigest("computer_stop", {}));
+      } catch {
+        respond(503, { operation_id: id, status: "unavailable" });
+        return reply;
+      }
+      if (admitted.kind === "conflict") {
+        respond(409, { operation_id: id, status: "conflict" });
+        return reply;
+      }
+      if (admitted.kind === "full") {
+        respond(503, { operation_id: id, status: "unavailable" });
+        return reply;
+      }
+      if (admitted.kind === "same") {
+        const receipt = admitted.receipt;
+        respond(200, { operation_id: id, status: receipt?.state ?? "unknown", ...(receipt ? { receipt } : {}) });
+        return reply;
+      }
+      // A failed store write after OS action means Unknown, never "safe to retry".
+      try {
+        await stopDesktopGrant(options.desktopDirectory);
+        const receipt = await receipts.update(id, "completed", "Desktop Stop enforced locally.");
+        respond(200, { operation_id: id, status: "completed", receipt });
+      } catch {
+        try { await receipts.update(id, "unknown", "Desktop Stop outcome unconfirmed."); }
+        catch { /* unknown is still non-replayable after admission */ }
+        respond(200, { operation_id: id, status: "unknown" });
+      }
+      return reply;
+    }
     if (typeof body.tool === "string" &&
         ([...BROWSER_READ_TOOLS, ...BROWSER_EFFECT_TOOLS] as string[]).includes(body.tool)) {
       if (!browser) { respond(503, { status: "unavailable" }); return reply; }

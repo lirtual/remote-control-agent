@@ -4,7 +4,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
   [Parameter(Mandatory=$true)][string]$Directory,
-  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','receipts')][string]$FileName
+  [ValidateSet('v2-identity.pem','v2-identity.pem.device-id','v2-identity.pem.device-id.pending','v2-identity.pem.install-mode','v2-identity.pem.activation-pending','desktop-grant.json','desktop-stop.json','receipts')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -121,7 +121,7 @@ if ($Action -eq 'Seal') {
   Assert-PrivateAcl $file $false
   return
 }
-foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.device-id.pending', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending')) {
+foreach ($name in @('v2-identity.pem', 'v2-identity.pem.device-id', 'v2-identity.pem.device-id.pending', 'v2-identity.pem.install-mode', 'v2-identity.pem.activation-pending', 'desktop-grant.json', 'desktop-stop.json')) {
   $file = [IO.Path]::Combine($expected, $name)
   if ([IO.File]::Exists($file) -or [IO.Directory]::Exists($file)) {
     Assert-PrivateAcl $file $false

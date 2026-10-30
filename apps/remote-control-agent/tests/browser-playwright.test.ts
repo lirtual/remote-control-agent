@@ -109,13 +109,13 @@ test("one Playwright-only session reuses Agent Profile, provides AI snapshot, an
     await browser.close(status.session_id);
     assert.equal(browser.status(),null);
     const proxyUrl=new URL(fake.proxyEndpoint()!);
-    await assert.rejects(new Promise<void>((resolve,reject)=>{
-      const socket=connect(Number(proxyUrl.port),"127.0.0.1",()=>{
-        socket.destroy();
-        resolve();
-      });
-      socket.once("error",reject);
-    }), /ECONNREFUSED/, "A closed Agent browser must not leave a listening egress proxy.");
+    // A TCP handshake can race the kernel listen-backlog teardown; require
+    // that the old proxy cannot complete an HTTP request instead.
+    await assert.rejects(
+      fetch(proxyUrl, { signal: AbortSignal.timeout(1_000) }),
+      /fetch failed|aborted|TimeoutError/,
+      "A closed Agent browser must not serve requests through its egress proxy.",
+    );
     assert.equal(fake.calls.filter(x=>x==="context-close").length,1);
     await assert.rejects(browser.snapshot(status.session_id),/Unknown or closed/);
   } finally { await rm(tmp,{recursive:true,force:true}); }

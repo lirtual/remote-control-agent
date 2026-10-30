@@ -19,19 +19,20 @@ import { setTimeout as delay } from "node:timers/promises";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 import { readWindowsEvents, recordWindowsEvent } from "./windows-log.ts";
 import type { BrowserBackend } from "./browser-backend.ts";
+import { readDesktopGrant, enableDesktopGrantLocally, stopDesktopGrant } from "./desktop-grant.ts";
 
 const TASK_SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-user-task.ps1");
 const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts", "windows-private-store.ps1");
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function parseWindowsAgentArgs(argv: string[]): {
-  action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
+  action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" | "desktop-enable" | "desktop-stop" | "desktop-status"; endpoint?: string; name?: string; version?: string; grant?: "temporary";
 } {
   const action = argv[0];
-  if (!["onboard", "pair", "re-pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback"].includes(action ?? "")) {
+  if (!["onboard", "pair", "re-pair", "run", "status", "enable", "disable", "task-status", "start", "stop", "logs", "upgrade", "rollback", "desktop-enable", "desktop-stop", "desktop-status"].includes(action ?? "")) {
     throw Error("Use pair, run or status.");
   }
-  const options: { action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" };
+  const options: { action: "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" | "desktop-enable" | "desktop-stop" | "desktop-status"; endpoint?: string; name?: string; version?: string; grant?: "temporary" } = { action: action as "onboard" | "pair" | "re-pair" | "run" | "status" | "enable" | "disable" | "task-status" | "start" | "stop" | "logs" | "upgrade" | "rollback" | "desktop-enable" | "desktop-stop" | "desktop-status" };
   for (let index = 1; index < argv.length; index += 2) {
     const key = argv[index], value = argv[index + 1];
     if (!value || (key !== "--endpoint" && key !== "--name" && key !== "--version" && key !== "--grant") ||
@@ -46,7 +47,7 @@ export function parseWindowsAgentArgs(argv: string[]): {
     else if (key === "--grant") options.grant = "temporary";
     else options.version = value;
   }
-  if (["status", "disable", "task-status", "start", "stop", "logs"].includes(action ?? "")) {
+  if (["status", "disable", "task-status", "start", "stop", "logs", "desktop-enable", "desktop-stop", "desktop-status"].includes(action ?? "")) {
     if (argv.length !== 1) throw Error("This command has no options.");
   } else if (action === "upgrade" || action === "rollback") {
     if (argv.length !== 3 || !options.version ||
@@ -82,7 +83,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending" | "receipts"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending" | "desktop-grant.json" | "desktop-stop.json" | "receipts"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -236,6 +237,37 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (idExists && !exists) throw Error("Orphaned device ID; preserve and inspect existing store.");
   assertPrivateStore("Check", directory);
 
+  if (options.action === "desktop-status") {
+    process.stdout.write(JSON.stringify(await readDesktopGrant(directory)) + "\n");
+    return;
+  }
+  if (options.action === "desktop-stop") {
+    await stopDesktopGrant(directory);
+    assertPrivateStore("Seal", directory, "desktop-stop.json");
+    assertPrivateStore("Check", directory);
+    process.stdout.write("Desktop Stop enforced locally; remote Resume is unavailable.\n");
+    return;
+  }
+  if (options.action === "desktop-enable") {
+    if (!exists || !idExists) throw Error("A paired device is required before Desktop Grant.");
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      throw Error("Desktop Grant requires an owner-local interactive terminal.");
+    }
+    process.stdout.write(
+      "Desktop Grant allows ChatGPT to see the full desktop, native apps and browser windows,\n" +
+      "and send mouse and keyboard input. Browser MCP's separate approval does not gate this.\n" +
+      "It is not an OS sandbox against Shell and cannot independently authorize high-impact actions.\n" +
+      "Type ENABLE DESKTOP to grant access (all other input declines): ");
+    const prompt = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    let answer = "";
+    try { answer = await prompt.question(""); } finally { prompt.close(); }
+    if (answer !== "ENABLE DESKTOP") throw Error("Desktop Grant declined locally.");
+    await enableDesktopGrantLocally(directory);
+    assertPrivateStore("Seal", directory, "desktop-grant.json");
+    assertPrivateStore("Check", directory);
+    process.stdout.write("Desktop Grant enabled locally. Use desktop-stop to deny new actions.\n");
+    return;
+  }
   if (options.action === "task-status" || options.action === "disable" ||
       options.action === "start" || options.action === "stop") {
     const mapping = { "task-status": "Status", disable: "Disable", start: "Start", stop: "Stop" } as const;
@@ -522,7 +554,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     assertPrivateStore("Check", directory);
     const browser = await createPackagedBrowserForWindows(directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
-      receiptDirectory,
+      receiptDirectory, desktopDirectory: directory,
       ...(browser ? { browser } : {}),
       onState: state => {
         recordWindowsEvent(directory, state);
