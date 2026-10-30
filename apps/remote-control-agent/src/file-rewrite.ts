@@ -35,7 +35,9 @@ async function canStageNewFile(target: string): Promise<boolean> {
 export interface FileRewriteOptions {
   expectedOriginal?: Buffer;
   /** Local integration-test probes only, never passed over MCP. */
-  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
+  fileStageForTests?: (stage: "staged" | "precommit" | "postcommit", target: string) => Promise<void>;
+  /** Optional non-sensitive diagnostic; cleanup must not change target outcome. */
+  onCleanupFailure?: () => void;
 }
 
 async function sourceUnchanged(target: string, expectedOriginal: Buffer): Promise<boolean> {
@@ -88,8 +90,16 @@ export async function rewriteFile(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    await options.fileStageForTests?.("precommit", target);
     commitStarted = true;
-    await link(temp, target);
+    try { await link(temp, target); }
+    catch (error) {
+      // link() with EEXIST provably did not create or replace the target.
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw new NoTargetEffectError("Destination appeared before commit.");
+      throw error;
+    }
+    await options.fileStageForTests?.("postcommit", target);
   } catch (error) {
     if (commitStarted) throw error; // Link outcome might be unknown.
     if (error instanceof NoTargetEffectError) throw error;
@@ -101,7 +111,13 @@ export async function rewriteFile(
         const current = await lstat(temp);
         if (current.dev === owned.dev && current.ino === owned.ino)
           await unlink(temp);
-      } catch { /* Cleanup is distinct from target commit certainty. */ }
+        else { try { options.onCleanupFailure?.(); } catch { /* diagnostic only */ } }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          // Logging is best-effort: never mask a confirmed commit/failed stage.
+          try { options.onCleanupFailure?.(); } catch { /* diagnostic only */ }
+        }
+      }
     }
   }
 }

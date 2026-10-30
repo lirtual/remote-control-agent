@@ -214,6 +214,71 @@ test("compatible create stages privately and failed pre-commit leaves destinatio
   }
 });
 
+test("exclusive staged create reports a competing destination as failed, not unknown", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-link-race-"));
+  const target = path.join(root, "new.txt");
+  let raced = false;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async (stage, dest) => {
+      if (stage === "precommit" && dest === target) {
+        assert.equal(existsSync(target), false);
+        await writeFile(target, "from competing writer");
+        raced = true;
+      }
+    },
+  });
+  const request = { tool: "write_file", operation_id: "exclusive-link-race",
+    arguments: { path: target, content: "ours", mode: "rewrite" } };
+  try {
+    const result = await call(agent, request);
+    assert.equal(raced, true);
+    assert.equal((result.json as { status: string }).status, "failed");
+    assert.equal(((await call(agent, request)).json as { status: string }).status, "failed");
+    assert.equal(await readFile(target, "utf8"), "from competing writer");
+    assert.equal((await readdir(root)).filter(name => name.includes(".rca-")).length, 0);
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup failure emits a diagnostic without changing a confirmed file receipt", async () => {
+  if (process.platform !== "linux" || process.geteuid?.() === 0) return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-cleanup-"));
+  const target = path.join(root, "new.txt");
+  const events: string[] = [];
+  const stages: string[] = [];
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    log: event => events.push(event),
+    fileStageForTests: async (stage, dest) => {
+      stages.push(stage);
+      if (stage === "postcommit" && dest === target) {
+        assert.equal(await readFile(target, "utf8"), "complete");
+        await chmod(root, 0o500);
+      }
+    },
+  });
+  try {
+    const result = await call(agent, { tool: "write_file", operation_id: "cleanup-failure",
+      arguments: { path: target, content: "complete", mode: "rewrite" } });
+    assert.equal((result.json as { status: string }).status, "completed");
+    assert.ok(stages.includes("postcommit"), "stages: " + stages.join(", "));
+    const mode = (await stat(root)).mode & 0o777;
+    const left = (await readdir(root)).filter(name => name.includes(".rca-"));
+    assert.equal(mode, 0o500, "mode: " + mode.toString(8));
+    assert.equal(left.length, 1, "remaining: " + left.join(", "));
+    assert.equal(events.filter(event => event === "file_temp_cleanup_failed").length, 1, "events: " + events.join(", "));
+    assert.equal(await readFile(target, "utf8"), "complete");
+    await chmod(root, 0o700);
+    assert.equal((await readdir(root)).filter(name => name.includes(".rca-")).length, 1);
+  } finally {
+    await chmod(root, 0o700);
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("existing private rewrite preserves inode and mode under restrictive umask", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-umask-"));
@@ -269,7 +334,7 @@ test("new-file creation is not visible until commit and retains default mode", a
   let stageSeen = false;
   const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
     fileStageForTests: async (stage, dest) => {
-      assert.equal(stage, "staged");
+      if (stage !== "staged") return;
       assert.equal(dest, target);
       stageSeen = true;
       assert.equal(existsSync(target), false);

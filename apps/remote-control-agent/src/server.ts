@@ -24,6 +24,7 @@ const SAFE_EVENTS = new Set([
   "status",
   "write_completed",
   "write_failed",
+  "file_temp_cleanup_failed",
   "directory_completed",
   "directory_failed",
   "edit_completed",
@@ -61,7 +62,7 @@ export interface StartAgentOptions {
   /** Local-only failure injection for existing Agent HTTP tests. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
   /** Local-only staged-write probe for authenticated integration tests. */
-  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
+  fileStageForTests?: (stage: "staged" | "precommit" | "postcommit", target: string) => Promise<void>;
   /** Operator-verified historical JSON snapshot for one-time SQLite migration. */
   receiptHistoricalBackupPath?: string;
 }
