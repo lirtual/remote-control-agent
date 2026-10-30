@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.36",
+  "source_sha": "7a08b8ef2e10724e322366adc7a9fb04acea45b3",
+  "candidate_run_id": 41011666149,
+  "release_title": "Remote Control Agent v0.1.36 — Windows Computer Use screenshot foundation",
+  "release_notes": ".github/release-notes/v0.1.36.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.36-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.36-linux-x64-glibc.tar.gz",
+      "sha256": "a59b34957cc1cadf63bbd507a4d3c60be0f3d8294f7e77933acdc3d42b684983"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.36-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.36-linux-arm64-glibc.tar.gz",
+      "sha256": "9bb42595c62c659bc23a783ba39e3e4afb95988e0fa34a505753188e71b40f4e"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.36-windows-x64",
+      "name": "remote-control-agent-v0.1.36-windows-x64.zip",
+      "sha256": "d97230b6f6f19f2fbeea8ad79278a210ad9e34ba9afdf61b03b5db5e7a936a04"
+    }
+  ]
+}
