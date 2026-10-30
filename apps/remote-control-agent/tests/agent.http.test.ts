@@ -1612,7 +1612,7 @@ test("an exclusive staged create followed by uncertain receipt stays unknown acr
   let failCommit = true;
   let agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: state,
     receiptFaultForTests: phase => phase === "commit" && failCommit &&
-      readFileSync(target, "utf8") === "after",
+      existsSync(target) && readFileSync(target, "utf8") === "after",
   });
   const request = { tool: "write_file", operation_id: "atomic-commit-unknown",
     arguments: { path: target, content: "after", mode: "rewrite" } };
