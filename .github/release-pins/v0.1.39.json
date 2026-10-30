@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.39",
+  "source_sha": "0bcc22fcd84ab000d57c3978ffe93c14314b6f9e",
+  "candidate_run_id": 41072836468,
+  "release_title": "Remote Control Agent v0.1.39 — Linux manual upgrade restart timeout",
+  "release_notes": ".github/release-notes/v0.1.39.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.39-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.39-linux-x64-glibc.tar.gz",
+      "sha256": "880afb07e6f318eb6f7fc67ef65cf8ef7be1fca0b5cf505785d1a6da3ff7c3e0"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.39-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.39-linux-arm64-glibc.tar.gz",
+      "sha256": "de1ee0acc4ec90e063c182f5c70c06bc700a1bc2552b7c63057b5645a5493111"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.39-windows-x64",
+      "name": "remote-control-agent-v0.1.39-windows-x64.zip",
+      "sha256": "e849426efbc28a0386335207974cb5c353c0b4432ea031eac44196d7aecb1055"
+    }
+  ]
+}
