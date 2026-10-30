@@ -41,12 +41,28 @@ public static class DesktopGate505 {
         $draw.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
         $draw.DrawImage($original,0,0,$width,$height)
       } finally { $draw.Dispose() }
-      $stream = New-Object System.IO.MemoryStream
-      try {
-        $scaled.Save($stream,[System.Drawing.Imaging.ImageFormat]::Jpeg)
-        $bytes = $stream.ToArray()
-        if ($bytes.Length -lt 8 -or $bytes.Length -gt 524288) { exit 12 }
-        [pscustomobject]@{
+      # Preserve an immutable 512-KiB output bound while allowing ordinary
+      # high-detail desktops to compress rather than failing at default quality.
+      $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+        Where-Object { $_.FormatID -eq [System.Drawing.Imaging.ImageFormat]::Jpeg.Guid } |
+        Select-Object -First 1
+      if ($null -eq $codec) { exit 12 }
+      $bytes = $null
+      foreach ($quality in @(75L,55L,35L,20L)) {
+        $parameters = New-Object System.Drawing.Imaging.EncoderParameters(1)
+        $stream = New-Object System.IO.MemoryStream
+        try {
+          $parameters.Param[0] = [System.Drawing.Imaging.EncoderParameter]::new(
+            [System.Drawing.Imaging.Encoder]::Quality,[long]$quality)
+          $scaled.Save($stream,$codec,$parameters)
+          if ($stream.Length -ge 8 -and $stream.Length -le 524288) {
+            $bytes = $stream.ToArray()
+            break
+          }
+        } finally { $parameters.Dispose(); $stream.Dispose() }
+      }
+      if ($null -eq $bytes) { exit 12 }
+      [pscustomobject]@{
           data = [Convert]::ToBase64String($bytes)
           width = $width
           height = $height
@@ -56,7 +72,6 @@ public static class DesktopGate505 {
           origin_y = $bounds.Y
           session_id = [System.Diagnostics.Process]::GetCurrentProcess().SessionId
         } | ConvertTo-Json -Compress -Depth 2
-      } finally { $stream.Dispose() }
     } finally { $scaled.Dispose() }
   } finally { $original.Dispose() }
 } catch { exit 15 }

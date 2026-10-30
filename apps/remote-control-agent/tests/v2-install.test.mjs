@@ -962,4 +962,10 @@ test("Windows Computer Use screenshot helper is included in every native staging
   assert.match(packageBuilder, /"windows-capture\.ps1"/);
   assert.match(verifier, /expected\.has\("apps\/remote-control-agent\/scripts\/windows-capture\.ps1"\)/);
   assert.match(helper, /OpenInputDesktop/);
+  assert.match(helper, /ImageCodecInfo.*GetImageEncoders/,
+    "Windows screenshot must select its JPEG encoder explicitly");
+  assert.match(helper, /foreach \(\$quality in @\(75L,55L,35L,20L\)\)/,
+    "JPEG must retry bounded quality settings rather than returning oversized data");
+  assert.match(helper, /\$stream\.Length -ge 8 -and \$stream\.Length -le 524288/,
+    "Only a bounded final frame can be returned");
 });
