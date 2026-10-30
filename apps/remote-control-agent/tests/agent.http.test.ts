@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -171,6 +171,174 @@ test("write_file persists an operation receipt that can be queried after restart
       headers: { "x-device-credential": DEVICE_TOKEN },
     });
     assert.equal((await afterRestart.json() as { state: string }).state, "completed");
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("compatible rewrite stages privately and reports a pre-commit failure without changing the target", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-stage-"));
+  const target = path.join(root, "private.txt");
+  await writeFile(target, "original", { mode: 0o600 });
+  await chmod(target, 0o600);
+  const ownerBefore = await stat(target);
+  let rejectStaged = true;
+  let observed = false;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async (stage, dest) => {
+      if (stage !== "staged" || dest !== target) return;
+      observed = true;
+      assert.equal(await readFile(target, "utf8"), "original");
+      const tempName = (await readdir(root)).find(name => name.includes(".rca-"));
+      assert.ok(tempName, "owned staging file must exist before commit");
+      assert.equal((await stat(path.join(root, tempName))).mode & 0o077, 0);
+      if (rejectStaged) throw Error("controlled pre-commit interruption");
+    },
+  });
+  try {
+    const request = { tool: "write_file", operation_id: "staged-rewrite-1",
+      arguments: { path: target, content: "replacement", mode: "rewrite" } };
+    const failed = await call(agent, request);
+    assert.equal((failed.json as { status: string }).status, "failed");
+    assert.equal(observed, true);
+    assert.equal(await readFile(target, "utf8"), "original");
+    assert.equal(((await call(agent, request)).json as { status: string }).status, "failed");
+    rejectStaged = false;
+    const done = await call(agent, { ...request, operation_id: "staged-rewrite-2" });
+    assert.equal((done.json as { status: string }).status, "completed");
+    assert.equal(await readFile(target, "utf8"), "replacement");
+    const replacedInfo = await stat(target);
+    assert.equal(replacedInfo.mode & 0o777, 0o600);
+    assert.equal(replacedInfo.uid, ownerBefore.uid);
+    assert.equal(replacedInfo.gid, ownerBefore.gid);
+    assert.equal((await readdir(root)).filter((name) => name.includes(".rca-")).length, 0);
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("replace_text rejects source changed during staged edit and retains the newer contents", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-stale-"));
+  const target = path.join(root, "private.txt");
+  await writeFile(target, "before", { mode: 0o600 });
+  await chmod(target, 0o600);
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async (stage, dest) => {
+      if (stage === "staged" && dest === target) await writeFile(target, "newer", "utf8");
+    },
+  });
+  try {
+    const result = await call(agent, { tool: "edit_block", operation_id: "stale-edit-1",
+      arguments: { file_path: target, old_string: "before", new_string: "after", expected_replacements: 1 } });
+    assert.equal((result.json as { status: string }).status, "failed");
+    assert.equal(await readFile(target, "utf8"), "newer");
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("new-file creation is not visible until commit and retains default mode", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-create-"));
+  const target = path.join(root, "new.txt");
+  let stageSeen = false;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async (stage, dest) => {
+      assert.equal(stage, "staged");
+      assert.equal(dest, target);
+      stageSeen = true;
+      assert.equal(existsSync(target), false);
+    },
+  });
+  try {
+    const result = await call(agent, { tool: "write_file", operation_id: "create-staged-1",
+      arguments: { path: target, content: "fully staged", mode: "rewrite" } });
+    assert.equal((result.json as { status: string }).status, "completed");
+    assert.equal(stageSeen, true);
+    assert.equal(await readFile(target, "utf8"), "fully staged");
+    assert.equal((await stat(target)).mode & 0o777, 0o666 & ~process.umask());
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("symlink, hardlink and open-handle rewrites retain legacy inode semantics", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-legacy-"));
+  const physical = path.join(root, "original.txt");
+  const alias = path.join(root, "alias.txt");
+  const hard = path.join(root, "hard.txt");
+  await writeFile(physical, "original", { mode: 0o600 });
+  await chmod(physical, 0o600);
+  await symlink(physical, alias);
+  await link(physical, hard);
+  let staged = false;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async () => { staged = true; },
+  });
+  try {
+    const symlinkWrite = await call(agent, { tool: "write_file", operation_id: "alias-write",
+      arguments: { path: alias, content: "via alias", mode: "rewrite" } });
+    assert.equal((symlinkWrite.json as { status: string }).status, "completed");
+    assert.equal(await readFile(physical, "utf8"), "via alias");
+    assert.equal(staged, false);
+    const hardWrite = await call(agent, { tool: "write_file", operation_id: "hard-write",
+      arguments: { path: physical, content: "via hardlink", mode: "rewrite" } });
+    assert.equal((hardWrite.json as { status: string }).status, "completed");
+    assert.equal(await readFile(hard, "utf8"), "via hardlink");
+    assert.equal(staged, false);
+    const fd = await open(physical, "r");
+    await rm(hard);
+    try {
+      const openWrite = await call(agent, { tool: "write_file", operation_id: "opened-write",
+        arguments: { path: physical, content: "open handle", mode: "rewrite" } });
+      assert.equal((openWrite.json as { status: string }).status, "completed");
+      const bytes = Buffer.alloc(11);
+      await fd.read(bytes, 0, 11, 0);
+      assert.equal(bytes.toString(), "open handle");
+      assert.equal(staged, false);
+    } finally { await fd.close(); }
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("distinct same-path edits cannot silently overwrite a detected newer commit", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-concurrent-"));
+  const target = path.join(root, "private.txt");
+  await writeFile(target, "base", { mode: 0o600 });
+  await chmod(target, 0o600);
+  let staged = 0;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let admissions = 0;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    log: event => {
+      if (event === "operation_admitted" && ++admissions === 2) release();
+    },
+    fileStageForTests: async () => { staged++; await gate; },
+  });
+  try {
+    const edit = (operation_id: string, new_string: string) => call(agent, {
+      tool: "edit_block", operation_id, arguments: {
+        file_path: target, old_string: "base", new_string, expected_replacements: 1,
+      },
+    });
+    const results = await Promise.all([edit("concurrent-a", "one"), edit("concurrent-b", "two")]);
+    assert.equal(staged, 1);
+    assert.deepEqual(results.map(r => (r.json as { status: string }).status).sort(), ["completed", "failed"]);
+    assert.ok(["one", "two"].includes(await readFile(target, "utf8")));
   } finally {
     await agent.close();
     await rm(root, { recursive: true, force: true });
@@ -1412,6 +1580,38 @@ test("a failed post-effect receipt commit returns unknown and cannot replay the 
     assert.equal(await readFile(target, "utf8"), "x");
   } finally {
     failure.enabled = false;
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("an atomic rename followed by uncertain receipt persistence stays unknown across restart", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-atomic-receipt-"));
+  const target = path.join(root, "private.txt");
+  const state = path.join(root, "receipts");
+  await writeFile(target, "before", { mode: 0o600 });
+  await chmod(target, 0o600);
+  let failCommit = true;
+  let agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: state,
+    receiptFaultForTests: phase => phase === "commit" && failCommit &&
+      readFileSync(target, "utf8") === "after",
+  });
+  const request = { tool: "write_file", operation_id: "atomic-commit-unknown",
+    arguments: { path: target, content: "after", mode: "rewrite" } };
+  try {
+    const first = await call(agent, request);
+    assert.equal((first.json as { status: string }).status, "unknown");
+    assert.equal(await readFile(target, "utf8"), "after");
+    failCommit = false;
+    assert.equal(((await call(agent, request)).json as { status: string }).status, "unknown");
+    await agent.close();
+    agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: state });
+    assert.equal(((await call(agent, request)).json as { status: string }).status, "unknown");
+    assert.equal(await readFile(target, "utf8"), "after");
+  } finally {
+    failCommit = false;
     await agent.close();
     await rm(root, { recursive: true, force: true });
   }

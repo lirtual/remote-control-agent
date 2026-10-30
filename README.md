@@ -148,6 +148,31 @@ remain available for exceptional operator diagnostics.
 - `rca status` reports local state and does not independently prove remote signed-WSS connectivity. Verify that via authenticated MCP.
 - Local uninstall preserves identity and SQLite receipts and **does not revoke** the remote grant. Revoke the device separately through authenticated MCP.
 
+## File mutation reliability
+
+`write_file(mode=rewrite)` remains an explicit overwrite, and `append`
+retains its existing behavior. On supported Linux filesystems, a narrowly
+eligible private regular file (single link, owner-owned mode 0600, compatible
+parent) is staged in the same directory then atomically replaced; creation in
+an owner-private directory is staged then linked exclusively, preserving
+the normal new-file permission mode. Staging errors do not silently downgrade
+to a second direct write. Symlinks, hardlinks, paths with detectable open
+Agent descriptors, non-private permission modes or unverified metadata,
+native Windows ACL/sharing cases and
+other unverified targets retain legacy direct writing, including possible
+partial contents after interruption. This does not guarantee that every
+external open handle or filesystem attribute is observable.
+
+`replace_text` keeps UTF-8 and exact-count validation and rejects source
+changes it can detect before write/commit. This is best-effort revalidation,
+not cross-process compare-and-swap: external writers can still race the final
+check, and an atomic rename is not a power-loss durability guarantee. A
+pre-commit staging failure proven not to affect the target is reported as a
+definite failure; an unconfirmed commit or legacy partial-write error remains
+`unknown`, protected by the existing durable operation receipt. Staged
+temporary files are operation-owned and cleaned up on normal exits where
+safe; a crashed process can leave an orphan without proving target state.
+
 ## Release and verification
 
 Use the existing Linux x64/ARM64 and native Windows x64 CI to validate each
