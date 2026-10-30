@@ -178,56 +178,50 @@ test("write_file persists an operation receipt that can be queried after restart
 });
 
 
-test("compatible rewrite stages privately and reports a pre-commit failure without changing the target", async () => {
+test("compatible create stages privately and failed pre-commit leaves destination absent", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-stage-"));
-  const target = path.join(root, "private.txt");
-  await writeFile(target, "original", { mode: 0o600 });
-  await chmod(target, 0o600);
-  const ownerBefore = await stat(target);
+  const target = path.join(root, "new.txt");
   let rejectStaged = true;
   let observed = false;
   const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
     fileStageForTests: async (stage, dest) => {
       if (stage !== "staged" || dest !== target) return;
       observed = true;
-      assert.equal(await readFile(target, "utf8"), "original");
+      assert.equal(existsSync(target), false);
       const tempName = (await readdir(root)).find(name => name.includes(".rca-"));
-      assert.ok(tempName, "owned staging file must exist before commit");
+      assert.ok(tempName, "operation-owned staging file must exist before commit");
       assert.equal((await stat(path.join(root, tempName))).mode & 0o077, 0);
       if (rejectStaged) throw Error("controlled pre-commit interruption");
     },
   });
   try {
-    const request = { tool: "write_file", operation_id: "staged-rewrite-1",
-      arguments: { path: target, content: "replacement", mode: "rewrite" } };
+    const request = { tool: "write_file", operation_id: "staged-create-1",
+      arguments: { path: target, content: "complete", mode: "rewrite" } };
     const failed = await call(agent, request);
     assert.equal((failed.json as { status: string }).status, "failed");
     assert.equal(observed, true);
-    assert.equal(await readFile(target, "utf8"), "original");
+    assert.equal(existsSync(target), false);
     assert.equal(((await call(agent, request)).json as { status: string }).status, "failed");
     rejectStaged = false;
-    const done = await call(agent, { ...request, operation_id: "staged-rewrite-2" });
+    const done = await call(agent, { ...request, operation_id: "staged-create-2" });
     assert.equal((done.json as { status: string }).status, "completed");
-    assert.equal(await readFile(target, "utf8"), "replacement");
-    const replacedInfo = await stat(target);
-    assert.equal(replacedInfo.mode & 0o777, 0o600);
-    assert.equal(replacedInfo.uid, ownerBefore.uid);
-    assert.equal(replacedInfo.gid, ownerBefore.gid);
-    assert.equal((await readdir(root)).filter((name) => name.includes(".rca-")).length, 0);
+    assert.equal(await readFile(target, "utf8"), "complete");
+    assert.equal((await readdir(root)).filter(name => name.includes(".rca-")).length, 0);
   } finally {
     await agent.close();
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("eligible private rewrite preserves mode despite a restrictive process umask", async () => {
+test("existing private rewrite preserves inode and mode under restrictive umask", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-umask-"));
   const target = path.join(root, "private.txt");
   await writeFile(target, "before", { mode: 0o600 });
   await chmod(target, 0o600);
   const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts") });
+  const before = await stat(target);
   const originalUmask = process.umask();
   try {
     process.umask(0o200);
@@ -235,7 +229,9 @@ test("eligible private rewrite preserves mode despite a restrictive process umas
       arguments: { path: target, content: "after", mode: "rewrite" } });
     assert.equal((result.json as { status: string }).status, "completed");
     assert.equal(await readFile(target, "utf8"), "after");
-    assert.equal((await stat(target)).mode & 0o777, 0o600);
+    const after = await stat(target);
+    assert.equal(after.mode & 0o777, 0o600);
+    assert.equal(after.ino, before.ino, "existing inode must not be replaced");
   } finally {
     process.umask(originalUmask);
     await agent.close();
@@ -251,7 +247,7 @@ test("replace_text rejects source changed during staged edit and retains the new
   await chmod(target, 0o600);
   const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
     fileStageForTests: async (stage, dest) => {
-      if (stage === "staged" && dest === target) await writeFile(target, "newer", "utf8");
+      if (stage === "precommit" && dest === target) await writeFile(target, "newer", "utf8");
     },
   });
   try {
@@ -349,7 +345,7 @@ test("distinct same-path edits cannot silently overwrite a detected newer commit
     log: event => {
       if (event === "operation_admitted" && ++admissions === 2) release();
     },
-    fileStageForTests: async () => { staged++; await gate; },
+    fileStageForTests: async (stage) => { if (stage === "precommit") { staged++; await gate; } },
   });
   try {
     const edit = (operation_id: string, new_string: string) => call(agent, {
@@ -1608,13 +1604,11 @@ test("a failed post-effect receipt commit returns unknown and cannot replay the 
 });
 
 
-test("an atomic rename followed by uncertain receipt persistence stays unknown across restart", async () => {
+test("an exclusive staged create followed by uncertain receipt stays unknown across restart", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-atomic-receipt-"));
   const target = path.join(root, "private.txt");
   const state = path.join(root, "receipts");
-  await writeFile(target, "before", { mode: 0o600 });
-  await chmod(target, 0o600);
   let failCommit = true;
   let agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: state,
     receiptFaultForTests: phase => phase === "commit" && failCommit &&

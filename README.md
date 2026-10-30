@@ -151,16 +151,16 @@ remain available for exceptional operator diagnostics.
 ## File mutation reliability
 
 `write_file(mode=rewrite)` remains an explicit overwrite, and `append`
-retains its existing behavior. On supported Linux filesystems, a narrowly
-eligible private regular file (single link, owner-owned mode 0600, compatible
-parent) is staged in the same directory then atomically replaced; creation in
-an owner-private directory is staged then linked exclusively, preserving
-the normal new-file permission mode. Staging errors do not silently downgrade
-to a second direct write. Symlinks, hardlinks, paths with detectable open
-Agent descriptors, non-private permission modes or unverified metadata,
-native Windows ACL/sharing cases and
-other unverified targets retain legacy direct writing, including possible
-partial contents after interruption. This does not guarantee that every
+retains its existing behavior. On verified Linux filesystems, creation in an owner-private
+directory is staged and linked exclusively, preserving the normal new-file
+permission mode and preventing partially visible new files. Existing files
+retain their legacy in-place rewrite semantics: a private 0600 regular file
+can still carry xattrs, ACLs, active external handles or inode observers that
+cannot be safely detected with the current built-in APIs. Replacing its inode
+would silently discard metadata or change those observers. Staging errors do not silently downgrade
+to a second direct write. Symlinks, hardlinks, existing files (including files with open handles),
+native Windows ACL/sharing cases and other unverified targets retain legacy
+direct writing, including possible partial contents after interruption. This does not guarantee that every
 external open handle or filesystem attribute is observable.
 
 `replace_text` keeps UTF-8 and exact-count validation and rejects source

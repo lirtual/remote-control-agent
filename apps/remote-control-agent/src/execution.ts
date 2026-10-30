@@ -36,7 +36,7 @@ export interface AgentExecutionOptions {
   /** Local-only storage error probe, never routed through MCP. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
   /** Local-only staged-write interruption and race probe. */
-  fileStageForTests?: (stage: "staged", target: string) => Promise<void>;
+  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
   /** Explicit operator-verified historical backup, never selected by remote callers. */
   receiptHistoricalBackupPath?: string;
 }

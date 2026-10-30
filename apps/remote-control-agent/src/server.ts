@@ -61,7 +61,7 @@ export interface StartAgentOptions {
   /** Local-only failure injection for existing Agent HTTP tests. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
   /** Local-only staged-write probe for authenticated integration tests. */
-  fileStageForTests?: (stage: "staged", target: string) => Promise<void>;
+  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
   /** Operator-verified historical JSON snapshot for one-time SQLite migration. */
   receiptHistoricalBackupPath?: string;
 }
