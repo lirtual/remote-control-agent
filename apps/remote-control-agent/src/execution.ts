@@ -36,7 +36,7 @@ export interface AgentExecutionOptions {
   /** Local-only storage error probe, never routed through MCP. */
   receiptFaultForTests?: (phase: "begin" | "commit") => boolean;
   /** Local-only staged-write interruption and race probe. */
-  fileStageForTests?: (stage: "staged" | "precommit", target: string) => Promise<void>;
+  fileStageForTests?: (stage: "staged" | "precommit" | "postcommit", target: string) => Promise<void>;
   /** Explicit operator-verified historical backup, never selected by remote callers. */
   receiptHistoricalBackupPath?: string;
 }
@@ -132,7 +132,10 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       if (tool === "write_file") {
         const write = args as NonNullable<ReturnType<typeof parseLocalWriteFile>>;
         if (write.mode === "append") await appendFile(write.path, write.content, "utf8");
-        else await rewriteFile(write.path, write.content, { fileStageForTests: options.fileStageForTests });
+        else await rewriteFile(write.path, write.content, {
+          fileStageForTests: options.fileStageForTests,
+          onCleanupFailure: () => emit(log, "file_temp_cleanup_failed"),
+        });
       } else if (tool === "create_directory") {
         await mkdir((args as NonNullable<ReturnType<typeof parseLocalCreateDirectory>>).path);
       } else if (tool === "edit_block") {
@@ -155,6 +158,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         }
         await rewriteFile(edit.filePath, original.split(edit.oldString).join(edit.newString), {
           expectedOriginal: originalBytes, fileStageForTests: options.fileStageForTests,
+          onCleanupFailure: () => emit(log, "file_temp_cleanup_failed"),
         });
       } else if (tool === "delete_file") {
         const target = (args as NonNullable<ReturnType<typeof parseLocalDeleteFile>>).path;
