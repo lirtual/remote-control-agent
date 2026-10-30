@@ -76,9 +76,10 @@ export async function rewriteFile(
     try {
       owned = await handle.stat();
       await handle.writeFile(content, "utf8");
+      // The test seam observes a fully written, still-private temporary file.
+      await options.fileStageForTests?.("staged", target);
       await handle.chmod(0o666 & ~process.umask());
     } finally { await handle.close(); }
-    await options.fileStageForTests?.("staged", target);
     // The exclusive link is the final authority if another process created
     // the destination after our check. Never retry a failed link as overwrite.
     try {
