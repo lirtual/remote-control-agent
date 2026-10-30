@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.37",
+  "source_sha": "104c231dc243bf8f0633783a6192eca5bf2bc05f",
+  "candidate_run_id": 41046587442,
+  "release_title": "Remote Control Agent v0.1.37 — file mutation reliability (Spec #539)",
+  "release_notes": ".github/release-notes/v0.1.37.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.37-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.37-linux-x64-glibc.tar.gz",
+      "sha256": "2770521c80c195e08de50f837424391f1ee3070114abc66e59d8ae72c6b0de6e"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.37-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.37-linux-arm64-glibc.tar.gz",
+      "sha256": "235e7058b220ea8a3ec8794c13d7e5c4df50e3b153b8044dbd70272b1b37c5e3"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.37-windows-x64",
+      "name": "remote-control-agent-v0.1.37-windows-x64.zip",
+      "sha256": "01594be409c3b05f3501d13cd89fe8e44ec9558a678f70bd1b174a2bafbc2202"
+    }
+  ]
+}
