@@ -4,9 +4,9 @@
  * transport with an explicit capability grant may invoke executeTool().
  * T02 intentionally does not connect this engine to unauthenticated v2 WSS.
  */
-import { appendFile, link, lstat, mkdir, readFile, unlink } from "node:fs/promises";
+import { appendFile, link, lstat, mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
-import { NoTargetEffectError, rewriteFile } from "./file-rewrite.ts";
+import { NoTargetEffectError, rewriteFile, type FileIdentity } from "./file-rewrite.ts";
 import {
   parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock,
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
@@ -88,16 +88,17 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   // Queue only local file mutations at their resolved path, not all commands.
   const fileMutationTails = new Map<string, Promise<void>>();
   async function withFileMutation<T>(filePath: string, action: () => Promise<T>): Promise<T> {
-    const previous = fileMutationTails.get(filePath);
+    const key = path.resolve(filePath);
+    const previous = fileMutationTails.get(key);
     let release!: () => void;
     const tail = new Promise<void>(resolve => { release = resolve; });
-    fileMutationTails.set(filePath, tail);
+    fileMutationTails.set(key, tail);
     try {
       if (previous) await previous;
       return await action();
     } finally {
       release();
-      if (fileMutationTails.get(filePath) === tail) fileMutationTails.delete(filePath);
+      if (fileMutationTails.get(key) === tail) fileMutationTails.delete(key);
     }
   }
   let activeCalls = 0;
@@ -140,9 +141,23 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
         await mkdir((args as NonNullable<ReturnType<typeof parseLocalCreateDirectory>>).path);
       } else if (tool === "edit_block") {
         const edit = args as NonNullable<ReturnType<typeof parseLocalEditBlock>>;
-        const originalBytes = await readFile(edit.filePath).catch(() => {
+        const source = await open(edit.filePath, "r").catch(() => {
           throw new NoTargetEffectError("Could not read original file.");
         });
+        let originalBytes: Buffer;
+        let originalIdentity: FileIdentity;
+        try {
+          const before = await source.stat();
+          originalBytes = await source.readFile();
+          const after = await source.stat();
+          if (before.dev !== after.dev || before.ino !== after.ino ||
+              before.size !== after.size || before.mtimeMs !== after.mtimeMs ||
+              before.ctimeMs !== after.ctimeMs)
+            throw new NoTargetEffectError("Source changed while reading.");
+          originalIdentity = { dev: before.dev, ino: before.ino };
+        } catch {
+          throw new NoTargetEffectError("Could not read stable original file.");
+        } finally { await source.close().catch(() => undefined); }
         const original = Buffer.from(originalBytes).toString("utf8");
         if (!Buffer.from(original, "utf8").equals(originalBytes)) {
           await receipts.update(id, "failed", "The file is not valid UTF-8 text.", undefined, true);
@@ -157,7 +172,8 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
           return await receipts.get(id) ?? undefined;
         }
         await rewriteFile(edit.filePath, original.split(edit.oldString).join(edit.newString), {
-          expectedOriginal: originalBytes, fileStageForTests: options.fileStageForTests,
+          expectedOriginal: originalBytes, expectedIdentity: originalIdentity,
+          fileStageForTests: options.fileStageForTests,
           onCleanupFailure: () => emit(log, "file_temp_cleanup_failed"),
         });
       } else if (tool === "delete_file") {

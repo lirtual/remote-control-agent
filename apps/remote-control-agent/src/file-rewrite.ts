@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
-  access, link, lstat, open, readFile, realpath, statfs, unlink,
+  access, link, lstat, open, realpath, statfs, unlink,
 } from "node:fs/promises";
 import path from "node:path";
 
@@ -32,17 +32,31 @@ async function canStageNewFile(target: string): Promise<boolean> {
   } catch { return false; }
 }
 
+export interface FileIdentity { dev: number; ino: number }
+
 export interface FileRewriteOptions {
   expectedOriginal?: Buffer;
+  expectedIdentity?: FileIdentity;
   /** Local integration-test probes only, never passed over MCP. */
   fileStageForTests?: (stage: "staged" | "precommit" | "postcommit", target: string) => Promise<void>;
   /** Optional non-sensitive diagnostic; cleanup must not change target outcome. */
   onCleanupFailure?: () => void;
 }
 
-async function sourceUnchanged(target: string, expectedOriginal: Buffer): Promise<boolean> {
-  try { return Buffer.from(await readFile(target)).equals(expectedOriginal); }
-  catch { return false; }
+async function sourceUnchanged(
+  target: string, expectedOriginal: Buffer, expectedIdentity?: FileIdentity,
+): Promise<boolean> {
+  let source: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    source = await open(target, "r");
+    const current = await source.stat();
+    // Some platforms report inode 0; keep the existing byte check there.
+    if (expectedIdentity && expectedIdentity.ino !== 0 && current.ino !== 0 &&
+        (current.dev !== expectedIdentity.dev || current.ino !== expectedIdentity.ino))
+      return false;
+    return Buffer.from(await source.readFile()).equals(expectedOriginal);
+  } catch { return false; }
+  finally { await source?.close().catch(() => undefined); }
 }
 
 /** Stage only compatible new files; legacy rewrites preserve existing inodes. */
@@ -54,7 +68,7 @@ export async function rewriteFile(
     // not compare-and-swap against external writers.
     if (options.expectedOriginal) {
       await options.fileStageForTests?.("precommit", target);
-      if (!(await sourceUnchanged(target, options.expectedOriginal)))
+      if (!(await sourceUnchanged(target, options.expectedOriginal, options.expectedIdentity)))
         throw new NoTargetEffectError("Source changed before edit.");
     }
     let handle: Awaited<ReturnType<typeof open>>;

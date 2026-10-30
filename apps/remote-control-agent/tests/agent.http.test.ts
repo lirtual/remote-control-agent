@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { chmod, link, mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -327,6 +327,33 @@ test("replace_text rejects source changed during staged edit and retains the new
 });
 
 
+test("replace_text rejects same-content inode replacement before writing", async () => {
+  if (process.platform !== "linux") return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-identity-"));
+  const target = path.join(root, "source.txt");
+  await writeFile(target, "before");
+  let replaced = false;
+  const agent = await startAgent({ deviceToken: DEVICE_TOKEN, receiptDirectory: path.join(root, "receipts"),
+    fileStageForTests: async (stage, dest) => {
+      if (stage !== "precommit" || dest !== target) return;
+      await rename(target, path.join(root, "old-inode.txt"));
+      await writeFile(target, "before");
+      replaced = true;
+    },
+  });
+  try {
+    const result = await call(agent, { tool: "edit_block", operation_id: "inode-replaced",
+      arguments: { file_path: target, old_string: "before", new_string: "after", expected_replacements: 1 } });
+    assert.equal(replaced, true);
+    assert.equal((result.json as { status: string }).status, "failed");
+    assert.equal(await readFile(target, "utf8"), "before");
+    assert.equal(await readFile(path.join(root, "old-inode.txt"), "utf8"), "before");
+  } finally {
+    await agent.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("new-file creation is not visible until commit and retains default mode", async () => {
   if (process.platform !== "linux") return;
   const root = await mkdtemp(path.join(os.tmpdir(), "remote-control-create-"));
@@ -413,12 +440,13 @@ test("distinct same-path edits cannot silently overwrite a detected newer commit
     fileStageForTests: async (stage) => { if (stage === "precommit") { staged++; await gate; } },
   });
   try {
-    const edit = (operation_id: string, new_string: string) => call(agent, {
+    const edit = (operation_id: string, new_string: string, filePath = target) => call(agent, {
       tool: "edit_block", operation_id, arguments: {
-        file_path: target, old_string: "base", new_string, expected_replacements: 1,
+        file_path: filePath, old_string: "base", new_string, expected_replacements: 1,
       },
     });
-    const results = await Promise.all([edit("concurrent-a", "one"), edit("concurrent-b", "two")]);
+    const results = await Promise.all([edit("concurrent-a", "one"),
+      edit("concurrent-b", "two", root + "/./private.txt")]);
     assert.equal(staged, 1);
     assert.deepEqual(results.map(r => (r.json as { status: string }).status).sort(), ["completed", "failed"]);
     assert.ok(["one", "two"].includes(await readFile(target, "utf8")));
