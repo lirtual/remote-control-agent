@@ -81,7 +81,7 @@ export function buildWindowsPreview(args) {
   }
   copyFileSync(args.nodeBin, path.join(stage, "bin/node.exe"));
   copyFileSync(args.backgroundBin, path.join(stage, "bin/rca-background.exe"));
-  const modules = runtimeSources(["windows-v2.ts"]);
+  const modules = runtimeSources(["windows-v2.ts", "session-rca-windows.ts"]);
   const hashes = {
     "bin/node.exe": EXPECTED_NODE_SHA256,
     "bin/rca-background.exe": digest(launcher),
@@ -112,7 +112,7 @@ export function buildWindowsPreview(args) {
   const installerBytes = readFileSync(path.join(root, "..", "..", "install.ps1"));
   writeFileSync(path.join(stage, stageInstaller), installerBytes, { mode: 0o600 });
   hashes[stageInstaller] = digest(installerBytes);
-  const scripts = ["windows-private-store.ps1", "windows-user-task.ps1", "windows-capture.ps1", "verify-windows-preview.mjs"];
+  const scripts = ["windows-private-store.ps1", "windows-session-private-store.ps1", "windows-user-task.ps1", "windows-capture.ps1", "verify-windows-preview.mjs"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
     const bytes = readFileSync(path.join(root, "scripts", name));
