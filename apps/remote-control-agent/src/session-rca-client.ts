@@ -1,5 +1,6 @@
 /** No installer/pairing prompt: registration request for a reviewed physical Runner only. */
 import {randomBytes} from 'node:crypto';
+import {spawn} from 'node:child_process';
 import {signSessionEnrollmentNonce, validateSessionDeviceIdentity,
   type SessionDeviceIdentity} from './session-device-identity.ts';
 
@@ -38,4 +39,43 @@ export async function registerSessionRcaDevice(
    !['registered','already_registered'].includes(String(result.status)))
    throw Error('Invalid Session enrollment result.');
  return {device_id:result.device_id,expires_at:result.expires_at as number};
+}
+
+// The OIDC-enabled registration process exits immediately after spawning one
+// credential-free transport process. Never carry the Runner token/request URL,
+// arbitrary repository variables, or secrets into a long-lived Shell-capable Agent.
+const SESSION_TRANSPORT_ENV = [
+  'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT', 'GITHUB_WORKFLOW', 'GITHUB_RUN_ID',
+  'GITHUB_RUN_ATTEMPT', 'GITHUB_REPOSITORY', 'ATTEMPT_ID', 'RUNNER_TEMP',
+  'RUNNER_TRACKING_ID', 'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL',
+  'LANG', 'LC_ALL', 'TMPDIR', 'TMP', 'TEMP',
+  'SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT', 'HOMEDRIVE', 'HOMEPATH',
+  'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  'ProgramFiles', 'ProgramFiles(x86)', 'PROCESSOR_ARCHITECTURE',
+  'NUMBER_OF_PROCESSORS',
+] as const;
+
+export function sessionTransportEnvironment(source:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
+  const clean:NodeJS.ProcessEnv={};
+  for (const key of SESSION_TRANSPORT_ENV) {
+    if (typeof source[key]==='string') clean[key]=source[key];
+  }
+  return clean;
+}
+
+export async function spawnSessionTransport(
+ entry:string,deviceId:string,expiresAt:number,source:NodeJS.ProcessEnv,
+):Promise<void>{
+ if(!entry||!UUID.test(deviceId)||!Number.isSafeInteger(expiresAt)||
+   expiresAt<=Date.now()||expiresAt>Date.now()+300*60_000)
+   throw Error('Invalid credential-free transport launch.');
+ const child=spawn(process.execPath,[entry,'--session-transport',deviceId,String(expiresAt)],{
+   cwd:process.cwd(),env:sessionTransportEnvironment(source),
+   stdio:'ignore',windowsHide:true,
+ });
+ await new Promise<void>((resolve,reject)=>{
+   child.once('spawn',()=>resolve());
+   child.once('error',reject);
+ });
+ child.unref();
 }

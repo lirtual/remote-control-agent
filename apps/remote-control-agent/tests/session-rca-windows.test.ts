@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {windowsRunnerSessionEnvironment} from '../src/session-rca-windows.ts';
+import {windowsRunnerSessionEnvironment,windowsRunnerTransportEnvironment} from '../src/session-rca-windows.ts';
 
 const runner={
  GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_WORKFLOW:'windows',
@@ -25,4 +25,13 @@ test('Windows Session entry requires exact GitHub-hosted physical Runner evidenc
   {ACTIONS_ID_TOKEN_REQUEST_TOKEN:''},
  ])assert.throws(()=>windowsRunnerSessionEnvironment({...runner,...override},'win32'));
  assert.throws(()=>windowsRunnerSessionEnvironment(runner,'linux'));
+});
+
+test('Windows credential-free transport verifies Runner context without OIDC',()=>{
+ const safe={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',
+   GITHUB_WORKFLOW:'windows',GITHUB_RUN_ID:'1234',GITHUB_RUN_ATTEMPT:'1',
+   ATTEMPT_ID:'123e4567-e89b-42d3-a456-426614174004',RUNNER_TEMP:'C:\\Temp'};
+ assert.equal(windowsRunnerTransportEnvironment(safe,'win32').physical.github_run_id,1234);
+ assert.throws(()=>windowsRunnerSessionEnvironment(safe,'win32'));
+ assert.throws(()=>windowsRunnerTransportEnvironment({...safe,GITHUB_RUN_ATTEMPT:'0'},'win32'));
 });

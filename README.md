@@ -191,3 +191,17 @@ through its existing manual workflow. A source commit, Release or Worker
 rollout never updates installed devices; after an explicitly approved local
 upgrade, verify the original device identity, signed connection, service/task
 state and retained SQLite operation receipts.
+
+### Spec #62 — job-scoped Session Agent credential isolation (follow-up candidate)
+
+For GitHub-hosted Ubuntu and Windows Sessions, the optional RCA bootstrap
+starts a short-lived OIDC-enabled registration process. After the existing
+signed Ed25519 device-ID recovery, that process starts the one job-scoped,
+long-lived WSS Agent with an explicit environment allowlist (Runner tracking,
+physical Attempt identity, private directory and OS process essentials).
+GitHub OIDC request credentials, repository secrets, arbitrary Runner
+variables and NODE_OPTIONS are never inherited by that long-lived process.
+Its transport entrypoint rechecks the same private identity and server-signed
+device ID. This adds no persistent service, device identity or Worker.
+This change is source-only until a separately authorized immutable Agent
+Release and both-OS live validation.
