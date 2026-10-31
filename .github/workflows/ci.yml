@@ -159,6 +159,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows process integration tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
+          node --experimental-strip-types --test tests/session-rca-windows.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Session runner context tests failed' }
       - name: New public PowerShell installer parses under Windows without executing
         shell: pwsh
         run: |
@@ -171,6 +173,13 @@ jobs:
             throw ('New public installer has Windows PowerShell syntax errors: ' +
               ($parseErrors | ForEach-Object { $_.Message } | Out-String))
           }
+          # The Session-only ACL helper is bundled but never executed by this parser gate.
+          $sessionErrors = $null
+          $sessionTokens = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'apps/remote-control-agent/scripts/windows-session-private-store.ps1').Path,
+            [ref]$sessionTokens, [ref]$sessionErrors)
+          if ($sessionErrors.Count -ne 0) { throw 'Windows Session ACL helper syntax invalid' }
           if ((Get-Content -Raw 'install.ps1') -notmatch 'PinnedReleaseSha256') {
             throw 'Public Windows installer must require a reviewed immutable asset hash'
           }
