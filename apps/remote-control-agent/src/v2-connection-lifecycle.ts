@@ -4,7 +4,8 @@
  * All supported file, Shell and session tools are available after pairing.
  * Hibernation heartbeat responses do not wake the DO.
  */
-import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket } from "./v2-session-client.ts";
+import { DeviceSessionRejectedError, openAuthenticatedDeviceSocket,
+  type SocketConnectionStage } from "./v2-session-client.ts";
 import { collectDeviceInfo } from "./device-info.ts";
 import { parseLocalRead, parseReadMultiple, parseListDirectory, parseFileInfo, parseSearchStart, parseSearchSessionId, parseLocalWriteFile, parseLocalCreateDirectory, parseLocalEditBlock, parseLocalMoveFile, parseLocalDeleteFile, parseOperationId } from "./local-read.ts";
 import { createAgentExecutionEngine, type AgentExecutionEngine } from "./execution.ts";
@@ -339,6 +340,7 @@ export async function maintainAuthenticatedDeviceSession(
     receiptDirectory?: string;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
+    onConnectionStage?: (stage: SocketConnectionStage) => void;
   } = {},
 ): Promise<void> {
   const delay = options.wait ?? ((ms: number, abort: AbortSignal) =>
@@ -366,7 +368,7 @@ export async function maintainAuthenticatedDeviceSession(
   while (!signal.aborted) {
     try {
       const connection = await openAuthenticatedDeviceSocket(
-        baseAddress, keyPath, options.send, options.makeSocket, signal,
+        baseAddress, keyPath, options.send, options.makeSocket, signal, options.onConnectionStage,
       );
       if (signal.aborted) { connection.socket.close(); break; }
       if (authenticatedDeviceId && authenticatedDeviceId !== connection.device_id) throw new DeviceSessionRejectedError();

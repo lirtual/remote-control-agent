@@ -7,7 +7,7 @@ import {newSessionDeviceIdentity,validateSessionDeviceIdentity,
   assertSessionPhysicalAttempt,type SessionPhysicalAttempt,type SessionDeviceIdentity}
   from './session-device-identity.ts';
 const SCRIPT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..','scripts','windows-session-private-store.ps1');
-export type SessionFileName='identity.json'|'v2-identity.pem'|'v2-identity.pem.device-id'|'receipts';
+export type SessionFileName='identity.json'|'v2-identity.pem'|'v2-identity.pem.device-id'|'receipts'|'transport-stage';
 
 /** Never print native errors; command arguments contain paths, not private keys. */
 export function checkWindowsSessionAcl(action:'Init'|'Check'|'Seal',directory:string,file?:SessionFileName):void{

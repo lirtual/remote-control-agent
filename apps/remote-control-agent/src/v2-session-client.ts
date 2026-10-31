@@ -110,10 +110,16 @@ export async function recoverDeviceId(
   return approvedId;
 }
 
+/** Fixed, credential-free connection checkpoints for job-private diagnostics. */
+export type SocketConnectionStage =
+  "challenge_start" | "challenge_ok" | "challenge_rejected" |
+  "wss_start" | "wss_open" | "wss_error" | "wss_policy" | "wss_timeout";
+
 export async function openAuthenticatedDeviceSocket(
   baseAddress: string, keyPath: string, send: typeof fetch = fetch,
   makeSocket: (url: string, protocols: string[]) => WebSocket = (url, protocols) => new WebSocket(url, protocols),
   signal?: AbortSignal,
+  onStage?: (stage: SocketConnectionStage) => void,
 ): Promise<{ device_id: string; socket: WebSocket }> {
   signal?.throwIfAborted();
   const base = endpoint(baseAddress);
@@ -125,16 +131,20 @@ export async function openAuthenticatedDeviceSocket(
     deviceId = await recoverDeviceId(baseAddress, keyPath, send, signal);
   }
   if (!UUID.test(deviceId)) throw new DeviceSessionRejectedError("Invalid local device ID.");
+  onStage?.("challenge_start");
   const challenged = await postJson(base, "/agent/session/challenge", { device_id: deviceId }, send, signal);
+  if ([401,403,404].includes(challenged.status)) onStage?.("challenge_rejected");
   rejectPermanentStatus(challenged.status);
   if (challenged.status !== 200 || challenged.result.device_id !== deviceId ||
       !/^[A-Za-z0-9_-]{24}$/.test(challenged.result.nonce)) {
     throw new Error("Could not obtain a valid session challenge.");
   }
+  onStage?.("challenge_ok");
   const { proof } = signedSessionProof(privatePem, deviceId, challenged.result.nonce);
   const wsUrl = new URL("/agent/connect/" + deviceId, base);
   wsUrl.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   signal?.throwIfAborted();
+  onStage?.("wss_start");
   const socket = makeSocket(wsUrl.toString(), ["rc-v2", "rcv2." + challenged.result.nonce + "." + proof]);
   await new Promise<void>((resolve, reject) => {
     let finished = false;
@@ -165,18 +175,20 @@ export async function openAuthenticatedDeviceSocket(
         return;
       }
       finished = true;
+      onStage?.("wss_open");
       cleanup();
       resolve();
     };
     const onAbort = () => fail("WSS login aborted.");
-    const onError = () => fail("WSS authentication failed.");
+    const onError = () => { onStage?.("wss_error"); fail("WSS authentication failed."); };
     const onClose = (event: Event) => {
       // A policy close can race the browser/Node OPEN event. Treat an early
       // 1008 exactly like a post-open policy rejection, not a retryable outage.
       const policyDenied = (event as CloseEvent).code === 1008;
+      onStage?.(policyDenied ? "wss_policy" : "wss_error");
       fail("WSS authentication was rejected.", policyDenied);
     };
-    const timeout = setTimeout(() => fail("WSS login timed out."), 10_000);
+    const timeout = setTimeout(() => { onStage?.("wss_timeout"); fail("WSS login timed out."); }, 10_000);
     socket.addEventListener("open", onOpen);
     socket.addEventListener("error", onError);
     socket.addEventListener("close", onClose);

@@ -4,7 +4,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Init','Check','Seal')][string]$Action,
   [Parameter(Mandatory=$true)][string]$Directory,
-  [ValidateSet('identity.json','v2-identity.pem','v2-identity.pem.device-id','receipts')][string]$FileName
+  [ValidateSet('identity.json','v2-identity.pem','v2-identity.pem.device-id','receipts','transport-stage')][string]$FileName
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -76,7 +76,7 @@ if($Action -eq 'Seal'){
   else{[IO.File]::SetAccessControl($file,(New-PrivateAcl $false))}
   Assert-Private $file $isDirectory
 }
-foreach($name in @('identity.json','v2-identity.pem','v2-identity.pem.device-id','receipts')){
+foreach($name in @('identity.json','v2-identity.pem','v2-identity.pem.device-id','receipts','transport-stage')){
   $file=[IO.Path]::Combine($expected,$name)
   if([IO.File]::Exists($file) -or [IO.Directory]::Exists($file)){
     Assert-Private $file ($name -eq 'receipts')
