@@ -99,3 +99,60 @@ test('fixed credential-free connection stages identify WSS handshake and policy 
   assert.deepEqual(denied,['challenge_start','challenge_rejected']);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+
+
+// Regression: the previous fixture tested ACL operations in isolation using
+// the entire CI environment. Exercise the complete identity/PEM/sidecar path
+// through separate native Windows processes, using the actual OIDC-stripped
+// transport allowlist and no network or real GitHub credentials.
+test('native Windows Session identity recovers in the exact no-OIDC child environment',
+ {skip:process.platform!=='win32'}, async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const {mkdtemp,rm}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const path=await import('node:path');
+ const {pathToFileURL}=await import('node:url');
+ const {sessionTransportEnvironment}=await import('../src/session-rca-client.ts');
+ const root=await mkdtemp(path.join(tmpdir(),'rca-session-child-native-'));
+ const attempt='123e4567-e89b-42d3-a456-426614174004';
+ const source:NodeJS.ProcessEnv={...process.env,
+  GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',
+  GITHUB_WORKFLOW:'windows',GITHUB_RUN_ID:'1234',GITHUB_RUN_ATTEMPT:'2',
+  ATTEMPT_ID:attempt,RUNNER_TEMP:root,
+  ACTIONS_ID_TOKEN_REQUEST_URL:'https://example.test/synthetic-no-network',
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN:'SYNTHETIC_DO_NOT_FORWARD',
+ };
+ const childEnv=sessionTransportEnvironment(source);
+ assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_URL,undefined);
+ assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN,undefined);
+ const url=pathToFileURL(path.resolve('src/session-windows-identity-store.ts')).href;
+ const program=`
+  import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,
+   checkWindowsSessionAcl} from ${JSON.stringify(url)};
+  const physical={attempt_id:process.env.ATTEMPT_ID,
+   github_run_id:Number(process.env.GITHUB_RUN_ID),
+   github_run_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),workflow_name:'windows'};
+  const {dir,identity}=await loadOrCreateWindowsSessionIdentity(
+   process.env.RUNNER_TEMP,physical);
+  await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);
+  await verifiedWindowsSessionFile(dir,'v2-identity.pem.device-id',
+    '123e4567-e89b-42d3-a456-426614174005'+String.fromCharCode(10));
+  await verifiedWindowsSessionFile(dir,'transport-stage',
+    'pending'+String.fromCharCode(10));
+  checkWindowsSessionAcl('Check',dir);
+  process.stdout.write('identity_ready');
+ `;
+ const invoke=(env:NodeJS.ProcessEnv)=>spawnSync(process.execPath,
+  ['--experimental-strip-types','--input-type=module','--eval',program],
+  {cwd:process.cwd(),env,encoding:'utf8',windowsHide:true,timeout:45000});
+ try{
+  const parent=invoke(source);
+  assert.equal(parent.error,undefined);
+  assert.equal(parent.status,0,'isolated native parent setup');
+  assert.equal(parent.stdout,'identity_ready');
+  const child=invoke(childEnv);
+  assert.equal(child.error,undefined);
+  assert.equal(child.status,0,'OIDC-stripped native child recovery');
+  assert.equal(child.stdout,'identity_ready');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
