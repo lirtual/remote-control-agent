@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.42",
+  "source_sha": "ff323600a63afd255544b90ca86b80a1eed5873c",
+  "candidate_run_id": 41210452207,
+  "release_title": "Remote Control Agent v0.1.42 \u2014 Windows Session transport lifetime",
+  "release_notes": ".github/release-notes/v0.1.42.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.42-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.42-linux-x64-glibc.tar.gz",
+      "sha256": "68e7cb55e39ca2937a9b63e52b96b39ea3f298618f74a39288c11fd3c5477b0c"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.42-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.42-linux-arm64-glibc.tar.gz",
+      "sha256": "7da4d1e96c91e0265c5033e9e5fbc3e5fdb5e80e48a034dce9e24d2a74ca0291"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.42-windows-x64",
+      "name": "remote-control-agent-v0.1.42-windows-x64.zip",
+      "sha256": "5955fadf6f5ff07d142e3b4402f6db31f07c964a923c76447165a89ec47916ae"
+    }
+  ]
+}
