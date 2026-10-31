@@ -1,5 +1,5 @@
 /** Native Windows GitHub-hosted Session Agent, foreground and job-private only. */
-import {lstat} from 'node:fs/promises';
+import {lstat,open} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import path from 'node:path';
 import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,
@@ -10,6 +10,25 @@ import {recoverDeviceId} from './v2-session-client.ts';
 import {maintainAuthenticatedDeviceSession} from './v2-connection-lifecycle.ts';
 import type {SessionPhysicalAttempt} from './session-device-identity.ts';
 const ENDPOINT='https://rca.lirtual.dpdns.org/';
+
+/** Only fixed stage names in an ACL-sealed, job-private file. Best effort,
+ * no raw exceptions and no change to the Agent's authorization decisions. */
+export const TRANSPORT_STAGES=[
+ 'entered','identity_ready','signed_recovered','receipts_ready',
+ 'challenge_start','challenge_ok','challenge_rejected',
+ 'wss_start','wss_open','wss_error','wss_policy','wss_timeout',
+ 'connected',
+] as const;
+type TransportStage=typeof TRANSPORT_STAGES[number];
+export async function writeTransportStage(dir:string,stage:TransportStage):Promise<void>{
+ if(process.platform!=='win32')return;
+ try{
+  const handle=await open(path.win32.join(dir,'transport-stage'),'r+');
+  try{await handle.truncate(0);await handle.writeFile(stage+'\n','utf8');}
+  finally{await handle.close();}
+ }catch{ /* Diagnostics never affect enrollment, WSS or SSH/RDP. */ }
+}
+
 
 export function windowsRunnerTransportEnvironment(env:NodeJS.ProcessEnv,platform=process.platform){
  if(platform!=='win32'||env.GITHUB_ACTIONS!=='true'||env.RUNNER_ENVIRONMENT!=='github-hosted'||
@@ -37,6 +56,16 @@ export async function runWindowsSessionRca(env:NodeJS.ProcessEnv=process.env):Pr
  const transport=process.argv[2]==='--session-transport';
  if(process.argv.length>2&&!transport)throw Error('Unsupported Windows Session mode.');
  const e=transport?windowsRunnerTransportEnvironment(env):windowsRunnerSessionEnvironment(env);
+ const stageDir=path.win32.join(e.runnerTemp,'session-rca');
+ let stageTail:Promise<void>=Promise.resolve();
+ let stageFrozen=false;
+ const stage=(name:TransportStage)=>{
+  if(!transport||stageFrozen)return;
+  if(['challenge_rejected','wss_error','wss_policy','wss_timeout'].includes(name))
+    stageFrozen=true; // Preserve first authoritative failure across retries.
+  stageTail=stageTail.then(()=>writeTransportStage(stageDir,name));
+ };
+ stage('entered');
  const {dir,identity}=await loadOrCreateWindowsSessionIdentity(e.runnerTemp,e.physical);
  const keyPath=path.win32.join(dir,'v2-identity.pem');
  await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);
@@ -45,6 +74,7 @@ export async function runWindowsSessionRca(env:NodeJS.ProcessEnv=process.env):Pr
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
  if(idExists)checkWindowsSessionAcl('Check',dir);
  if(!transport){
+   await verifiedWindowsSessionFile(dir,'transport-stage','pending\n');
    const registration=windowsRunnerSessionEnvironment(env);
    const jwt=await runnerOidcToken(registration.oidcUrl,registration.oidcToken,registration.audience);
    const result=await registerSessionRcaDevice(identity,jwt);
@@ -56,13 +86,16 @@ export async function runWindowsSessionRca(env:NodeJS.ProcessEnv=process.env):Pr
    return; // OIDC-bearing registration process exits.
  }
  if(!idExists)throw Error('Unsealed Windows Session transport identity.');
+ stage('identity_ready');
  const result={device_id:process.argv[3],expires_at:Number(process.argv[4])};
  if(!result.device_id||!Number.isSafeInteger(result.expires_at)||
    result.expires_at<=Date.now()||result.expires_at>Date.now()+300*60_000||
    await recoverDeviceId(ENDPOINT,keyPath)!==result.device_id)
    throw Error('Windows Session transport identity or deadline mismatch.');
  checkWindowsSessionAcl('Check',dir);
+ stage('signed_recovered');
  const receipts=await ensureWindowsSessionReceipts(dir);
+ stage('receipts_ready');
  const controller=new AbortController();
  const stop=()=>controller.abort();
  process.on('SIGINT',stop);process.on('SIGTERM',stop);
@@ -72,9 +105,11 @@ export async function runWindowsSessionRca(env:NodeJS.ProcessEnv=process.env):Pr
  try{
    await maintainAuthenticatedDeviceSession(ENDPOINT,keyPath,controller.signal,{
      receiptDirectory:receipts,
-     onState:state=>{if(state==='rejected')controller.abort();},
+     onState:state=>{if(state==='connected')stage('connected');if(state==='rejected')controller.abort();},
+     onConnectionStage:stage,
    });
  }finally{
+   await stageTail;
    clearTimeout(deadline);process.off('SIGINT',stop);process.off('SIGTERM',stop);
  }
 }
