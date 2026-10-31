@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.40",
+  "source_sha": "6b3dd437c828c89b33cfb5f49e610f16ff6ecfbc",
+  "candidate_run_id": 41196656774,
+  "release_title": "Remote Control Agent v0.1.40 \u2014 GitHub-hosted Session-only enrollment",
+  "release_notes": ".github/release-notes/v0.1.40.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.40-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.40-linux-x64-glibc.tar.gz",
+      "sha256": "a5094f2c75406eb5a1c5581e1db36e6cc3482c94b4bbce14965e1f78486187fa"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.40-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.40-linux-arm64-glibc.tar.gz",
+      "sha256": "3f8c221f6ec73f98c203fd0848243e8fa058a9a5c549891142842ae9af2124c2"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.40-windows-x64",
+      "name": "remote-control-agent-v0.1.40-windows-x64.zip",
+      "sha256": "6553dd901bd5883f670a1ba8e517ab45caecfa03030b3c74eef8894182ef499f"
+    }
+  ]
+}
