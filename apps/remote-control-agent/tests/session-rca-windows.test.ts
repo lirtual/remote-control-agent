@@ -105,6 +105,25 @@ test('fixed credential-free connection stages identify WSS handshake and policy 
 // the entire CI environment. Exercise the complete identity/PEM/sidecar path
 // through separate native Windows processes, using the actual OIDC-stripped
 // transport allowlist and no network or real GitHub credentials.
+test('Windows Session child inherits only the reviewed identity/ACL environment',async()=>{
+ const {sessionTransportEnvironment}=await import('../src/session-rca-client.ts');
+ const source:NodeJS.ProcessEnv={...runner,SystemRoot:'C:\\Windows',
+  PATH:'C:\\Windows\\System32',USERPROFILE:'C:\\Users\\runneradmin',
+  TEMP:'C:\\a\\_temp',GITHUB_TOKEN:'synthetic-never-forwarded',
+  ACTIONS_RUNTIME_TOKEN:'synthetic-never-forwarded',
+ };
+ const child=sessionTransportEnvironment(source);
+ for(const key of ['GITHUB_ACTIONS','RUNNER_ENVIRONMENT','GITHUB_WORKFLOW',
+  'GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','ATTEMPT_ID','RUNNER_TEMP',
+  'SystemRoot','PATH','USERPROFILE','TEMP'])
+  assert.equal(child[key],source[key],key);
+ for(const key of ['ACTIONS_ID_TOKEN_REQUEST_URL','ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+  'WORKFLOW_ACTION_OIDC_AUDIENCE','GITHUB_TOKEN','ACTIONS_RUNTIME_TOKEN'])
+  assert.equal(child[key],undefined,key);
+ assert.equal(windowsRunnerTransportEnvironment(child,'win32').physical.attempt_id,
+  runner.ATTEMPT_ID);
+});
+
 test('native Windows Session identity recovers in the exact no-OIDC child environment',
  {skip:process.platform!=='win32'}, async()=>{
  const {spawnSync}=await import('node:child_process');
