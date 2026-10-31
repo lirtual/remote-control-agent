@@ -59,6 +59,23 @@ test("revocation synchronously denies reads and effects while cleanup races", as
   }
 });
 
+test("retired GUI effects cannot be admitted or replayed through the paired engine", async () => {
+  const engine = createAgentExecutionEngine();
+  try {
+    for (const tool of [
+      "browser_start", "browser_status", "browser_tabs", "browser_click",
+      "computer_status", "computer_observe", "computer_stop",
+    ]) {
+      const result = await engine.executeTool({
+        tool, arguments: {}, operation_id: "retired-" + randomUUID(),
+      }, new AbortController().signal);
+      assert.ok(result === undefined || result.status !== 200, tool);
+    }
+  } finally {
+    await engine.close();
+  }
+});
+
 test("Windows paired engine supports file effects, receipts and bounded native sessions", {
   skip: process.platform !== "win32",
   timeout: 30_000,

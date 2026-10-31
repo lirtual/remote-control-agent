@@ -12,10 +12,7 @@ import {
   parseLocalMoveFile, parseLocalDeleteFile, parseOperationId,
 } from "./local-read.ts";
 import { operationDigest, ReceiptStore, type OperationReceipt } from "./operations.ts";
-import { stopDesktopGrant } from "./desktop-grant.ts";
 
-import { BrowserOperationGateway, BROWSER_READ_TOOLS, BROWSER_EFFECT_TOOLS, browserToolIsRead } from "./browser-operations.ts";
-import type { BrowserBackend } from "./browser-backend.ts";
 import { executeReadTool } from "./read-execution.ts";
 import { SearchSessions } from "./search.ts";
 import {
@@ -27,10 +24,7 @@ export interface AgentExecutionOptions {
   log?: (event: string) => void;
   searchSessionTtlMs?: number;
   receiptDirectory?: string;
-  desktopDirectory?: string;
   shellPath?: string;
-  /** Source-staged, explicitly injected browser backend; absent in production. */
-  browser?: BrowserBackend;
   /** Local-only test seam: production uses the 60-minute deadline. */
   sessionMaxLifetimeMs?: number;
   /** Local-only storage error probe, never routed through MCP. */
@@ -104,7 +98,6 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   let activeCalls = 0;
   let upgradeFrozen = false;
   let stopped = false;
-  const browser = options.browser ? new BrowserOperationGateway(options.browser, receipts, ensureReceipts) : undefined;
 
   type MutationTool = "write_file" | "create_directory" | "edit_block" | "move_file" | "delete_file";
   type MutationArgs =
@@ -297,66 +290,6 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
   ): Promise<AgentExecutionReply | undefined> {
     let reply: AgentExecutionReply | undefined;
     const respond = (status: number, result: unknown): void => { reply = { status, body: result }; };
-    if (body.tool === "computer_stop") {
-      // Remote Stop is a one-way tightening operation. Never expose Enable.
-      const id = typeof body.operation_id === "string" ? body.operation_id : "";
-      if (!parseOperationId({ operation_id: id }) ||
-          !body.arguments || typeof body.arguments !== "object" ||
-          Array.isArray(body.arguments) || Object.keys(body.arguments).length !== 0) {
-        respond(400, { status: "bad_request" });
-        return reply;
-      }
-      if (!options.desktopDirectory) {
-        respond(503, { operation_id: id, status: "unavailable" });
-        return reply;
-      }
-      let admitted: Awaited<ReturnType<typeof receipts.admit>>;
-      try {
-        await ensureReceipts();
-        admitted = await receipts.admit(id, "computer_stop", operationDigest("computer_stop", {}));
-      } catch {
-        respond(503, { operation_id: id, status: "unavailable" });
-        return reply;
-      }
-      if (admitted.kind === "conflict") {
-        respond(409, { operation_id: id, status: "conflict" });
-        return reply;
-      }
-      if (admitted.kind === "full") {
-        respond(503, { operation_id: id, status: "unavailable" });
-        return reply;
-      }
-      if (admitted.kind === "same") {
-        const receipt = admitted.receipt;
-        respond(200, { operation_id: id, status: receipt?.state ?? "unknown", ...(receipt ? { receipt } : {}) });
-        return reply;
-      }
-      // A failed store write after OS action means Unknown, never "safe to retry".
-      try {
-        await stopDesktopGrant(options.desktopDirectory);
-        const receipt = await receipts.update(id, "completed", "Desktop Stop enforced locally.");
-        respond(200, { operation_id: id, status: "completed", receipt });
-      } catch {
-        try { await receipts.update(id, "unknown", "Desktop Stop outcome unconfirmed."); }
-        catch { /* unknown is still non-replayable after admission */ }
-        respond(200, { operation_id: id, status: "unknown" });
-      }
-      return reply;
-    }
-    if (typeof body.tool === "string" &&
-        ([...BROWSER_READ_TOOLS, ...BROWSER_EFFECT_TOOLS] as string[]).includes(body.tool)) {
-      if (!browser) { respond(503, { status: "unavailable" }); return reply; }
-      if (browserToolIsRead(body.tool, body.arguments)) {
-        const result = await browser.read(body.tool as typeof BROWSER_READ_TOOLS[number], body.arguments);
-        respond(result === null ? 400 : 200, result === null
-          ? { status: "failed" } : { status: "completed", result: { content: [{ type: "text", text: result }] } });
-      } else {
-        const id = typeof body.operation_id === "string" ? body.operation_id : "";
-        const result = await browser.submit(body.tool as typeof BROWSER_EFFECT_TOOLS[number], body.arguments, id);
-        respond(result.status === "bad_request" ? 400 : result.status === "conflict" ? 409 : 200, result);
-      }
-      return reply;
-    }
     if (body.tool === "write_file" || body.tool === "create_directory" || body.tool === "edit_block" || body.tool === "move_file" || body.tool === "delete_file") {
       const id = typeof body.operation_id === "string" ? body.operation_id : null;
       if (!id || !parseOperationId({ operation_id: id })) {
@@ -656,9 +589,7 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       if (upgradeFrozen) return false;
       // Setting this first excludes any new admission in the same JS event loop.
       upgradeFrozen = true;
-      if (activeCalls > 0 || inFlight.size > 0 ||
-          (browser?.hasPending() ?? false) || Boolean(options.browser?.status()) ||
-          !sessions.isQuiescentForUpgrade()) {
+      if (activeCalls > 0 || inFlight.size > 0 || !sessions.isQuiescentForUpgrade()) {
         upgradeFrozen = false;
         return false;
       }
@@ -666,7 +597,6 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
     },
     verifyUpgradeFreeze: () => upgradeFrozen && !stopped &&
       activeCalls === 0 && inFlight.size === 0 &&
-      !(browser?.hasPending() ?? false) && !Boolean(options.browser?.status()) &&
       sessions.isQuiescentForUpgrade(),
     releaseUpgradeFreeze: () => { upgradeFrozen = false; },
     getReceipt: async (id: string) => {
@@ -677,34 +607,13 @@ export function createAgentExecutionEngine(options: AgentExecutionOptions = {}):
       stopped = true;
       // Operations already admitted before the tombstone may still be
       // starting a supervised process: never overclaim complete cleanup.
-      const pendingEffects = inFlight.size > 0 || (browser?.hasPending() ?? false);
-      let browserOutcome: "confirmed" | "uncertain" = "confirmed";
-      const active = options.browser?.status();
-      if (options.browser?.stopOwnedForRevocation) {
-        try { browserOutcome = await options.browser.stopOwnedForRevocation(); }
-        catch { browserOutcome = "uncertain"; }
-      } else if (active) {
-        try { await options.browser!.close(active.session_id); }
-        catch { browserOutcome = "uncertain"; }
-      }
+      const pendingEffects = inFlight.size > 0;
       const result = await sessions.stopOwnedForRevocation();
-      return pendingEffects || browserOutcome === "uncertain" ? "uncertain" : result;
+      return pendingEffects ? "uncertain" : result;
     },
     close: async () => {
       stopped = true;
       await searches.close();
-      // Agent shutdown must not leave an owned Chromium behind merely because
-      // a page navigation holds the ordinary browser operation mutex.
-      // Reuse the same owned-context cancellation as device revocation; no
-      // arbitrary process killing or personal Chrome Profile access.
-      const active = options.browser?.status();
-      if (options.browser?.stopOwnedForRevocation) {
-        try { await options.browser.stopOwnedForRevocation(); }
-        catch { /* Failed cleanup is never reported as a confirmed result. */ }
-      } else if (active) {
-        try { await options.browser!.close(active.session_id); }
-        catch { /* Never kill an unknown browser process or wipe a Profile. */ }
-      }
       await sessions.close();
       if (receiptsReady) await receipts.close();
     },

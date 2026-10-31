@@ -13,7 +13,15 @@ original device identities preserved.
 Agent CI/Release publication, Worker deployment, device-local interactive
 upgrades and authenticated device pairing are separate operations. Browser
 Handoff (Spec #280) and MCP-initiated `upgrade_agent` were retired; existing
-paired-device tools and Agent-owned browser automation remain supported.
+paired-device file, search, Shell, Session and receipt tools remain supported in production.
+
+**Spec #628 source candidate (not yet deployed):** this branch removes RCA-owned
+Browser/Computer tools and GUI-only bundles. The signed Node.js 24 releases,
+Windows Job Object and Linux pidfd supervisor, pairing, receipts and local
+upgrade/rollback remain. Historical GUI receipts are readable but not
+replayable. The independent Browser MCP #418 is unchanged. Production Worker
+deployment, Agent publication, device upgrades and local GUI data cleanup
+require separate authorization and verification.
 
 ## One-command onboarding and local upgrades
 
@@ -113,9 +121,9 @@ does not implicitly approve a grant or rotate the private key.
 `rca task-status` reports local task state, not authenticated online status.
 Verify signed WebSocket connectivity separately through authenticated MCP.
 
-Browser actions require owner authorization. HTTP redirection and private
-network/SSRF egress isolation are not guaranteed; use the browser capability
-only on an approved trusted personal Windows device.
+RCA no longer supplies Browser/Computer capabilities in the Spec #628 source
+candidate. Use the separate Browser MCP for authorized Chrome/Edge automation;
+RCA Shell permissions are unchanged.
 
 ### Recover a Windows grant that is missing from the production Worker
 

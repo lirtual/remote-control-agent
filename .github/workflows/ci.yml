@@ -327,59 +327,27 @@ jobs:
           if ($rejectDigest.ExitCode -eq 0) { throw 'Tampered checksum accepted' }
           Write-Output "Candidate ZIP SHA256: $hash (unpublished)"
 
-      - name: Native Windows pinned Playwright candidate and real Chrome validation (offline archive)
+      - name: Native Windows second-version rollback candidate (GUI-free archive)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Same Node and background EXE as the existing reviewed Windows preview.
           $official = 'ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32'
           $nodeBinary = (Get-Command node.exe).Source
           if ((Get-FileHash -LiteralPath $nodeBinary -Algorithm SHA256).Hash.ToLowerInvariant() -ne $official) {
-            throw 'Untrusted Windows Node for Playwright candidate'
+            throw 'Untrusted Windows Node for rollback fixture'
           }
-          $core = & node -e "console.log(require('node:fs').realpathSync('apps/remote-control-agent/node_modules/playwright-core'))"
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Playwright source unavailable' }
-          $out = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-core'
-          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.1-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out --browser-core-dir $core
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows candidate failed to build' }
-          $staged = Join-Path $out 'remote-control-agent-v0.0.1-ci-windows-x64'
-          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $staged
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows candidate stage verification failed' }
+          $out = Join-Path $env:RUNNER_TEMP 'windows-preview-second-version'
+          node apps/remote-control-agent/scripts/build-windows-preview.mjs --version v0.0.1-ci --node-bin $nodeBinary --node-sha256 $official --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') --out $out
+          if ($LASTEXITCODE -ne 0) { throw 'Second-version fixture build failed' }
+          $stage = Join-Path $out 'remote-control-agent-v0.0.1-ci-windows-x64'
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage
+          if ($LASTEXITCODE -ne 0) { throw 'GUI-free Windows bundle verification failed' }
           $archive = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
-          Compress-Archive -Path (Join-Path $staged '*') -DestinationPath $archive -CompressionLevel Optimal
-          $extracted = Join-Path $env:RUNNER_TEMP 'windows-preview-pinned-extracted'
-          Expand-Archive -LiteralPath $archive -DestinationPath $extracted -ErrorAction Stop
-          # Validate the exact extracted Playwright-enabled archive via its own
-          # packaged CLI; never pair a device or use the owner's private store.
-          $portableStatus = & (Join-Path $extracted 'rca.cmd') status | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $portableStatus.platform -cne 'win32' -or
-              $portableStatus.mode -cne 'native-user-agent' -or
-              $portableStatus.identity_present -ne $false -or
-              $null -ne $portableStatus.device_id -or
-              $portableStatus.shell -ne $true -or $portableStatus.write_file -ne $true) {
-            throw 'Isolated Playwright-enabled Windows portable CLI status failed'
-          }
-          Write-Output 'P3_PINNED_WINDOWS_PORTABLE_CLI_STATUS=PASS'
-          & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-core-bundle-smoke.mjs $extracted (Join-Path $env:RUNNER_TEMP 'windows-preview-bundle/remote-control-agent-v0.0.0-ci-windows-x64')
-          if ($LASTEXITCODE -ne 0) { throw 'Installed Chrome and tamper checks failed for pinned Playwright candidate' }
-          # Disposable only: validate Chromium's actual proxy routing for
-          # redirects, localhost, subresources and WebSocket before any Agent
-          # browser policy change. This is not an SSRF-isolation acceptance.
-          foreach ($channel in @('chrome', 'msedge')) {
-            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-egress-boundary-smoke.mjs $extracted $channel
-            if ($LASTEXITCODE -ne 0) { throw "Windows $channel proxy boundary probe failed" }
-            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-webrtc-egress-smoke.mjs $extracted $channel
-            if ($LASTEXITCODE -ne 0) { throw "Windows $channel WebRTC egress observation failed" }
-            & (Join-Path $extracted 'bin/node.exe') apps/remote-control-agent/tests/windows-browser-quic-egress-smoke.mjs $extracted $channel
-            if ($LASTEXITCODE -ne 0) { throw "Windows $channel QUIC UDP positive-control probe failed" }
-            & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-candidate-proxy-smoke.mjs $extracted $channel
-            if ($LASTEXITCODE -ne 0) { throw "Windows $channel candidate DNS-pinned proxy smoke failed" }
-            & (Join-Path $extracted 'bin/node.exe') --experimental-strip-types apps/remote-control-agent/tests/windows-browser-public-tls-smoke.mjs $extracted $channel
-            if ($LASTEXITCODE -ne 0) { throw "Windows $channel public TLS through pinned proxy failed" }
-          }
-          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $extracted
-          if ($LASTEXITCODE -ne 0) { throw 'Restored Windows pinned archive failed verification' }
-
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
+          $reopened = Join-Path $env:RUNNER_TEMP 'windows-preview-reopened-second'
+          Expand-Archive -LiteralPath $archive -DestinationPath $reopened -ErrorAction Stop
+          node apps/remote-control-agent/scripts/verify-windows-preview.mjs $reopened
+          if ($LASTEXITCODE -ne 0) { throw 'Reopened second-version archive refused' }
       - name: Register and remove user-logon task with synthetic identity (no cloud calls)
         shell: pwsh
         run: |
@@ -439,10 +407,10 @@ jobs:
             $newDir = Join-Path $basePrograms ($newVersion + '-windows-x64')
             $oldDir = Join-Path $basePrograms ($oldVersion + '-windows-x64')
             # New version is the separately built, checksum-verified
-            # nine-file Playwright candidate from the preceding native CI step.
+            # GUI-free second-version bundle from the preceding native CI step.
             $secondZip = Join-Path $env:RUNNER_TEMP 'candidate-next-version.zip'
             if (-not (Test-Path -LiteralPath $secondZip)) {
-              throw 'Pinned browser upgrade candidate ZIP unavailable'
+              throw 'Second-version upgrade candidate ZIP unavailable'
             }
             $secondDigest = (Get-FileHash -LiteralPath $secondZip -Algorithm SHA256).Hash.ToLowerInvariant()
             # A real stage-only request must never stop or mutate the existing
@@ -572,7 +540,7 @@ jobs:
               }
             }
             & (Join-Path $newDir 'bin/node.exe') (Join-Path $newDir 'apps/remote-control-agent/scripts/verify-windows-preview.mjs') $newDir
-            if ($LASTEXITCODE -ne 0) { throw 'Installed upgraded Playwright candidate hashes failed' }
+            if ($LASTEXITCODE -ne 0) { throw 'Installed upgraded GUI-free candidate hashes failed' }
             $current = Get-ScheduledTask -TaskName $taskName
             if (-not [string]::Equals([string]$current.Actions[0].Execute,
                 (Join-Path $newDir 'bin\rca-background.exe'),[StringComparison]::OrdinalIgnoreCase)) {
@@ -711,13 +679,11 @@ jobs:
           if ((Get-FileHash -LiteralPath $nodeBin -Algorithm SHA256).Hash.ToLowerInvariant() -cne $nodeSha) {
             throw 'Unreviewed Windows Node binary for candidate'
           }
-          $core = & node -e "console.log(require('node:fs').realpathSync('apps/remote-control-agent/node_modules/playwright-core'))"
-          if ($LASTEXITCODE -ne 0 -or -not $core) { throw 'Pinned Playwright source missing' }
           $output = Join-Path $env:RUNNER_TEMP 'spec24-reviewed-windows-candidate'
           node apps/remote-control-agent/scripts/build-windows-preview.mjs --version $tag `
             --node-bin $nodeBin --node-sha256 $nodeSha `
             --background-bin (Join-Path $env:RUNNER_TEMP 'rca-background.exe') `
-            --browser-core-dir $core --out $output
+            --out $output
           if ($LASTEXITCODE -ne 0) { throw 'Windows candidate build refused' }
           $stage = Join-Path $output "remote-control-agent-$tag-windows-x64"
           node apps/remote-control-agent/scripts/verify-windows-preview.mjs $stage

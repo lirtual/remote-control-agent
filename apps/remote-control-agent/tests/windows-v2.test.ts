@@ -28,8 +28,7 @@ test("All Windows filesystem parsers reuse the same checked path contract", () =
 test("Windows preview CLI fails closed on untrusted flags and endpoints", () => {
   assert.equal(parseWindowsAgentArgs(["status"]).action, "status");
   for (const name of ["desktop-enable", "desktop-stop", "desktop-status"]) {
-    assert.equal(parseWindowsAgentArgs([name]).action, name);
-    assert.throws(() => parseWindowsAgentArgs([name, "--endpoint", "https://example.test/"]));
+    assert.throws(() => parseWindowsAgentArgs([name]), /pair, run or status/);
   }
   assert.equal(parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/"]).action, "onboard");
   assert.throws(() => parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/", "--grant", "temporary"]));

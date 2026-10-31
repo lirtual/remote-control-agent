@@ -16,25 +16,6 @@ const API="https://api.github.com/repos/"+REPO;
 const MAX_ARCHIVE=180*1024*1024;
 const MAX_TAR=240*1024*1024;
 const ALLOWED_TARGETS=new Set(["linux-x64-glibc","linux-arm64-glibc"]);
-// Explicitly pinned Playwright 1.64.1 browser-core runtime candidate.
-// These paths are never allowed without an exact opt-in release manifest.
-export const PINNED_PLAYWRIGHT_VERSION="1.64.1";
-export const PINNED_PLAYWRIGHT_FILES=Object.freeze({
-  'apps/remote-control-agent/node_modules/playwright-core/LICENSE':'45873d00a0dd243596deb4aa23b2493b3d1f0671921bf2538ea431d7380220eb',
-  'apps/remote-control-agent/node_modules/playwright-core/package.json':'8aa1c9863fa8dea324e674254158cdc79440f4124ef2d84d38053013541cb7d6',
-  'apps/remote-control-agent/node_modules/playwright-core/browsers.json':'2cfd419f71ac6475d81e1301fa86c34cf2a2a6bae2a0da4b5a2b18310216b6bf',
-  'apps/remote-control-agent/node_modules/playwright-core/index.js':'a58fb2cec4293e7dcf73c58a179898a4f3986666451a19da4e731fa3af63265b',
-  'apps/remote-control-agent/node_modules/playwright-core/index.mjs':'3d36e2132d3c8b62397d23f0bb4177336aaee503203ae2a2c90fbeb5bf3317dd',
-  'apps/remote-control-agent/node_modules/playwright-core/lib/bootstrap.js':'39dd64cc9472275d1b25c170fefa2a98353bcca598b741788faac2e6e15fc737',
-  'apps/remote-control-agent/node_modules/playwright-core/lib/coreBundle.js':'829521b67ed7be90c7d6d6098ff39f2241562d47e4ad7ccab13710924a56001d',
-  'apps/remote-control-agent/node_modules/playwright-core/lib/utilsBundle.js':'75f1431ea7ee00b2b291a0a72d4fa1c07ae04d999f21a00cd03b8f454a5840fc',
-  'apps/remote-control-agent/node_modules/playwright-core/lib/utilsBundle.js.LICENSE':'1362b7f413c08083af537384162ab69a323d019fe26e0a2cd78536fafd6b9cbf',
-});
-const PLAYWRIGHT_DIRS=new Set([
-  "apps/remote-control-agent/node_modules",
-  "apps/remote-control-agent/node_modules/playwright-core",
-  "apps/remote-control-agent/node_modules/playwright-core/lib",
-]);
 const sha=/^[a-f0-9]{40}$/;
 const hex=/^[a-f0-9]{64}$/;
 const vtag=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/;
@@ -162,6 +143,10 @@ function safePath(name,directory) {
   if(n.length<1 || n.length>160 || n.startsWith("/") || n.includes("\\") ||
     n.split("/").some(part=>part==="" || part==="." || part==="..") ||
     !/^[A-Za-z0-9._/-]+$/.test(n)) throw new Error("Unsafe tar entry path.");
+  if (/^apps\/remote-control-agent\/src\/(?:browser-|desktop-)/.test(n) ||
+      n === "apps/remote-control-agent/scripts/windows-capture.ps1") {
+    throw Error("Retired GUI module is forbidden.");
+  }
   if(!directory && !(
     n==="bin/node" || n==="bundle.json" ||
     n==="apps/remote-control-agent/package.json" ||
@@ -172,14 +157,12 @@ function safePath(name,directory) {
      "verify-v2-release.mjs","rca.sh"].some(name=>
        n==="apps/remote-control-agent/scripts/"+name) ||
     n==="apps/remote-control-agent/.build/session-supervisor" ||
-    /^apps\/remote-control-agent\/src\/[a-z0-9-]+\.js$/.test(n) ||
-    Object.hasOwn(PINNED_PLAYWRIGHT_FILES,n))) {
+    /^apps\/remote-control-agent\/src\/[a-z0-9-]+\.js$/.test(n))) {
     throw new Error("Unreviewed archive file.");
   }
   if(directory && !["bin","apps","apps/remote-control-agent",
       "apps/remote-control-agent/src","apps/remote-control-agent/scripts",
-      "apps/remote-control-agent/.build"].includes(n) &&
-      !PLAYWRIGHT_DIRS.has(n)) {
+      "apps/remote-control-agent/.build"].includes(n)) {
     throw new Error("Unreviewed archive directory.");
   }
   return n;
@@ -237,27 +220,10 @@ export function inspectTarGzip(gzip,{tag,target}) {
         .some(name=>!entries.has("apps/remote-control-agent/scripts/"+name) ||
                     entries.get("apps/remote-control-agent/scripts/"+name).directory)))
     throw new Error("Incomplete reviewed Linux one-shot Release.");
-  const present=Object.keys(PINNED_PLAYWRIGHT_FILES).filter(n=>entries.has(n));
-  const dirs=[...PLAYWRIGHT_DIRS].filter(n=>entries.has(n));
-  if(manifest.browser_runtime === undefined) {
-    if(present.length || dirs.length) throw Error("Unrequested browser library.");
-  } else {
-    const info=manifest.browser_runtime;
-    const names=Object.keys(PINNED_PLAYWRIGHT_FILES);
-    if(!info || typeof info!=="object" || Array.isArray(info) ||
-       Object.keys(info).sort().join(",")!=="files,name,version" ||
-       info.name!=="playwright-core" || info.version!==PINNED_PLAYWRIGHT_VERSION ||
-       !Array.isArray(info.files) || info.files.length!==names.length ||
-       new Set(info.files).size!==names.length ||
-       names.some(n=>!info.files.includes(n)) ||
-       present.length!==names.length || dirs.length!==PLAYWRIGHT_DIRS.size ||
-       [...PLAYWRIGHT_DIRS].some(n=>!entries.get(n)?.directory))
-       throw Error("Unreviewed browser library inventory.");
-    for(const [n,digest] of Object.entries(PINNED_PLAYWRIGHT_FILES)){
-      const e=entries.get(n);
-      if(!e || e.directory || createHash("sha256").update(e.data).digest("hex")!==digest)
-        throw Error("Untrusted pinned browser library.");
-    }
+  // No GUI-only modules or optional browser runtime can enter a new RCA release.
+  if (manifest.browser_runtime !== undefined ||
+      [...entries.keys()].some(name => name.includes("playwright-core") || name.includes("/candidates/"))) {
+    throw Error("Retired GUI runtime is forbidden in RCA releases.");
   }
   const expected=target==="linux-x64-glibc" ? 62 : 183;
   for(const name of ["bin/node","apps/remote-control-agent/.build/session-supervisor"]) {
