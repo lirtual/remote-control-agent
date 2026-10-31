@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runnerSessionEnvironment} from '../src/session-rca-main.ts';
+import {runnerSessionEnvironment,runnerTransportEnvironment} from '../src/session-rca-main.ts';
 import {runnerOidcToken} from '../src/session-runner-oidc.ts';
 
 const base={GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_WORKFLOW:'ubuntu',
@@ -34,4 +34,12 @@ test('OIDC is obtained only by bounded nonredirecting HTTPS request',async()=>{
    base.WORKFLOW_ACTION_OIDC_AUDIENCE,async()=>{throw Error('must not send')}));
  await assert.rejects(runnerOidcToken(base.ACTIONS_ID_TOKEN_REQUEST_URL,base.ACTIONS_ID_TOKEN_REQUEST_TOKEN,
    base.WORKFLOW_ACTION_OIDC_AUDIENCE,async()=>new Response(null,{status:302})));
+});
+
+test('Ubuntu credential-free transport verifies Runner context without retaining OIDC',()=>{
+ const safe={...base,WORKFLOW_ACTION_OIDC_AUDIENCE:undefined,
+   ACTIONS_ID_TOKEN_REQUEST_URL:undefined,ACTIONS_ID_TOKEN_REQUEST_TOKEN:undefined};
+ assert.equal(runnerTransportEnvironment(safe,'linux').physical.github_run_id,1234);
+ assert.throws(()=>runnerSessionEnvironment(safe,'linux'));
+ assert.throws(()=>runnerTransportEnvironment({...safe,ATTEMPT_ID:''},'linux'));
 });

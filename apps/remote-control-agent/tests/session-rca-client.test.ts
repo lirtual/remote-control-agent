@@ -38,3 +38,30 @@ test('no OIDC and forged response never yield apparent Session device authority'
    await assert.rejects(registerSessionRcaDevice(identity,fakeJwt,async()=>response));
  }
 });
+
+test('Session transport subprocess inherits only job tracking and safe runtime context',async()=>{
+ const {sessionTransportEnvironment}=await import('../src/session-rca-client.ts');
+ const environment=sessionTransportEnvironment({
+   PATH:'/usr/bin',HOME:'/home/runner',RUNNER_TEMP:'/tmp/runner',
+   RUNNER_TRACKING_ID:'run-tracking',GITHUB_ACTIONS:'true',
+   GITHUB_RUN_ID:'123',GITHUB_RUN_ATTEMPT:'1',GITHUB_WORKFLOW:'ubuntu',
+   ATTEMPT_ID:'123e4567-e89b-42d3-a456-426614174004',
+   ACTIONS_ID_TOKEN_REQUEST_TOKEN:'SENSITIVE_GITHUB_OIDC_REQUEST',
+   ACTIONS_ID_TOKEN_REQUEST_URL:'https://oidc.example/token',
+   WORKFLOW_ACTION_OIDC_AUDIENCE:'sensitive-audience',
+   SESSION_SYSTEM_PASSWORD:'SENSITIVE_SESSION_PASSWORD',
+   GH_TOKEN:'SENSITIVE_GH_TOKEN',TS_OAUTH_CLIENT_SECRET:'SENSITIVE_TAILNET',
+   NODE_OPTIONS:'--require-unreviewed',
+ });
+ assert.equal(environment.RUNNER_TRACKING_ID,'run-tracking');
+ assert.equal(environment.RUNNER_TEMP,'/tmp/runner');
+ assert.equal(environment.GITHUB_RUN_ID,'123');
+ assert.equal(environment.ACTIONS_ID_TOKEN_REQUEST_TOKEN,undefined);
+ assert.equal(environment.ACTIONS_ID_TOKEN_REQUEST_URL,undefined);
+ assert.equal(environment.WORKFLOW_ACTION_OIDC_AUDIENCE,undefined);
+ assert.equal(environment.SESSION_SYSTEM_PASSWORD,undefined);
+ assert.equal(environment.GH_TOKEN,undefined);
+ assert.equal(environment.TS_OAUTH_CLIENT_SECRET,undefined);
+ assert.equal(environment.NODE_OPTIONS,undefined);
+ assert.equal(Object.values(environment).some(v=>v?.includes('SENSITIVE_')),false);
+});
