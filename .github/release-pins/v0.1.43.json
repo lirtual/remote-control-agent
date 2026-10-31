@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.43",
+  "source_sha": "0ef6fafbc7dee8250acc758ecaefcb799839b765",
+  "candidate_run_id": 41225266881,
+  "release_title": "Remote Control Agent v0.1.43 — Windows Session credential-free WSS checkpoints",
+  "release_notes": ".github/release-notes/v0.1.43.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.43-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.43-linux-x64-glibc.tar.gz",
+      "sha256": "3b4ee38001924b2bed988f5e892200a2f4384867bfba2c5ef0a84bfdce2aa140"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.43-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.43-linux-arm64-glibc.tar.gz",
+      "sha256": "d5b1f06e9c4c252dee5ee83126577028253c7ea4ea8ca20da62778c45a9c2055"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.43-windows-x64",
+      "name": "remote-control-agent-v0.1.43-windows-x64.zip",
+      "sha256": "62750be05c5067f9fb4f3315cc52d31a3b8db284bfa721ef3fdb794906cd207d"
+    }
+  ]
+}
