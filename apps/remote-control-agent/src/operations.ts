@@ -43,6 +43,13 @@ const RECEIPT_TOOLS = new Set<OperationReceipt["tool_name"]>([
   "browser_start", "browser_navigate", "browser_close", "browser_tabs",
   "browser_click", "browser_fill", "browser_press_key", "browser_select_option", "upgrade_agent", "computer_stop",
 ]);
+// Historical GUI names remain readable but must never admit a NEW effect.
+const RETIRED_GUI_RECEIPT_TOOLS = new Set<OperationReceipt["tool_name"]>([
+  "browser_start", "browser_navigate", "browser_close", "browser_tabs",
+  "browser_click", "browser_fill", "browser_press_key", "browser_select_option",
+  "computer_stop",
+]);
+
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   if (value !== null && typeof value === "object") {
@@ -254,6 +261,7 @@ export class ReceiptStore {
 
   async admit(operationId: string, toolName: OperationReceipt["tool_name"], digest: string):
     Promise<{ kind: "new" | "same" | "conflict" | "full"; receipt?: OperationReceipt }> {
+    if (RETIRED_GUI_RECEIPT_TOOLS.has(toolName)) throw new Error("Retired GUI operation cannot be admitted.");
     return this.transaction(() => {
       const prior = this.getStored(operationId);
       if (prior) {

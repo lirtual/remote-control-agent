@@ -13,8 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { runtimeSources,stagePinnedPlaywrightLibrary } from "./build-v2-release.mjs";
-import { PINNED_WINDOWS_BROWSER_MODULES } from "./verify-windows-preview.mjs";
+import { runtimeSources } from "./build-v2-release.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -27,10 +26,9 @@ export function parseWindowsPreviewBuildArgs(argv) {
   const keys = new Map([
     ["--version", "version"], ["--node-bin", "nodeBin"], ["--node-sha256", "nodeSha256"],
     ["--out", "out"], ["--background-bin", "backgroundBin"],
-    ["--browser-core-dir", "browserCoreDir"],
   ]);
   const out = {};
-  if (![10,12].includes(argv.length)) throw Error("Windows candidate requires five pinned arguments and optionally a reviewed Playwright directory.");
+  if (argv.length !== 10) throw Error("Windows candidate requires five pinned arguments.");
   for (let i = 0; i < argv.length; i += 2) {
     const key = keys.get(argv[i]);
     if (!key || out[key] !== undefined || !argv[i + 1]) throw Error("Unsafe packaging arguments.");
@@ -39,8 +37,7 @@ export function parseWindowsPreviewBuildArgs(argv) {
   if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(out.version) ||
       !/^[a-f0-9]{64}$/.test(out.nodeSha256) ||
       out.nodeSha256 !== EXPECTED_NODE_SHA256 ||
-      !path.isAbsolute(out.nodeBin) || !path.isAbsolute(out.backgroundBin) || !path.isAbsolute(out.out) ||
-      (out.browserCoreDir && !path.isAbsolute(out.browserCoreDir))) {
+      !path.isAbsolute(out.nodeBin) || !path.isAbsolute(out.backgroundBin) || !path.isAbsolute(out.out)) {
     throw Error("A reviewed version, paths and official pinned node.exe digest are required.");
   }
   return out;
@@ -112,7 +109,7 @@ export function buildWindowsPreview(args) {
   const installerBytes = readFileSync(path.join(root, "..", "..", "install.ps1"));
   writeFileSync(path.join(stage, stageInstaller), installerBytes, { mode: 0o600 });
   hashes[stageInstaller] = digest(installerBytes);
-  const scripts = ["windows-private-store.ps1", "windows-session-private-store.ps1", "windows-user-task.ps1", "windows-capture.ps1", "verify-windows-preview.mjs"];
+  const scripts = ["windows-private-store.ps1", "windows-session-private-store.ps1", "windows-user-task.ps1", "verify-windows-preview.mjs"];
   for (const name of scripts) {
     const relative = "apps/remote-control-agent/scripts/" + name;
     const bytes = readFileSync(path.join(root, "scripts", name));
@@ -123,46 +120,11 @@ export function buildWindowsPreview(args) {
   const packagePath = "apps/remote-control-agent/package.json";
   writeFileSync(path.join(stage, packagePath), packageJson, { mode: 0o600 });
   hashes[packagePath] = digest(packageJson);
-  // The existing Linux staging contract validates nine exact upstream files before copying.
-  const browserRuntime = args.browserCoreDir ? stagePinnedPlaywrightLibrary(args.browserCoreDir,stage) : undefined;
-  // The browser manager, the connection proxy and the IP policy form one
-  // reviewed, immutable compilation unit. No runtime- or MCP-supplied module.
-  if (browserRuntime) {
-    mkdirSync(path.join(stage,"apps/remote-control-agent/candidates"),
-      {recursive:true,mode:0o700});
-    const audited = [];
-    for (const [relative,reviewedSha] of Object.entries(PINNED_WINDOWS_BROWSER_MODULES)) {
-      const name=path.basename(relative).replace(/\.js$/,".ts");
-      const source=readFileSync(path.join(root,"candidates",name),"utf8");
-      const compiled=ts.transpileModule(source,{
-        fileName:name,reportDiagnostics:true,
-        compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022},
-      });
-      if((compiled.diagnostics||[]).some(x=>x.category===ts.DiagnosticCategory.Error))
-        throw Error("Reviewed browser network module did not compile.");
-      const bytes=Buffer.from(rewriteImports(compiled.outputText));
-      audited.push({name,relative,bytes,actual:digest(bytes),reviewedSha});
-    }
-    // CI logs only code SHA-256s, never identities or tokens. Audit ALL
-    // compiled files before independent pins can be updated together.
-    if(process.env.GITHUB_ACTIONS==="true") for(const module of audited)
-      process.stdout.write("BROWSER_MODULE_AUDIT_SHA256="+module.name+":"+module.actual+"\n");
-    if(audited.some(module=>module.actual!==module.reviewedSha))
-      throw Error("Unreviewed compiled browser modules.");
-    for(const module of audited) {
-      writeFileSync(path.join(stage,module.relative),module.bytes,{mode:0o600});
-      hashes[module.relative]=module.actual;
-    }
-  }
-  if (browserRuntime) for(const relative of browserRuntime.files){
-    hashes[relative] = digest(readFileSync(path.join(stage,relative)));
-  }
   writeFileSync(path.join(stage, "bundle.json"), JSON.stringify({
     name: "remote-control-agent", version: args.version, target: "windows-x64",
     node: EXPECTED_NODE_VERSION, device_protocol: 2, artifact_schema: 1,
     upgrade_profile: "paired-full-v1",
     preview: true, modules, hashes,
-    ...(browserRuntime ? {browser_runtime:browserRuntime} : {}),
   }, null, 2) + "\n", { mode: 0o600 });
   return {
     stage, target: "windows-x64", modules: modules.length,
