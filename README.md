@@ -2,26 +2,27 @@
 
 Standalone Remote Control Agent for Linux x64/ARM64 (including WSL2) and native Windows x64. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Current release (verified 2026-10-28)
+## Current verified release (2026-10-31)
 
-The immutable **v0.1.35** Agent Release includes Linux x64/ARM64 and native
+The immutable **v0.1.40** Agent Release includes Linux x64/ARM64 and native
 Windows x64 archives with SHA256SUMS. The Remote Control Worker serves
-version-pinned public installers. Production Windows and WSL2 permanently
-paired devices were independently confirmed online on v0.1.35 with their
-original device identities preserved.
+version-pinned public installers. One native Windows and two WSL2 permanently
+paired devices were verified online on v0.1.40 with their original device
+identities preserved.
 
 Agent CI/Release publication, Worker deployment, device-local interactive
 upgrades and authenticated device pairing are separate operations. Browser
 Handoff (Spec #280) and MCP-initiated `upgrade_agent` were retired; existing
 paired-device file, search, Shell, Session and receipt tools remain supported in production.
 
-**Spec #628 source candidate (not yet deployed):** this branch removes RCA-owned
-Browser/Computer tools and GUI-only bundles. The signed Node.js 24 releases,
-Windows Job Object and Linux pidfd supervisor, pairing, receipts and local
-upgrade/rollback remain. Historical GUI receipts are readable but not
-replayable. The independent Browser MCP #418 is unchanged. Production Worker
-deployment, Agent publication, device upgrades and local GUI data cleanup
-require separate authorization and verification.
+**Spec #628 delivered (2026-10-31):** RCA-owned Browser/Computer executable
+tools and GUI-only bundles were retired in the formally released Worker and
+Agent v0.1.40. Bundled Node.js 24, Windows Job Object, Linux pidfd, pairing,
+receipts and local upgrade/rollback remain. Historical GUI receipts stay
+readable but cannot be admitted or replayed as new effects. The independently
+deployed Browser MCP #418 is unchanged. All three paired devices passed core
+checks; separately authorized precise Windows GUI Profile/Grant/Stop cleanup
+was verified. See [Spec #628 acceptance](https://github.com/lirtual/mcp-workers/issues/628#issuecomment-6542642703).
 
 ## One-command onboarding and local upgrades
 
@@ -38,8 +39,8 @@ script, the empty `sh` may still exit 0. Inspect download errors, and never
 treat pipeline success as proof of installation, approval or online status;
 confirm the device through authenticated MCP before declaring success.
 
-As of 2026-10-28, both production installers are pinned to the reviewed
-v0.1.35 source and immutable Release assets. A successful script download or
+As verified 2026-10-31, both production installers were pinned to reviewed
+v0.1.40 source and immutable Release assets. A successful script download or
 local install does not prove remote approval, connectivity or successful
 upgrade; verify the signed device through authenticated MCP.
 
@@ -56,7 +57,7 @@ A cancelled or rejected upgrade leaves the old device untouched. A successful
 local switch still requires an authenticated MCP online check. Local
 installation, owner authorization and remote online state remain distinct.
 
-Historical root `install.sh` and `install-windows.ps1` have been removed from this branch; they were
+Historical root `install.sh` and `install-windows.ps1` were removed from this repository; they were
 not the canonical public installation URLs. Historical immutable Release tags
 remain unchanged; upgrades are separate explicitly authorized operations.
 
@@ -121,8 +122,8 @@ does not implicitly approve a grant or rotate the private key.
 `rca task-status` reports local task state, not authenticated online status.
 Verify signed WebSocket connectivity separately through authenticated MCP.
 
-RCA no longer supplies Browser/Computer capabilities in the Spec #628 source
-candidate. Use the separate Browser MCP for authorized Chrome/Edge automation;
+RCA no longer supplies the retired Browser/Computer capabilities. Use the
+separate Browser MCP for authorized Chrome/Edge automation;
 RCA Shell permissions are unchanged.
 
 ### Recover a Windows grant that is missing from the production Worker
