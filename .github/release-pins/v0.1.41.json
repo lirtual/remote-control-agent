@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.41",
+  "source_sha": "9fecb3d8e376095d39cb0709c4f27d197b8c7df7",
+  "candidate_run_id": 41207955984,
+  "release_title": "Remote Control Agent v0.1.41 \u2014 Credential-isolated Session transport",
+  "release_notes": ".github/release-notes/v0.1.41.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.41-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.41-linux-x64-glibc.tar.gz",
+      "sha256": "93c81825a3355ed4ca31d0a574b130b01d4706b1efff7bb29d7486ece49a5008"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.41-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.41-linux-arm64-glibc.tar.gz",
+      "sha256": "a7e799445800096b25119cd98a3b5b8e2e425071ddebaa6ff248a72613d2cab8"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.41-windows-x64",
+      "name": "remote-control-agent-v0.1.41-windows-x64.zip",
+      "sha256": "fd7f04c3cefad2289a80a221dcaa991c76e629b41a3eae6e67a4c21fb0c8eb14"
+    }
+  ]
+}
