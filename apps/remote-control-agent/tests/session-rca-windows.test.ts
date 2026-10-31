@@ -175,3 +175,75 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   assert.equal(child.stdout,'identity_ready');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+
+// Synthetic physical Attempt, no network, real detached/stdio:ignore/unref launcher.
+// Proves that a fresh credential-free Windows child can still perform ACL
+// identity recovery after its one-shot registration parent exits.
+test('native detached credential-free child recovers after parent exit',
+ {skip:process.platform!=='win32'}, async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const {mkdtemp,writeFile,readFile,rm}=await import('node:fs/promises');
+ const {tmpdir}=await import('node:os');
+ const path=await import('node:path');
+ const {pathToFileURL}=await import('node:url');
+ const root=await mkdtemp(path.join(tmpdir(),'rca-detached-native-fixture-'));
+ const store=pathToFileURL(path.resolve('src/session-windows-identity-store.ts')).href;
+ const client=pathToFileURL(path.resolve('src/session-rca-client.ts')).href;
+ const windows=pathToFileURL(path.resolve('src/session-rca-windows.ts')).href;
+ const deviceId='123e4567-e89b-42d3-a456-426614174005';
+ const entry=path.join(root,'synthetic-child.mjs');
+ const childCode=[
+  "import path from 'node:path';",
+  "import {lstat} from 'node:fs/promises';",
+  "import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,checkWindowsSessionAcl} from "+JSON.stringify(store)+";",
+  "import {writeTransportStage,windowsRunnerTransportEnvironment} from "+JSON.stringify(windows)+";",
+  "const e=windowsRunnerTransportEnvironment(process.env,'win32');",
+  "const checkpoint=path.win32.join(e.runnerTemp,'session-rca');",
+  "await writeTransportStage(checkpoint,'entered');",
+  "const {dir,identity}=await loadOrCreateWindowsSessionIdentity(e.runnerTemp,e.physical);",
+  "const key=path.win32.join(dir,'v2-identity.pem');",
+  "await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);",
+  "await lstat(key+'.device-id');",
+  "checkWindowsSessionAcl('Check',dir);",
+  "await writeTransportStage(dir,'identity_ready');",
+ ].join(String.fromCharCode(10));
+ const parentCode=[
+  "import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile} from "+JSON.stringify(store)+";",
+  "import {spawnSessionTransport} from "+JSON.stringify(client)+";",
+  "const physical={attempt_id:process.env.ATTEMPT_ID,github_run_id:Number(process.env.GITHUB_RUN_ID),github_run_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),workflow_name:'windows'};",
+  "const {dir,identity}=await loadOrCreateWindowsSessionIdentity(process.env.RUNNER_TEMP,physical);",
+  "await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);",
+  "await verifiedWindowsSessionFile(dir,'v2-identity.pem.device-id',"+JSON.stringify(deviceId+'\n')+");",
+  "await verifiedWindowsSessionFile(dir,'transport-stage','pending'+String.fromCharCode(10));",
+  "await spawnSessionTransport("+JSON.stringify(entry)+","+JSON.stringify(deviceId)+",Date.now()+90000,process.env);",
+ ].join(String.fromCharCode(10));
+ const env:NodeJS.ProcessEnv={...process.env,
+  GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'github-hosted',GITHUB_WORKFLOW:'windows',
+  GITHUB_RUN_ID:'1234',GITHUB_RUN_ATTEMPT:'2',
+  ATTEMPT_ID:'123e4567-e89b-42d3-a456-426614174004',
+  RUNNER_TEMP:root,RUNNER_TRACKING_ID:'synthetic-detached-child',
+  ACTIONS_ID_TOKEN_REQUEST_URL:'https://example.test/never-requested',
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN:'SYNTHETIC_NEVER_FORWARDED',
+ };
+ try{
+  await writeFile(entry,childCode,'utf8');
+  const parent=spawnSync(process.execPath,
+   ['--experimental-strip-types','--input-type=module','--eval',parentCode],
+   {cwd:process.cwd(),env,windowsHide:true,encoding:'utf8',timeout:45000});
+  assert.equal(parent.error,undefined);
+  assert.equal(parent.status,0,'one-shot native parent did not exit');
+  let stage='';
+  const until=Date.now()+25000;
+  while(Date.now()<until){
+   try{stage=await readFile(path.join(root,'session-rca','transport-stage'),'utf8');}
+   catch{}
+   if(stage==='identity_ready\n')break;
+   await new Promise(resolve=>setTimeout(resolve,200));
+  }
+  assert.equal(stage,'identity_ready\n',
+   'real detached child did not recover identity after parent exited');
+ }finally{
+  await rm(root,{recursive:true,force:true});
+ }
+});
