@@ -205,3 +205,7 @@ Its transport entrypoint rechecks the same private identity and server-signed
 device ID. This adds no persistent service, device identity or Worker.
 This change is source-only until a separately authorized immutable Agent
 Release and both-OS live validation.
+
+Spec #62 Windows Session follow-up: Windows child transport must be detached
+from its one-shot OIDC parent, with stdio ignored and RUNNER_TRACKING_ID retained.
+Node.js unref alone is not the cross-platform lifetime guarantee.
