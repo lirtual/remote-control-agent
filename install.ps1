@@ -195,7 +195,7 @@ function Expand-SafeArchive([string]$file, [string]$folder) {
       $allowedDir = $name -cmatch '^(?:bin|apps|apps/remote-control-agent|apps/remote-control-agent/src|apps/remote-control-agent/scripts)/$' -or
         $name -ceq 'apps/remote-control-agent/candidates/' -or
         $name -cmatch '^apps/remote-control-agent/node_modules(?:/playwright-core(?:/lib)?)?/$'
-      $allowedFile = $name -cmatch '^(?:bin/(?:node\.exe|rca-background\.exe)|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$' -or
+      $allowedFile = $name -cmatch '^(?:bin/(?:node\.exe|rca-background\.exe)|rca\.cmd|bundle\.json|apps/remote-control-agent/(?:package\.json|src/[a-z0-9-]+\.js|scripts/(?:(?:windows-private-store|windows-session-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$' -or
         $name -ceq 'apps/remote-control-agent/candidates/browser-playwright.js' -or
         $name -ceq 'apps/remote-control-agent/candidates/browser-egress-proxy.js' -or
         $name -ceq 'apps/remote-control-agent/candidates/browser-egress-policy.js' -or
