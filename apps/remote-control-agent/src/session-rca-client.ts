@@ -71,7 +71,9 @@ export async function spawnSessionTransport(
    throw Error('Invalid credential-free transport launch.');
  const child=spawn(process.execPath,[entry,'--session-transport',deviceId,String(expiresAt)],{
    cwd:process.cwd(),env:sessionTransportEnvironment(source),
-   stdio:'ignore',windowsHide:true,
+   // Windows needs an independent process group after one-shot OIDC parent exits.
+   // RUNNER_TRACKING_ID remains inherited so job cleanup still owns this child.
+   detached:true,stdio:'ignore',windowsHide:true,
  });
  await new Promise<void>((resolve,reject)=>{
    child.once('spawn',()=>resolve());
