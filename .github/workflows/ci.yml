@@ -159,6 +159,34 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows process integration tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
+          node --experimental-strip-types --test tests/session-rca-windows.test.ts
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Session runner context tests failed' }
+      - name: Native Windows Session-private identity ACL (synthetic Runner fixture)
+        shell: pwsh
+        env:
+          RUNNER_ENVIRONMENT: github-hosted
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = 'apps/remote-control-agent/scripts/windows-session-private-store.ps1'
+          $dir = Join-Path $env:RUNNER_TEMP 'session-rca'
+          if (Test-Path -LiteralPath $dir) { throw 'Unexpected pre-existing Session identity fixture' }
+          try {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Init -Directory $dir
+            if ($LASTEXITCODE -ne 0) { throw 'Session identity ACL initialization failed' }
+            [IO.File]::WriteAllText((Join-Path $dir 'identity.json'), '{"synthetic":true}')
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Seal -Directory $dir -FileName identity.json
+            if ($LASTEXITCODE -ne 0) { throw 'Session identity ACL sealing failed' }
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -Action Check -Directory $dir
+            if ($LASTEXITCODE -ne 0) { throw 'Session identity ACL check failed' }
+            $invalid = Join-Path $env:RUNNER_TEMP 'not-session-rca'
+            $failure = Join-Path $env:RUNNER_TEMP 'expected-session-acl-rejection.txt'
+            $process = Start-Process -FilePath powershell.exe -ArgumentList @(
+              '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File', $script,
+              '-Action','Check','-Directory',$invalid) -NoNewWindow -Wait -PassThru -RedirectStandardError $failure
+            if ($process.ExitCode -eq 0) { throw 'Unreviewed Session directory was accepted' }
+          } finally {
+            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+          }
       - name: New public PowerShell installer parses under Windows without executing
         shell: pwsh
         run: |
@@ -171,6 +199,13 @@ jobs:
             throw ('New public installer has Windows PowerShell syntax errors: ' +
               ($parseErrors | ForEach-Object { $_.Message } | Out-String))
           }
+          # The Session-only ACL helper is bundled but never executed by this parser gate.
+          $sessionErrors = $null
+          $sessionTokens = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'apps/remote-control-agent/scripts/windows-session-private-store.ps1').Path,
+            [ref]$sessionTokens, [ref]$sessionErrors)
+          if ($sessionErrors.Count -ne 0) { throw 'Windows Session ACL helper syntax invalid' }
           if ((Get-Content -Raw 'install.ps1') -notmatch 'PinnedReleaseSha256') {
             throw 'Public Windows installer must require a reviewed immutable asset hash'
           }

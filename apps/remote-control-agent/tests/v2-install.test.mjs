@@ -951,7 +951,7 @@ test("Windows Computer Use screenshot helper is included in every native staging
   const testDir = path.dirname(fileURLToPath(import.meta.url));
   const agentRoot = path.resolve(testDir, "..");
   const repoRoot = path.resolve(agentRoot, "../..");
-  const expected = "windows-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once";
+  const expected = "windows-private-store|windows-session-private-store|windows-user-task|windows-capture|windows-stage-install|windows-upgrade-once";
   const installer = await readFile(path.join(repoRoot, "install.ps1"), "utf8");
   const stageFixture = await readFile(path.join(testDir, "fixtures/windows-stage-only.ps1"), "utf8");
   const packageBuilder = await readFile(path.join(agentRoot, "scripts/build-windows-preview.mjs"), "utf8");
