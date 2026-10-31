@@ -949,18 +949,17 @@ test("native Windows packaging and installer omit the retired screenshot helper"
   const testDir = path.dirname(fileURLToPath(import.meta.url));
   const agentRoot = path.resolve(testDir, "..");
   const repoRoot = path.resolve(agentRoot, "../..");
-  for (const file of [
-    path.join(repoRoot, "install.ps1"),
-    path.join(testDir, "fixtures/windows-stage-only.ps1"),
-    path.join(agentRoot, "scripts/build-windows-preview.mjs"),
-    path.join(agentRoot, "scripts/verify-windows-preview.mjs"),
-  ]) {
-    const source = await readFile(file, "utf8");
-    assert.ok(!source.includes("windows-capture"), file);
-    if (file.endsWith("verify-windows-preview.mjs")) {
-      assert.match(source, /Retired GUI files are not part of the Windows runtime/);
-    } else {
-      assert.ok(!source.includes("playwright-core"), file);
-    }
+  const expected = "windows-private-store|windows-session-private-store|windows-user-task|windows-stage-install|windows-upgrade-once";
+  const installer = await readFile(path.join(repoRoot, "install.ps1"), "utf8");
+  const stageFixture = await readFile(path.join(testDir, "fixtures/windows-stage-only.ps1"), "utf8");
+  const builder = await readFile(path.join(agentRoot, "scripts/build-windows-preview.mjs"), "utf8");
+  const verifier = await readFile(path.join(agentRoot, "scripts/verify-windows-preview.mjs"), "utf8");
+  assert.ok(installer.includes(expected), "production installer preserves Session RCA private-store helper");
+  assert.ok(stageFixture.includes(expected), "StageOnly accepts native Session RCA helper");
+  assert.ok(builder.includes('"windows-session-private-store.ps1"'));
+  assert.ok(verifier.includes('windows-session-private-store'));
+  for (const source of [installer, stageFixture, builder]) {
+    assert.ok(!source.includes("windows-capture"), "GUI-only screenshot helper must be absent");
   }
+  assert.match(verifier, /Retired GUI files are not part of the Windows runtime/);
 });

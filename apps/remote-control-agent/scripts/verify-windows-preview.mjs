@@ -28,10 +28,13 @@ export function inspectWindowsPreview(root) {
       !expected.has("rca.cmd") ||
       !expected.has("apps/remote-control-agent/scripts/verify-windows-preview.mjs") ||
       !expected.has("apps/remote-control-agent/scripts/windows-private-store.ps1") ||
+      !expected.has("apps/remote-control-agent/scripts/windows-session-private-store.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-user-task.ps1") ||
       !expected.has("apps/remote-control-agent/scripts/windows-stage-install.ps1") ||
       !expected.has("apps/remote-control-agent/src/windows-v2.js") ||
-      expected.size < 9 || expected.size > 43 ||
+      !expected.has("apps/remote-control-agent/src/session-rca-windows.js") ||
+      !expected.has("apps/remote-control-agent/src/session-runner-oidc.js") ||
+      expected.size < 9 || expected.size > 49 ||
       expected.get("bin/node.exe") !==
         "ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32") {
     throw Error("Incomplete or unknown Windows preview files.");
@@ -52,7 +55,7 @@ export function inspectWindowsPreview(root) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) { walk(full, name); continue; }
       if (name === "bundle.json") continue;
-      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-user-task|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$/.test(name)) ||
+      if (!(/^(?:bin\/(?:node\.exe|rca-background\.exe)|rca\.cmd|apps\/remote-control-agent\/(?:package\.json|src\/[a-z0-9-]+\.js|scripts\/(?:(?:windows-private-store|windows-session-private-store|windows-user-task|windows-stage-install|windows-upgrade-once)\.ps1|verify-windows-preview\.mjs)))$/.test(name)) ||
           seen.has(name) || !expected.has(name) ||
           typeof expected.get(name) !== "string" ||
           !/^[a-f0-9]{64}$/.test(expected.get(name))) {
