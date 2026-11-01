@@ -4,6 +4,7 @@
  * The owner must explicitly authorize the existing signed pending key in MCP.
  */
 import { lstat, mkdir } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -127,7 +128,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
     process.off("SIGINT",cancel);process.off("SIGTERM",cancel);
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1])===fileURLToPath(import.meta.url)) {
   try {await runTemporaryMac();}
   catch(error) {
     process.stderr.write("macOS preview unavailable: "+(error instanceof Error?error.message:"unknown")+".\n");
