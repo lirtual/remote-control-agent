@@ -128,6 +128,21 @@ test('Windows Session child inherits only the reviewed identity/ACL environment'
   runner.ATTEMPT_ID);
 });
 
+test('Windows child allowlist preserves host keys after a case-changing env copy',async()=>{
+ const {sessionTransportEnvironment}=await import('../src/session-rca-client.ts');
+ const source:NodeJS.ProcessEnv={...runner,
+  SYSTEMROOT:'C:\\Windows',Path:'C:\\Windows\\System32',
+  GITHUB_TOKEN:'synthetic-not-forwarded',
+  actions_id_token_request_token:'synthetic-not-forwarded'};
+ const env=sessionTransportEnvironment(source);
+ assert.equal(env.SystemRoot,source.SYSTEMROOT);
+ assert.equal(env.PATH,source.Path);
+ assert.equal(env.GITHUB_ACTIONS,source.GITHUB_ACTIONS);
+ assert.equal(env.GITHUB_TOKEN,undefined);
+ assert.equal(env.actions_id_token_request_token,undefined);
+ assert.equal(env.ACTIONS_ID_TOKEN_REQUEST_TOKEN,undefined);
+});
+
 test('native Windows Session identity recovers in the exact no-OIDC child environment',
  {skip:process.platform!=='win32'}, async()=>{
  const {spawnSync}=await import('node:child_process');
@@ -146,6 +161,10 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   ACTIONS_ID_TOKEN_REQUEST_TOKEN:'SYNTHETIC_DO_NOT_FORWARD',
  };
  const childEnv=sessionTransportEnvironment(source);
+ assert.equal(childEnv.SystemRoot,process.env.SystemRoot,
+  'Windows SystemRoot preserved through a copied environment');
+ assert.equal(childEnv.PATH,process.env.PATH,
+  'Windows PATH preserved through a copied environment');
  assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_URL,undefined);
  assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN,undefined);
  const url=pathToFileURL(path.resolve('src/session-windows-identity-store.ts')).href;
