@@ -98,6 +98,10 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
     const home=os.homedir();
     const stateRoot=await privateDirectory(home,[".local","share","mcp-workers","remote-control","temporary"]);
     const receipts=await privateDirectory(home,[".local","state","mcp-workers","remote-control-agent"]);
+    // The shared ReceiptStore normalizes an existing DB mode. For this
+    // unpublished Mac candidate, deny an unsafe pre-existing DB BEFORE any
+    // SQLite open or authenticated WSS connection instead of silently fixing it.
+    await privateFileIfPresent(path.join(receipts,"operation-receipts.sqlite"));
     const key=path.join(stateRoot,"v2-identity.pem");
     const hasKey=await privateFileIfPresent(key);
     const hasId=await privateFileIfPresent(key+".device-id");

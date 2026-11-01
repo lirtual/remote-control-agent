@@ -98,7 +98,7 @@ test("#658 private identity and SQLite receipt paths fail closed on insecure per
     const alias=path.join(directory,"alias.pem");
     symlinkSync(key,alias);
     await assert.rejects(privateFileIfPresent(alias),/Unsafe macOS key/);
-    const sqlite=path.join(directory,"receipts.sqlite");
+    const sqlite=path.join(directory,"operation-receipts.sqlite");
     writeFileSync(sqlite,"synthetic sqlite fixture",{mode:0o600});
     chmodSync(sqlite,0o644);
     await assert.rejects(privateFileIfPresent(sqlite),/Unsafe macOS key/);
