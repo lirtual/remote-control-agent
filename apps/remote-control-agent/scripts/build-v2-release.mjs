@@ -29,13 +29,12 @@ export function parseArgs(argv) {
     params[{"--node-bin":"nodeBin","--node-sha256":"nodeSha256","--native-sha256":"nativeSha256"}[argv[i]] ?? argv[i].slice(2)] = argv[i+1];
   }
   const darwin = params.target === "darwin-arm64";
-  if (Object.keys(params).length!==(darwin ? 5 : 7) ||
-      (darwin && (params.native !== undefined || params.nativeSha256 !== undefined)) ||
+  if (Object.keys(params).length!==7 ||
       !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(params.version) ||
       !ALLOWED.has(params.target) ||
       !/^[a-f0-9]{64}$/.test(params.nodeSha256) ||
-      (!darwin && !/^[a-f0-9]{64}$/.test(params.nativeSha256)) ||
-      ![params.nodeBin, ...(darwin ? [] : [params.native]), params.out].every(x => path.isAbsolute(x))) {
+      !/^[a-f0-9]{64}$/.test(params.nativeSha256) ||
+      ![params.nodeBin, params.native, params.out].every(x => path.isAbsolute(x))) {
     throw new Error("Specify pinned version, supported target, absolute Node24/native paths and output.");
   }
   return params;
@@ -89,6 +88,12 @@ export function ensureNativeTarget({ target, nodeBin, native, nodeSha256, native
     const version = spawnSync(nodeBin, ["--version"], { encoding:"utf8", timeout:5000 });
     if (version.error || version.status !== 0 || !/^v24\.[0-9]+\.[0-9]+\s*$/.test(version.stdout)) {
       throw new Error("Candidate requires native Node 24.");
+    }
+    const helper=statSync(native);
+    if (!helper.isFile() || (helper.mode & 0o111)===0 ||
+        machOMachine(readFileSync(native))!=="arm64" ||
+        createHash("sha256").update(readFileSync(native)).digest("hex")!==nativeSha256) {
+      throw new Error("Darwin owned-group supervisor Mach-O architecture or digest mismatch.");
     }
     return { arch:"arm64", nodeVersion:version.stdout.trim(), libc:undefined, glibcMin:undefined };
   }
@@ -214,8 +219,9 @@ export function build(args) {
   mkdirSync(path.join(work, "apps/remote-control-agent/scripts"), {recursive:true,mode:0o700});
   mkdirSync(path.join(work, "apps/remote-control-agent/.build"), {recursive:true,mode:0o700});
   copyFileSync(args.nodeBin, path.join(work, "bin/node"));
-  if (!darwin) copyFileSync(args.native, path.join(work, "apps/remote-control-agent/.build/session-supervisor"));
-  for (const relative of darwin ? ["bin/node"] : ["bin/node","apps/remote-control-agent/.build/session-supervisor"]) {
+  const helperFile=darwin ? "darwin-session-supervisor" : "session-supervisor";
+  copyFileSync(args.native, path.join(work, "apps/remote-control-agent/.build",helperFile));
+  for (const relative of ["bin/node","apps/remote-control-agent/.build/"+helperFile]) {
     chmodSync(path.join(work,relative),0o700);
   }
   // Both full-tools operation routing and the owner-local admission freeze
@@ -258,7 +264,7 @@ export function build(args) {
   writeFileSync(path.join(work,"apps/remote-control-agent/package.json"),JSON.stringify({type:"module"})+"\n",{mode:0o600});
   writeFileSync(path.join(work,"bundle.json"),JSON.stringify({
     name:"remote-control-agent",version:args.version,target:args.target,
-    node:nodeVersion,...(darwin ? {candidate_profile:"darwin-temporary-file-v1"} : {glibc_build:libc,glibc_min:glibcMin}),modules,
+    node:nodeVersion,...(darwin ? {candidate_profile:"darwin-temporary-owned-session-v1",native_supervisor:"darwin-owned-group-v1"} : {glibc_build:libc,glibc_min:glibcMin}),modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
     ...(!darwin ? {upgrade_profile:"paired-full-v1"} : {})
   })+"\n",{mode:0o600});

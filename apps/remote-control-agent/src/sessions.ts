@@ -161,7 +161,7 @@ export function windowsManagedShellArguments(command: string): string[] {
 
 const supervisorPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../.build/session-supervisor",
+  process.platform === "darwin" ? "../.build/darwin-session-supervisor" : "../.build/session-supervisor",
 );
 
 function snapshot(session: ManagedSession): SessionSnapshot {

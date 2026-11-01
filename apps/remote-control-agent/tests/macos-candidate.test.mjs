@@ -11,15 +11,16 @@ import { parseTemporaryMacArgs, privateDirectory, privateFileIfPresent } from ".
 const sha = "a".repeat(64);
 test("#658 unpublished Darwin ARM64 candidate accepts only a pinned native Node without Linux helper", () => {
   assert.deepEqual(parseArgs(["--version","v0.0.0-ci","--target","darwin-arm64",
-    "--node-bin","/tmp/native-node","--node-sha256",sha,"--out","/tmp/bundle"]), {
+    "--node-bin","/tmp/native-node","--node-sha256",sha,
+    "--native","/tmp/native-helper","--native-sha256",sha,"--out","/tmp/bundle"]), {
     version:"v0.0.0-ci",target:"darwin-arm64",nodeBin:"/tmp/native-node",
-    nodeSha256:sha,out:"/tmp/bundle",
+    nodeSha256:sha,native:"/tmp/native-helper",nativeSha256:sha,out:"/tmp/bundle",
   });
   assert.throws(() => parseArgs(["--version","v0.0.0-ci","--target","darwin-x64",
     "--node-bin","/tmp/node","--node-sha256",sha,"--out","/tmp/bundle"]), /supported target/);
   assert.throws(() => parseArgs(["--version","v0.0.0-ci","--target","darwin-arm64",
-    "--node-bin","/tmp/node","--native","/tmp/linux-supervisor","--node-sha256",sha,
-    "--native-sha256",sha,"--out","/tmp/bundle"]));
+    "--node-bin","/tmp/node","--native","/tmp/native-helper","--node-sha256",sha,
+    "--out","/tmp/bundle"]));
 });
 test("#658 native Mach-O validation rejects ELF, non-native CPU and malformed fat headers", () => {
   const arm64 = Buffer.alloc(64);

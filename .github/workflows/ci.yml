@@ -142,6 +142,14 @@ jobs:
           node-version: '24.21.0'
       - name: Install pinned dependencies
         run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Build native Darwin owned-group helper (no owner pairing)
+        run: |
+          set -euo pipefail
+          mkdir -p apps/remote-control-agent/.build
+          cc -std=c11 -O2 -Wall -Wextra -Werror -fstack-protector-strong \
+            apps/remote-control-agent/scripts/darwin-session-supervisor.c \
+            -o apps/remote-control-agent/.build/darwin-session-supervisor
+          chmod 700 apps/remote-control-agent/.build/darwin-session-supervisor
       - name: Typecheck and verify native file/receipt seam (no owner pairing)
         run: |
           set -euo pipefail
@@ -149,7 +157,7 @@ jobs:
           test "$(sw_vers -productVersion | cut -d. -f1)" -ge 15
           corepack pnpm --filter remote-control-agent typecheck
           cd apps/remote-control-agent
-          node --experimental-strip-types --test tests/macos-candidate.test.mjs tests/macos-file-tools.test.ts tests/pair-device.test.ts
+          node --experimental-strip-types --test tests/macos-candidate.test.mjs tests/macos-file-tools.test.ts tests/macos-managed-sessions.test.ts tests/pair-device.test.ts
       - name: Build and inspect native unpublished ARM64 candidate
         shell: bash
         run: |
@@ -169,6 +177,8 @@ jobs:
               --version "$RCA_CANDIDATE_TAG" --target darwin-arm64 \
               --node-bin "$temp_dir/node" \
               --node-sha256 "$(shasum -a 256 "$temp_dir/node" | awk '{print $1}')" \
+              --native "$(pwd)/apps/remote-control-agent/.build/darwin-session-supervisor" \
+              --native-sha256 "$(shasum -a 256 apps/remote-control-agent/.build/darwin-session-supervisor | awk '{print $1}')" \
               --out "$temp_dir/$pass"
           done
           asset="remote-control-agent-$RCA_CANDIDATE_TAG-darwin-arm64.tar.gz"
@@ -176,9 +186,10 @@ jobs:
           mkdir "$temp_dir/unpacked"
           tar -xzf "$temp_dir/first/$asset" -C "$temp_dir/unpacked"
           test "$("$temp_dir/unpacked/bin/node" --version)" = v24.21.0
-          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-temporary-file-v1" || m.upgrade_profile)process.exit(1)' \
+          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-temporary-owned-session-v1" || m.native_supervisor!=="darwin-owned-group-v1" || m.upgrade_profile)process.exit(1)' \
             "$temp_dir/unpacked/bundle.json"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/.build/session-supervisor"
+          test -x "$temp_dir/unpacked/apps/remote-control-agent/.build/darwin-session-supervisor"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/scripts/install-v2.mjs"
           for js in "$temp_dir/unpacked"/apps/remote-control-agent/src/*.js; do
             "$temp_dir/unpacked/bin/node" --check "$js"

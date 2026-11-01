@@ -56,7 +56,7 @@ test("#658 unpacked Mach-O Node runs real native file/WSS/SQLite receipt and Unk
   const monitor=monitorDeviceSocket(socket,controller.signal,
     {intervalMs:60000,timeoutMs:10000},
     (tool,args,signal)=>executeV2SessionRead(engine,tool,args,signal),
-    (tool,args,id,signal)=>executeV2FileOperation(engine,tool,args,id,signal),false);
+    (tool,args,id,signal)=>executeV2FileOperation(engine,tool,args,id,signal),true);
   const sendOperation=async(tool,args,id=randomUUID())=>{
     const request_id=randomUUID();
     socket.frame({kind:"operation",request_id,operation_id:id,tool,arguments:args});
@@ -91,8 +91,12 @@ test("#658 unpacked Mach-O Node runs real native file/WSS/SQLite receipt and Unk
     assert.equal((await sendRead("read_file",{path:filename})).status,"failed");
     await chmod(filename,0o600);
     const shellId=randomUUID();
-    assert.equal((await sendOperation("start_process",{command:"echo unauthorized"},shellId)).status,"unavailable");
-    assert.equal(await engine.getReceipt(shellId),null);
+    const shell=await sendOperation("start_process",{command:"printf bundled-shell-ok",timeout_ms:2000},shellId);
+    assert.ok(["completed","running"].includes(shell.status),"bundled Mach-O helper must admit Shell");
+    const sessionRead=await sendRead("list_sessions",{});
+    assert.equal(sessionRead.status,"completed");
+    assert.match(sessionRead.text,/bundled-shell-ok|session_id/);
+    assert.notEqual((await sendOperation("get_operation_status",{operation_id:shellId},shellId)).status,"not_found");
     // Fault-inject a commit after a real file effect; a new engine must not replay it.
     await engine.close();
     engine=createAgentExecutionEngine({receiptDirectory:receipts,
