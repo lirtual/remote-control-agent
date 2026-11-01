@@ -237,6 +237,10 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
     ["if (($parentAttributes -band [IO.FileAttributes]::Directory) -eq 0 -or",'attributes_ready'],
     ["$user=[Security.Principal.WindowsIdentity]::GetCurrent().User",'user_ready'],
     ["Assert-Private $expected $true",'acl_enter'],
+    ["  $attributes=[IO.File]::GetAttributes($target)",'acl_attributes'],
+    ["  $acl=if($isDirectory){[IO.Directory]::GetAccessControl($target)}else{[IO.File]::GetAccessControl($target)}",'acl_access'],
+    ["  if(-not $acl.AreAccessRulesProtected -or $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $user.Value){",'acl_owner'],
+    ["  $hasUser=$false",'acl_rules'],
    ] as const;
    let instrumented=original;
    for(const [anchor,stage] of probes){
@@ -256,7 +260,8 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
    let stage='unknown';
    try{stage=await readFile(trace,'utf8');}catch{}
    if(['entered','path_ready','attributes_start','attributes_ready',
-     'user_ready','acl_enter','acl_complete','complete'].includes(stage))
+     'user_ready','acl_enter','acl_attributes','acl_access','acl_owner',
+     'acl_rules','acl_complete','complete'].includes(stage))
      safeAclStage=stage;
    else safeAclStage='unknown';
   }

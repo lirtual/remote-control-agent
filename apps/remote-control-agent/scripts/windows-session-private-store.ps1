@@ -44,8 +44,10 @@ function New-PrivateAcl([bool]$isDirectory) {
   return $acl
 }
 function Assert-Private([string]$target,[bool]$isDirectory){
-  $item=Get-Item -LiteralPath $target -Force
-  if($item.PSIsContainer -ne $isDirectory -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+  $attributes=[IO.File]::GetAttributes($target)
+  $actualDirectory=($attributes -band [IO.FileAttributes]::Directory) -ne 0
+  if($actualDirectory -ne $isDirectory -or
+     ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
     throw 'Wrong type or reparse point'
   }
   $acl=if($isDirectory){[IO.Directory]::GetAccessControl($target)}else{[IO.File]::GetAccessControl($target)}
@@ -70,9 +72,11 @@ Assert-Private $expected $true
 if($Action -eq 'Seal'){
   if(-not $FileName){throw 'Exact newly-created Session filename required'}
   $file=[IO.Path]::Combine($expected,$FileName)
-  $item=Get-Item -LiteralPath $file -Force
   $isDirectory=$FileName -eq 'receipts'
-  if($item.PSIsContainer -ne $isDirectory -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+  $attributes=[IO.File]::GetAttributes($file)
+  $actualDirectory=($attributes -band [IO.FileAttributes]::Directory) -ne 0
+  if($actualDirectory -ne $isDirectory -or
+     ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
     throw 'Only regular Session-owned resources may be sealed'
   }
   if($isDirectory){[IO.Directory]::SetAccessControl($file,(New-PrivateAcl $true))}
