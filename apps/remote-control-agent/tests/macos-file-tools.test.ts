@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,4 +48,31 @@ test("#658 signed Agent tool adapter: write/read/search/edit receipts survive re
 
 test("#658 Darwin shell default never inherits an ambient interactive SHELL", () => {
   assert.equal(defaultAgentShellPath("darwin"),"/bin/sh");
+});
+
+test("#658 failed post-effect SQLite commit is unknown and cannot append again after restart", async () => {
+  const root=await mkdtemp(path.join(os.tmpdir(),"rca-mac-unknown-"));
+  const filename=path.join(root,"effect.txt");
+  const receipts=path.join(root,"receipts");
+  const id=randomUUID();
+  const signal=new AbortController().signal;
+  const call={path:filename,content:"once\n",mode:"append"};
+  let block=true;
+  let engine=createAgentExecutionEngine({
+    receiptDirectory:receipts,
+    receiptFaultForTests: phase=>phase==="commit" && block && existsSync(filename),
+  });
+  try {
+    const initial=await executeV2FileOperation(engine,"write_file",call,id,signal);
+    assert.equal(initial.status,"unknown");
+    assert.equal(await readFile(filename,"utf8"),"once\n");
+    block=false;
+    assert.equal((await executeV2FileOperation(engine,"write_file",call,id,signal)).status,"unknown");
+    assert.equal(await readFile(filename,"utf8"),"once\n");
+    await engine.close();
+    engine=createAgentExecutionEngine({receiptDirectory:receipts});
+    assert.equal((await executeV2FileOperation(engine,"get_operation_status",{},id,signal)).status,"unknown");
+    assert.equal((await executeV2FileOperation(engine,"write_file",call,id,signal)).status,"unknown");
+    assert.equal(await readFile(filename,"utf8"),"once\n");
+  } finally {block=false;await engine.close();await rm(root,{recursive:true,force:true});}
 });
