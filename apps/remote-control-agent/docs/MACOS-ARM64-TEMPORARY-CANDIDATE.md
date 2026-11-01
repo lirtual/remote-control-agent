@@ -33,7 +33,14 @@ must inspect and explicitly approve the Temporary key using existing RCA MCP.
 Only successful signed device-ID recovery enables a signed WSS connection.
 Ctrl+C disconnects the foreground Agent but does NOT revoke the cloud grant.
 Resume a previously approved identity with --resume, never silently
-create another grant or extend the server-side expiry.
+create another grant or extend the server-side expiry. If the first pending
+request failed or its 10-minute code expired before owner approval, use
+`--retry-pairing` instead: explicitly select Temporary again and review
+the new code and unchanged key fingerprint. Only use this while there is
+no approved local device ID. The old pending code becomes invalid; an
+approved/revoked identity conflict is denied, not rotated. If approval may
+already have occurred, first attempt `--resume` so an approved key
+is recovered without creating another pending request.
 
 Key and SQLite receipt files stay in private owner-owned local directories.
 If an unsigned candidate fails macOS Gatekeeper or TCC, record Blocked.
@@ -43,7 +50,8 @@ simulate owner approval.
 ## Acceptance status
 
 - Linux source file/WSS adapter and SQLite idempotency: existing tests pass.
-- Darwin native ARM64 self-contained archive: macOS CI evidence pending.
+- Darwin native ARM64 self-contained archive: macOS CI passed, including
+  unpacked Mach-O Node, WSS file/receipt/Unknown smoke and deterministic digest.
 - Personal Mac signed WSS, file/replay and SQLite receipts: Not performed.
 - Real macOS TCC, APFS and security permission failures: Not performed.
 - Intel Mac, owned Sessions, LaunchAgent, upgrades: later tickets.
