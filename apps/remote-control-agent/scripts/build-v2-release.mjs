@@ -182,7 +182,8 @@ function tarballDarwin(dir, file) {
     const data = entry.directory ? Buffer.alloc(0) : readFileSync(path.join(dir,name));
     const header = Buffer.alloc(512);
     header.write(name,0,"ascii");
-    const mode = entry.directory || name === "bin/node" ? 0o700 : 0o600;
+    const mode = entry.directory || name === "bin/node" ||
+      name === "apps/remote-control-agent/.build/darwin-session-supervisor" ? 0o700 : 0o600;
     oct(header,100,8,mode);oct(header,108,8,0);oct(header,116,8,0);
     oct(header,124,12,data.length);oct(header,136,12,0);
     header.fill(32,148,156); header.write(entry.directory ? "5" : "0",156,"ascii");
