@@ -3,8 +3,12 @@
 # Verify the exact reviewed archive BEFORE executing its bundled Node.
 set -eu
 umask 077
-if [ "$(uname -s)" != Darwin ] || [ "$(uname -m)" != arm64 ]; then
-  echo 'Native macOS ARM64 required.' >&2; exit 1
+[ "$(uname -s)" = Darwin ] || { echo 'Native macOS required.' >&2; exit 1; }
+case "$(uname -m)" in arm64|x86_64) ;; *)
+  echo 'Unsupported macOS CPU; no Rosetta fallback.' >&2; exit 1;; esac
+if [ "$(uname -m)" = x86_64 ] &&
+   [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || :)" = 1 ]; then
+  echo 'Rosetta-translated Intel process is not a native Intel Mac.' >&2; exit 1
 fi
 major="$(sw_vers -productVersion | cut -d. -f1)"
 case "$major" in ''|*[!0-9]*) exit 1;; esac

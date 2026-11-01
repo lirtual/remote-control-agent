@@ -1,5 +1,5 @@
 /**
- * #660 macOS 15+ ARM64 non-root login-scoped Agent candidate.
+ * #660–#661 native macOS 15+ non-root login-scoped Agent candidate.
  * Pair only in a real local terminal; LaunchAgent can only resume a
  * previously explicitly approved permanent key and signed WSS identity.
  */

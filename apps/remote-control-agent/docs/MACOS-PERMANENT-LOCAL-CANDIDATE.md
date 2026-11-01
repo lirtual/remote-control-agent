@@ -1,10 +1,10 @@
-# #660 — macOS ARM64 offline permanent LaunchAgent candidate
+# #660–#661 — macOS ARM64 / Intel x64 offline permanent LaunchAgent candidate
 
 This is **unpublished source/CI only**. It does not create a public macOS
 installer, change the official Agent Release pin, deploy a Worker, or
 demonstrate real personal Mac authorization.
 
-The owner obtains an independently reviewed darwin-arm64 candidate, its
+The owner obtains an independently reviewed native darwin-arm64 or darwin-x64 candidate, its
 exact SHA-256 and the reviewed Git commit. The local first-stage script in
 scripts/macos-local.sh checks CPU, OS, real TTY, SHA-256 and strict USTAR
 membership **before** executing the bundled Node 24 binary.
@@ -39,6 +39,7 @@ Hosted native macOS CI checks synthetic LaunchAgent/plist, candidate-package
 integrity, stopped-state and rollback cases using mocked launchctl and cloud
 connectivity. That is **not** a personal Mac Terminal/LaunchAgent, Gatekeeper,
 TCC/APFS, login/logout/sleep, real owner pairing or live WSS upgrade test.
-Mark those Not performed until real device evidence exists. Intel x64 is #661,
-official five-asset Release and Worker installer route are #662 and require
+Mark those Not performed until real device evidence exists **per architecture**.
+Intel x64 native hosted CI is covered by #661; this is not an Intel owner Mac.
+Official five-asset Release and Worker installer route are #662 and require
 separate production authorization.

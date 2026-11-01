@@ -6,21 +6,34 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parseArgs, machOMachine } from "../scripts/build-v2-release.mjs";
-import { parseTemporaryMacArgs, privateDirectory, privateFileIfPresent } from "../src/macos-temporary.ts";
+import { requireNativeMac, parseTemporaryMacArgs, privateDirectory, privateFileIfPresent } from "../src/macos-temporary.ts";
 
 const sha = "a".repeat(64);
-test("#658 unpublished Darwin ARM64 candidate accepts only a pinned native Node without Linux helper", () => {
+test("#661 both Darwin native candidates require pinned Node and owned-group helper", () => {
   assert.deepEqual(parseArgs(["--version","v0.0.0-ci","--target","darwin-arm64",
     "--node-bin","/tmp/native-node","--node-sha256",sha,
     "--native","/tmp/native-helper","--native-sha256",sha,"--out","/tmp/bundle"]), {
     version:"v0.0.0-ci",target:"darwin-arm64",nodeBin:"/tmp/native-node",
     nodeSha256:sha,native:"/tmp/native-helper",nativeSha256:sha,out:"/tmp/bundle",
   });
-  assert.throws(() => parseArgs(["--version","v0.0.0-ci","--target","darwin-x64",
-    "--node-bin","/tmp/node","--node-sha256",sha,"--out","/tmp/bundle"]), /supported target/);
+  assert.deepEqual(parseArgs(["--version","v0.0.0-ci","--target","darwin-x64",
+    "--node-bin","/tmp/native-node","--node-sha256",sha,
+    "--native","/tmp/native-helper","--native-sha256",sha,"--out","/tmp/bundle"]).target,"darwin-x64");
+  assert.throws(() => parseArgs(["--version","v0.0.0-ci","--target","darwin-ppc",
+    "--node-bin","/tmp/native-node","--node-sha256",sha,
+    "--native","/tmp/native-helper","--native-sha256",sha,"--out","/tmp/bundle"]), /supported target/);
   assert.throws(() => parseArgs(["--version","v0.0.0-ci","--target","darwin-arm64",
     "--node-bin","/tmp/node","--native","/tmp/native-helper","--node-sha256",sha,
     "--out","/tmp/bundle"]));
+});
+test("#661 native platform gate explicitly rejects Rosetta and unsupported CPUs", () => {
+  assert.throws(()=>requireNativeMac("darwin","x64","24.5.0",true),/Rosetta/);
+  assert.throws(()=>requireNativeMac("darwin","ia32","24.5.0",false),/native macOS/);
+  assert.throws(()=>requireNativeMac("darwin","x64","23.5.0",false),/macOS 15/);
+  if (typeof process.getuid === "function" && process.getuid() !== 0) {
+    requireNativeMac("darwin","x64","24.5.0",false);
+    requireNativeMac("darwin","arm64","24.5.0",false);
+  }
 });
 test("#658 native Mach-O validation rejects ELF, non-native CPU and malformed fat headers", () => {
   const arm64 = Buffer.alloc(64);

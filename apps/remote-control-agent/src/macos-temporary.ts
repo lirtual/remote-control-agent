@@ -1,10 +1,11 @@
 /**
- * #658: unpublished native macOS ARM64 *temporary foreground* candidate.
+ * #658/#661: unpublished native macOS *temporary foreground* candidate.
  * No installer, LaunchAgent, permanent grant or auto-renewal.
  * Managed Shell depends on the bundled native Darwin owned-group supervisor.
  * The owner must explicitly authorize the existing signed pending key in MCP.
  */
 import { lstat, mkdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,11 +16,23 @@ import { selectDeviceLabel } from "./v2-enrollment.ts";
 import { DeviceSessionRejectedError, recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 
-export function requireNativeMac(platform = process.platform, arch = process.arch, release = os.release()): void {
-  if (platform !== "darwin" || arch !== "arm64" ||
+/** The hardware ARM64 flag stays set even when an x64 parent runs
+ * under Rosetta. A child querying proc_translated could itself be native,
+ * so query the physical ISA instead of another process's translation flag. */
+export function isRosettaProcess(invoke = spawnSync): boolean {
+  if (process.platform !== "darwin" || process.arch !== "x64") return false;
+  const check = invoke("/usr/sbin/sysctl", ["-n", "hw.optional.arm64"],
+    {encoding:"utf8",timeout:2000});
+  return check.status === 0 && check.stdout.trim() === "1";
+}
+export function requireNativeMac(
+  platform = process.platform, arch = process.arch, release = os.release(),
+  translated = isRosettaProcess(),
+): void {
+  if (platform !== "darwin" || !["arm64","x64"].includes(arch) || translated ||
       !/^\d+\./.test(release) || Number.parseInt(release,10) < 24 ||
       process.getuid?.() === 0) {
-    throw new Error("Preview requires macOS 15+ ARM64 under an unprivileged local user.");
+    throw new Error("Preview requires native macOS 15+ ARM64 or x64 under an unprivileged local user; Rosetta is unsupported.");
   }
 }
 
@@ -115,7 +128,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
       }
       process.stdout.write(retryPairing
         ? "Explicit pairing retry: old pending codes become invalid; the same private key is retained.\n"
-        : "Unpublished macOS ARM64 preview: only Temporary (24h) is available.\n");
+        : "Unpublished native macOS preview: only Temporary (24h) is available.\n");
       if (await promptInstallMode()!=="temporary")
         throw Error("Permanent macOS mode is not implemented by this candidate.");
       const enrollment=await beginDeviceEnrollment(
