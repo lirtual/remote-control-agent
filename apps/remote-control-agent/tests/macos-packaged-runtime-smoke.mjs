@@ -1,6 +1,7 @@
 /** Execute the actual unpacked Node/Mach-O candidate, never source adapters. */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +96,10 @@ test("#658 unpacked Mach-O Node runs real native file/WSS/SQLite receipt and Unk
     // Fault-inject a commit after a real file effect; a new engine must not replay it.
     await engine.close();
     engine=createAgentExecutionEngine({receiptDirectory:receipts,
-      receiptFaultForTests:phase=>phase==="commit"});
+      // A first receipt admission must commit; inject failure ONLY after the
+      // append has made its real filesystem effect (not before admission).
+      receiptFaultForTests:phase=>phase==="commit" &&
+        readFileSync(filename,"utf8").endsWith("last\n")});
     const unknownId=randomUUID(), unknown={path:filename,content:"last\n",mode:"append"};
     assert.equal((await sendOperation("write_file",unknown,unknownId)).status,"unknown");
     assert.equal((await readFile(filename,"utf8")),"updated\nlast\n");
