@@ -327,6 +327,7 @@ test('Linux/WSL2 owner Stop survives offline cloud failure and Start reconciles 
   assert.deepEqual(events,['cloud:stop','stop']);
   assert.equal(readFileSync(marker,'utf8'),'stopped\n');
   assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+  await assert.rejects(runInteractiveLocalManager(['upgrade'],opts),/Owner STOP retained/);
   await assert.rejects(runInteractiveLocalManager(['start'],opts),/network unavailable/);
   assert.equal(readFileSync(marker,'utf8'),'stopped\n');
   available=true;
