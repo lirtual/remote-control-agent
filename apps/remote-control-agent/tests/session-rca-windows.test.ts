@@ -174,15 +174,27 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   const physical={attempt_id:process.env.ATTEMPT_ID,
    github_run_id:Number(process.env.GITHUB_RUN_ID),
    github_run_attempt:Number(process.env.GITHUB_RUN_ATTEMPT),workflow_name:'windows'};
+  let phase='store';
+  try{
   const {dir,identity}=await loadOrCreateWindowsSessionIdentity(
    process.env.RUNNER_TEMP,physical);
+  phase='pem';
   await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);
+  phase='sidecar';
   await verifiedWindowsSessionFile(dir,'v2-identity.pem.device-id',
     '123e4567-e89b-42d3-a456-426614174005'+String.fromCharCode(10));
+  phase='checkpoint';
   await verifiedWindowsSessionFile(dir,'transport-stage',
     'pending'+String.fromCharCode(10));
+  phase='final_acl';
   checkWindowsSessionAcl('Check',dir);
   process.stdout.write('identity_ready');
+  }catch(e){
+   const message=e instanceof Error?e.message:'';
+   const cause=message==='Session ACL helper timed out.'?'acl_timeout':
+    message==='Session job-private ACL check refused.'?'acl_refused':'other';
+   process.stdout.write('failed_'+phase+'_'+cause);process.exitCode=1;
+  }
  `;
  const invoke=(env:NodeJS.ProcessEnv)=>spawnSync(process.execPath,
   ['--experimental-strip-types','--input-type=module','--eval',program],
@@ -194,7 +206,9 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   assert.equal(parent.stdout,'identity_ready');
   const child=invoke(childEnv);
   assert.equal(child.error,undefined);
-  assert.equal(child.status,0,'OIDC-stripped native child recovery');
+  const safePhase=/^failed_(store|pem|sidecar|checkpoint|final_acl)_(acl_timeout|acl_refused|other)$/.test(child.stdout)?
+    child.stdout:'unknown';
+  assert.equal(child.status,0,'OIDC-stripped native child recovery: '+safePhase);
   assert.equal(child.stdout,'identity_ready');
  }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -218,20 +232,27 @@ test('native detached credential-free child recovers after parent exit',
  const entry=path.join(root,'synthetic-child.mjs');
  const childCode=[
   "import path from 'node:path';",
-  "import {lstat} from 'node:fs/promises';",
+  "import {lstat,writeFile} from 'node:fs/promises';",
   "import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,checkWindowsSessionAcl} from "+JSON.stringify(store)+";",
   "import {writeTransportStage,windowsRunnerTransportEnvironment} from "+JSON.stringify(windows)+";",
   "const e=windowsRunnerTransportEnvironment(process.env,'win32');",
   "const checkpoint=path.win32.join(e.runnerTemp,'session-rca');",
   "await writeTransportStage(checkpoint,'entered');",
+  "let phase='store';try{",
   "const {dir,identity}=await loadOrCreateWindowsSessionIdentity(e.runnerTemp,e.physical);",
+  "phase='pem';",
   "await writeTransportStage(dir,'store_ready');",
   "const key=path.win32.join(dir,'v2-identity.pem');",
   "await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);",
-  "await writeTransportStage(dir,'pem_ready');",
+  "await writeTransportStage(dir,'pem_ready');phase='sidecar';",
   "await lstat(key+'.device-id');",
   "checkWindowsSessionAcl('Check',dir);",
   "await writeTransportStage(dir,'identity_ready');",
+  "}catch(e){",
+  "const message=e instanceof Error?e.message:'';",
+  "const cause=message==='Session ACL helper timed out.'?'acl_timeout':message==='Session job-private ACL check refused.'?'acl_refused':'other';",
+  "await writeFile(path.win32.join(e.runnerTemp,'synthetic-child-failure'),'failed_'+phase+'_'+cause,'utf8');",
+  "}",
  ].join(String.fromCharCode(10));
  const parentCode=[
   "import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile} from "+JSON.stringify(store)+";",
@@ -266,8 +287,13 @@ test('native detached credential-free child recovers after parent exit',
    if(stage==='identity_ready\n')break;
    await new Promise(resolve=>setTimeout(resolve,200));
   }
+  let safeFailure='unknown';
+  try{
+   const value=await readFile(path.join(root,'synthetic-child-failure'),'utf8');
+   if(/^failed_(store|pem|sidecar)_(acl_timeout|acl_refused|other)$/.test(value))safeFailure=value;
+  }catch{}
   assert.equal(stage,'identity_ready\n',
-   'real detached child did not recover identity after parent exited');
+   'real detached child did not recover identity after parent exited: '+safeFailure);
  }finally{
   await rm(root,{recursive:true,force:true});
  }

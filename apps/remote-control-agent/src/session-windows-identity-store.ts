@@ -16,6 +16,8 @@ export function checkWindowsSessionAcl(action:'Init'|'Check'|'Seal',directory:st
  const result=spawnSync(ps,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
    '-File',SCRIPT,'-Action',action,'-Directory',directory,...(file?['-FileName',file]:[])],
    {encoding:'utf8',windowsHide:true,timeout:12000,stdio:'pipe'});
+ if((result.error as NodeJS.ErrnoException|undefined)?.code==='ETIMEDOUT')
+   throw Error('Session ACL helper timed out.');
  if(result.error||result.status!==0)throw Error('Session job-private ACL check refused.');
 }
 export async function verifiedWindowsSessionFile(dir:string,name:SessionFileName,expected:string):Promise<void>{
