@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.45",
+  "source_sha": "2940b9bae9f4a5ec2a95ab6bc3b33b90d440a575",
+  "candidate_run_id": 41316512738,
+  "release_title": "Remote Control Agent v0.1.45 \u2014 permanent idle Stop/Resume",
+  "release_notes": ".github/release-notes/v0.1.45.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.45-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.45-linux-x64-glibc.tar.gz",
+      "sha256": "a627e2fe10a66b38dda3f8ed94d86edca44f5b6cd4c40dad9f93fed47c45154b"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.45-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.45-linux-arm64-glibc.tar.gz",
+      "sha256": "b0aa35b96c1f30825b7fbc63c751886da7dc5747e6ef67fd78255b5c90560fd9"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.45-windows-x64",
+      "name": "remote-control-agent-v0.1.45-windows-x64.zip",
+      "sha256": "b4410aa8bb7026708fa0ef563026bcaf25c7e618b9c1d814909d3177617061bd"
+    }
+  ]
+}
