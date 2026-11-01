@@ -61,6 +61,10 @@ test('native Windows transport stage stays in the sealed job-private file',
   await writeFile(checkpoint,'pending\n',{flag:'wx'});
   native('Seal','transport-stage');
   native('Check');
+  await writeTransportStage(dir,'store_ready');
+  assert.equal(await readFile(checkpoint,'utf8'),'store_ready\n');
+  await writeTransportStage(dir,'pem_ready');
+  assert.equal(await readFile(checkpoint,'utf8'),'pem_ready\n');
   await writeTransportStage(dir,'challenge_ok');
   assert.equal(await readFile(checkpoint,'utf8'),'challenge_ok\n');
   native('Check');
