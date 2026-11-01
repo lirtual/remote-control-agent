@@ -7,7 +7,7 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
+#include <sys/select.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -80,18 +80,20 @@ static void anchor(int requests, int responses, char **argv) {
       group_kill();
     }
     if (waited<0 && errno!=EINTR) group_kill();
-    struct pollfd p={.fd=requests,.events=POLLIN|POLLHUP};
-    int polled=poll(&p,1,50);
-    if (polled<0 && errno==EINTR) continue;
-    if (polled<0 || (p.revents&(POLLHUP|POLLERR|POLLNVAL))) group_kill();
-    if (p.revents&POLLIN) {
+    fd_set ready;
+    FD_ZERO(&ready); FD_SET(requests,&ready);
+    struct timeval timeout={.tv_sec=0,.tv_usec=50000};
+    int available=select(requests+1,&ready,NULL,NULL,&timeout);
+    if (available<0 && errno==EINTR) continue;
+    if (available<0) group_kill();
+    if (available>0 && FD_ISSET(requests,&ready)) {
       char request=0;
       do { n=read(requests,&request,1); } while (n<0 && errno==EINTR);
-      if (n!=1) group_kill();
+      if (n!=1) group_kill(); /* EOF / lost monitor authority */
       if (request=='T') {
         if (byte(responses,group_signal(SIGTERM)==0?'O':'E')<0) group_kill();
       } else if (request=='K') group_kill();
-      else group_kill(); /* Protocol violation cannot enable arbitrary signals. */
+      else group_kill();
     }
   }
 }
@@ -132,14 +134,14 @@ int main(int argc,char **argv) {
           WTERMSIG(anchor_status)==SIGKILL) return exit_status;
       return 125;
     }
-    struct pollfd fds[2]={{.fd=3,.events=POLLIN|POLLHUP},
-                           {.fd=responses[0],.events=POLLIN|POLLHUP}};
-    int count=poll(fds,2,50);
+    fd_set ready_fds;
+    FD_ZERO(&ready_fds); FD_SET(3,&ready_fds); FD_SET(responses[0],&ready_fds);
+    struct timeval timeout={.tv_sec=0,.tv_usec=50000};
+    int biggest=3>responses[0]?3:responses[0];
+    int count=select(biggest+1,&ready_fds,NULL,NULL,&timeout);
     if (count<0 && errno==EINTR) continue;
-    if (count<0) {close(requests[1]);channel_error=1;}
-    if (fds[0].revents&(POLLHUP|POLLERR|POLLNVAL)) {
-      close(requests[1]);requests[1]=-1;channel_error=1;
-    } else if (fds[0].revents&POLLIN) {
+    if (count<0) {channel_error=1; response_closed=1;}
+    if (count>0 && FD_ISSET(3,&ready_fds)) {
       char value=0;
       ssize_t n=read(3,&value,1);
       if (n!=1 || (value!='T' && value!='K') ||
@@ -148,19 +150,18 @@ int main(int argc,char **argv) {
         requests[1]=-1;channel_error=1;
       }
     }
-    if (fds[1].revents&POLLIN) {
+    if (count>0 && FD_ISSET(responses[0],&ready_fds)) {
       char value=0;
       ssize_t n=read(responses[0],&value,1);
-      if (n==1) {
+      if (n==0) response_closed=1;
+      else if (n==1) {
         if (awaiting_code) {exit_status=(unsigned char)value;awaiting_code=0;have_exit=1;}
         else if (value=='X') awaiting_code=1;
         else if (value=='R' && !ready) {ready=1;if (byte(4,'R')<0) channel_error=1;}
         else if (value=='O' && ready) {if(byte(4,'O')<0) channel_error=1;}
         else {if(byte(4,'E')<0) channel_error=1;}
-      }
+      } else if (n<0 && errno!=EINTR) response_closed=1;
     }
-    if (fds[1].revents&(POLLHUP|POLLERR|POLLNVAL) &&
-        !(fds[1].revents&POLLIN)) response_closed=1;
     /* Never substitute a PID-based kill when the owner's pipe broke.
      * Closing our anchor control is sufficient: anchor self-kills its group.
      */
