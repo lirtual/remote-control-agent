@@ -131,6 +131,72 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  macos-arm64-temporary-candidate:
+    name: Unpublished native macOS 15 ARM64 temporary file candidate
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.21.0'
+      - name: Install pinned dependencies
+        run: corepack pnpm install --frozen-lockfile --ignore-scripts
+      - name: Typecheck and verify native file/receipt seam (no owner pairing)
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" -ge 15
+          corepack pnpm --filter remote-control-agent typecheck
+          cd apps/remote-control-agent
+          node --experimental-strip-types --test tests/macos-candidate.test.mjs tests/macos-file-tools.test.ts tests/pair-device.test.ts
+      - name: Build and inspect native unpublished ARM64 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+          archive="$temp_dir/node.tar.xz"
+          curl --fail --silent --show-error --location --max-time 90 \
+            --proto '=https' --tlsv1.2 \
+            https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.xz -o "$archive"
+          echo '6239d4cf92d864487ec8cd3615038f7b67e7f58b77b21cd2f09ea9fbd68065fe  '"$archive" | shasum -a 256 --check
+          tar -xJOf "$archive" node-v24.21.0-darwin-arm64/bin/node > "$temp_dir/node"
+          chmod 700 "$temp_dir/node"
+          test "$("$temp_dir/node" --version)" = v24.21.0
+          for pass in first second; do
+            "$temp_dir/node" apps/remote-control-agent/scripts/build-v2-release.mjs \
+              --version "$RCA_CANDIDATE_TAG" --target darwin-arm64 \
+              --node-bin "$temp_dir/node" \
+              --node-sha256 "$(shasum -a 256 "$temp_dir/node" | awk '{print $1}')" \
+              --out "$temp_dir/$pass"
+          done
+          asset="remote-control-agent-$RCA_CANDIDATE_TAG-darwin-arm64.tar.gz"
+          cmp "$temp_dir/first/$asset" "$temp_dir/second/$asset"
+          mkdir "$temp_dir/unpacked"
+          tar -xzf "$temp_dir/first/$asset" -C "$temp_dir/unpacked"
+          test "$("$temp_dir/unpacked/bin/node" --version)" = v24.21.0
+          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-temporary-file-v1" || m.upgrade_profile)process.exit(1)' \
+            "$temp_dir/unpacked/bundle.json"
+          test ! -e "$temp_dir/unpacked/apps/remote-control-agent/.build/session-supervisor"
+          test ! -e "$temp_dir/unpacked/apps/remote-control-agent/scripts/install-v2.mjs"
+          for js in "$temp_dir/unpacked"/apps/remote-control-agent/src/*.js; do
+            "$temp_dir/unpacked/bin/node" --check "$js"
+          done
+          home="$temp_dir/unpaired-home"
+          mkdir "$home"
+          chmod 700 "$home"
+          if HOME="$home" "$temp_dir/unpacked/bin/node" \
+              "$temp_dir/unpacked/apps/remote-control-agent/src/macos-temporary.js" \
+              --endpoint https://example.invalid/ </dev/null > "$temp_dir/stdout" 2> "$temp_dir/stderr"; then
+            echo 'Noninteractive candidate unexpectedly enabled a device' >&2; exit 1
+          fi
+          test ! -e "$home/.local"
+          grep -q 'interactive owner terminal' "$temp_dir/stderr"
+          echo "Verified native candidate from $(git rev-parse HEAD), unpublished SHA:"
+          shasum -a 256 "$temp_dir/first/$asset"
+          # CI runner is NOT an owner-paired real Mac. No permanent grant or public Release.
+
   windows-native-preview:
     name: Native Windows full tools preview / x64
     runs-on: windows-2025

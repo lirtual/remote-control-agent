@@ -57,6 +57,7 @@ export function defaultAgentShellPath(
   platform = process.platform,
   systemRoot = process.env.SystemRoot,
 ): string {
+  if (platform === "darwin") return "/bin/sh";
   if (platform !== "win32") return process.env.SHELL ?? "/bin/sh";
   if (!systemRoot || !path.win32.isAbsolute(systemRoot) ||
       !/^[A-Za-z]:[\\\\/]/.test(systemRoot) || systemRoot.startsWith("\\\\\\\\")) {

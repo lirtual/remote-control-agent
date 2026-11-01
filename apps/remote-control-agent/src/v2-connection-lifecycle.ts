@@ -158,7 +158,7 @@ export function monitorDeviceSocket(
             Object.keys(request).length === 2 &&
             typeof request.request_id === "string" &&
             /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(request.request_id) &&
-            allowShell && revokeCleanup) {
+            (allowShell || process.platform === "darwin") && revokeCleanup) {
           revocationStarted = true;
           socketWork.abort();
           const requestId = request.request_id;
@@ -355,11 +355,14 @@ export async function maintainAuthenticatedDeviceSession(
   if (signal.aborted) return;
   const full = options.capability !== "read-only";
   let authenticatedDeviceId: string | undefined;
+  // T1 Darwin is file-only: no Linux pidfd supervisor or Shell dispatch.
+  // Managed Sessions require a separately reviewed native Darwin helper.
+  const shellAvailable = full && process.platform !== "darwin";
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
-  if (full && process.platform !== "win32") {
+  if (full && process.platform === "linux") {
     try { upgradeControl = await startUpgradeControl(execution!, keyPath); }
     catch (error) { await execution!.close(); throw error; }
   }
@@ -385,14 +388,14 @@ export async function maintainAuthenticatedDeviceSession(
       try {
         outcome = await monitorDeviceSocket(connection.socket, signal, options.heartbeat,
           async (tool, args, requestSignal) => {
-            if (!full && (["list_sessions","read_process_output"] as string[]).includes(tool)) return null;
+            if (!shellAvailable && (["list_sessions","read_process_output"] as string[]).includes(tool)) return null;
             return executeV2SessionRead(execution,tool,args,requestSignal);
           },
           full && execution
             ? async (tool, args, operationId, requestSignal) =>
                 executeV2FileOperation(execution,tool,args,operationId,requestSignal)
             : undefined,
-          full,
+          shellAvailable,
           full && execution ? () => execution.stopOwnedForRevocation() : undefined);
       } finally {
         await execution.resetReadSessions();
