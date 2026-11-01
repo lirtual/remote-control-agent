@@ -3,16 +3,17 @@
 This is a source/CI candidate, not an installer or supported Release.
 It is limited to macOS 15+ Apple Silicon, an unprivileged interactive
 owner, and Temporary (nonrenewable 24-hour cloud grant).
-There is no LaunchAgent, permanent enrollment, native Managed Session
-helper, Shell capability, GUI, auto-update or public macOS installer.
+There is no LaunchAgent, permanent enrollment, GUI, auto-update or public
+macOS installer. The source/CI candidate now adds a private-group Darwin
+native Managed Session helper; it is NOT a published or owner-tested Release.
 
 ## Candidate evidence and trust boundary
 
 The existing Agent CI macOS-15 ARM64 job builds this candidate on a native
 runner with the official Node.js v24.21.0 darwin-arm64 archive; its SHA-256
 is independently pinned in CI. The builder rejects ELF, FAT, wrong CPU
-and non-native Node, validates the Node 24 runtime and assembles a private,
-deterministic self-contained archive.
+and non-native Node/helper, validates Node 24 and the native Darwin supervisor
+and assembles a private, deterministic self-contained archive.
 
 This is NOT an immutable GitHub Release nor an approved publisher signature.
 The CI runner exercises unpacking, native Node startup, syntax, non-tty
@@ -50,8 +51,8 @@ simulate owner approval.
 ## Acceptance status
 
 - Linux source file/WSS adapter and SQLite idempotency: existing tests pass.
-- Darwin native ARM64 self-contained archive: macOS CI passed, including
-  unpacked Mach-O Node, WSS file/receipt/Unknown smoke and deterministic digest.
+- Darwin native ARM64 self-contained archive: #658 CI previously passed.
+  #659 adds native helper and requires a new verified macOS CI result.
 - Personal Mac signed WSS, file/replay and SQLite receipts: Not performed.
 - Real macOS TCC, APFS and security permission failures: Not performed.
 - Intel Mac, owned Sessions, LaunchAgent, upgrades: later tickets.

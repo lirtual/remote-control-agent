@@ -1,6 +1,7 @@
 /**
  * #658: unpublished native macOS ARM64 *temporary foreground* candidate.
- * No installer, LaunchAgent, permanent grant, Shell supervisor or auto-renewal.
+ * No installer, LaunchAgent, permanent grant or auto-renewal.
+ * Managed Shell depends on the bundled native Darwin owned-group supervisor.
  * The owner must explicitly authorize the existing signed pending key in MCP.
  */
 import { lstat, mkdir } from "node:fs/promises";

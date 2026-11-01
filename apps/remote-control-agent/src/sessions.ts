@@ -161,7 +161,7 @@ export function windowsManagedShellArguments(command: string): string[] {
 
 const supervisorPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../.build/session-supervisor",
+  process.platform === "darwin" ? "../.build/darwin-session-supervisor" : "../.build/session-supervisor",
 );
 
 function snapshot(session: ManagedSession): SessionSnapshot {
@@ -279,7 +279,7 @@ export class ManagedSessions {
         if (settled) return;
         settled = true;
         if (session.deadlineTimer) clearTimeout(session.deadlineTimer);
-        session.state = session.deadlineExceeded ? "failed" : state;
+        session.state = session.deadlineExceeded && state !== "unknown" ? "failed" : state;
         session.exitCode = exitCode;
         session.lastObservedAt = Date.now();
         session.endedAt = session.lastObservedAt;
@@ -287,9 +287,12 @@ export class ManagedSessions {
         resolve();
       };
       child.once("error", () => { void finish("failed", null); });
-      child.once("close", (code) => {
+      child.once("close", (code, signal) => {
         const stopped = session.terminationRequested;
-        void finish(code === 0 || stopped ? "completed" : "failed", code);
+        // Darwin helper code 125 (or its unexpected signal death) cannot
+        // prove that the owned group is gone, even after a stop request.
+        const uncertain = process.platform === "darwin" && (code === 125 || signal !== null);
+        void finish(uncertain ? "unknown" : code === 0 || stopped ? "completed" : "failed", code);
       });
     });
 
@@ -456,6 +459,9 @@ export class ManagedSessions {
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([session.closed, new Promise<void>((resolve) => { timer = setTimeout(resolve, 500); })]);
     if (timer) clearTimeout(timer);
+    if (process.platform === "darwin") {
+      return snapshot(session).state === "completed" ? "completed" : "unknown";
+    }
     return session.state === "running" ? "unknown" : "completed";
   }
 

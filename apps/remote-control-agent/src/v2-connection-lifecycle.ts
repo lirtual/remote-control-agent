@@ -355,9 +355,9 @@ export async function maintainAuthenticatedDeviceSession(
   if (signal.aborted) return;
   const full = options.capability !== "read-only";
   let authenticatedDeviceId: string | undefined;
-  // T1 Darwin is file-only: no Linux pidfd supervisor or Shell dispatch.
-  // Managed Sessions require a separately reviewed native Darwin helper.
-  const shellAvailable = full && process.platform !== "darwin";
+  // Darwin uses its bundled private-group supervisor; never Linux pidfd.
+  // An absent or unsafe helper fails its ready handshake before admission.
+  const shellAvailable = full;
   const execution = createAgentExecutionEngine({
     receiptDirectory: options.receiptDirectory,
   });
