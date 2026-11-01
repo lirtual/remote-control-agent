@@ -217,6 +217,8 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   }
   if(!bundle||!sourceSha||!bound)throw Error("Reviewed candidate, source and endpoint required.");
   if(action==="install"&&current)throw Error("Existing identity requires upgrade.");
+  if(stopped&&current&&launch(["print",service],invoke))
+    throw Error("Stopped marker conflicts with an active service; inspect locally.");
   if(action==="upgrade"&&!current)throw Error("No existing permanent LaunchAgent.");
   const version=await checkCandidate(bundle,sourceSha);
   const nextRoot=path.join(programs,version);

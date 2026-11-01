@@ -88,7 +88,7 @@ export async function runPermanentMac(argv=process.argv.slice(2)):Promise<void>{
     };
     await record("disconnected");
     await maintainAuthenticatedDeviceSession(endpoint,key,controller.signal,{
-      receiptDirectory:receipts,
+      receiptDirectory:receipts,enableLocalUpgrade:true,
       onState: state=>{void record(state).catch(()=>controller.abort());},
     });
   }finally{

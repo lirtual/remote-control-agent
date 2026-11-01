@@ -87,9 +87,11 @@ test("#660 native offline install → stopped state → upgrade without restart"
   await writeFile(manifestFile,JSON.stringify(manifest)+"\n",{mode:0o600});
   f.commands.length=0;
   const result=await localMacAction("upgrade",{...opts,bundle:alt,
-    invoke:(command,args)=>{f.commands.push(args[0]);return {status:0};}});
+    invoke:(command,args)=>{f.commands.push(args[0]);
+      return {status:args[0]==="print"?1:0};}});
   assert.equal(result.status,"stopped_preserved");
-  assert.deepEqual(f.commands,[],"intentionally stopped service must not be auto-launched");
+  assert.deepEqual(f.commands,["print"],
+    "intentionally stopped service may only be checked, never auto-launched");
   assert.equal((await localMacAction("status",{home:f.home,invoke:f.invoke})).local_service,
     "stopped_requested_unverified");
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
