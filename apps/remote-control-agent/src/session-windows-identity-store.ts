@@ -12,10 +12,18 @@ export type SessionFileName='identity.json'|'v2-identity.pem'|'v2-identity.pem.d
 /** Never print native errors; command arguments contain paths, not private keys. */
 export function checkWindowsSessionAcl(action:'Init'|'Check'|'Seal',directory:string,file?:SessionFileName):void{
  if(process.platform!=='win32'||!process.env.SystemRoot)throw Error('Native Windows required.');
- const ps=path.win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
+ const psHome=path.win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0');
+ const ps=path.win32.join(psHome,'powershell.exe');
+ // Windows PowerShell 5.1 reconstructs its module search path when absent.
+ // In an OIDC-stripped child that can resolve modules far more slowly than
+ // the runner parent. Restrict only this ACL subprocess to the trusted
+ // system Windows PowerShell module directory; never widen the Agent env.
+ const psEnv=Object.fromEntries(Object.entries(process.env).filter(
+   ([key])=>key.toLowerCase()!=='psmodulepath')) as NodeJS.ProcessEnv;
+ psEnv.PSModulePath=path.win32.join(psHome,'Modules');
  const result=spawnSync(ps,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
    '-File',SCRIPT,'-Action',action,'-Directory',directory,...(file?['-FileName',file]:[])],
-   {encoding:'utf8',windowsHide:true,timeout:12000,stdio:'pipe'});
+   {env:psEnv,encoding:'utf8',windowsHide:true,timeout:12000,stdio:'pipe'});
  if((result.error as NodeJS.ErrnoException|undefined)?.code==='ETIMEDOUT')
    throw Error('Session ACL helper timed out.');
  if(result.error||result.status!==0)throw Error('Session job-private ACL check refused.');

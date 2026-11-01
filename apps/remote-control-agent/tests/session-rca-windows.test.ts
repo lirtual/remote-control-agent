@@ -159,6 +159,7 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   ATTEMPT_ID:attempt,RUNNER_TEMP:root,
   ACTIONS_ID_TOKEN_REQUEST_URL:'https://example.test/synthetic-no-network',
   ACTIONS_ID_TOKEN_REQUEST_TOKEN:'SYNTHETIC_DO_NOT_FORWARD',
+  PSModulePath:'Z:\\no-untrusted-WindowsPowerShell-modules',
  };
  const childEnv=sessionTransportEnvironment(source);
  assert.equal(childEnv.SystemRoot,process.env.SystemRoot,
@@ -167,6 +168,7 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   'Windows PATH preserved through a copied environment');
  assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_URL,undefined);
  assert.equal(childEnv.ACTIONS_ID_TOKEN_REQUEST_TOKEN,undefined);
+ assert.equal(childEnv.PSModulePath,undefined);
  const url=pathToFileURL(path.resolve('src/session-windows-identity-store.ts')).href;
  const program=`
   import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,
