@@ -362,7 +362,7 @@ export async function maintainAuthenticatedDeviceSession(
     receiptDirectory: options.receiptDirectory,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
-  if (full && process.platform === "linux") {
+  if (full && (process.platform === "linux" || process.platform === "darwin")) {
     try { upgradeControl = await startUpgradeControl(execution!, keyPath); }
     catch (error) { await execution!.close(); throw error; }
   }
