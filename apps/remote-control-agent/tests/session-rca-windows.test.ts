@@ -146,7 +146,7 @@ test('Windows child allowlist preserves host keys after a case-changing env copy
 test('native Windows Session identity recovers in the exact no-OIDC child environment',
  {skip:process.platform!=='win32'}, async()=>{
  const {spawnSync}=await import('node:child_process');
- const {mkdtemp,rm}=await import('node:fs/promises');
+ const {mkdtemp,rm,readFile,writeFile}=await import('node:fs/promises');
  const {tmpdir}=await import('node:os');
  const path=await import('node:path');
  const {pathToFileURL}=await import('node:url');
@@ -220,7 +220,45 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   assert.equal(child.error,undefined);
   const safePhase=/^failed_(store|pem|sidecar|checkpoint|final_acl)_(acl_timeout|acl_refused|other)_(startup_timeout|startup_ok|startup_other)$/.test(child.stdout)?
     child.stdout:'unknown';
-  assert.equal(child.status,0,'OIDC-stripped native child recovery: '+safePhase);
+  // Only on a synthetic child failure, instrument a disposable copy of the
+  // EXACT ACL helper to isolate script entry, identity lookup and ACL checks.
+  // No raw Windows output, environment values, paths or error messages escape.
+  let safeAclStage='unprobed';
+  if(safePhase==='failed_store_acl_timeout_startup_ok'){
+   const original=await readFile(path.resolve('scripts/windows-session-private-store.ps1'),'utf8');
+   const trace=path.join(root,'acl-synthetic-stage');
+   const script=path.join(root,'acl-synthetic-probe.ps1');
+   const mark=(stage:string)=>"[IO.File]::WriteAllText('"+
+     trace.replaceAll("'","''")+"','"+stage+"')";
+   const probes=[
+    ["$ErrorActionPreference='Stop'",'entered'],
+    ["$expected=[IO.Path]::GetFullPath([IO.Path]::Combine($temp,'session-rca'))",'path_ready'],
+    ["$user=[Security.Principal.WindowsIdentity]::GetCurrent().User",'user_ready'],
+    ["Assert-Private $expected $true",'acl_enter'],
+   ] as const;
+   let instrumented=original;
+   for(const [anchor,stage] of probes){
+    assert.equal(instrumented.split(anchor).length,2,'synthetic probe anchor '+stage);
+    instrumented=instrumented.replace(anchor,mark(stage)+'\n'+anchor);
+   }
+   const finalAnchor="if($Action -eq 'Seal'){";
+   assert.equal(instrumented.split(finalAnchor).length,2);
+   instrumented=instrumented.replace(finalAnchor,mark('acl_complete')+'\n'+finalAnchor);
+   instrumented+='\n'+mark('complete')+'\n';
+   await writeFile(script,instrumented,'utf8');
+   spawnSync(path.win32.join(childEnv.SystemRoot!,'System32','WindowsPowerShell',
+      'v1.0','powershell.exe'),
+     ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+      '-File',script,'-Action','Init','-Directory',path.join(root,'session-rca')],
+     {env:childEnv,windowsHide:true,stdio:'ignore',timeout:12000});
+   let stage='unknown';
+   try{stage=await readFile(trace,'utf8');}catch{}
+   if(['entered','path_ready','user_ready','acl_enter','acl_complete','complete'].includes(stage))
+     safeAclStage=stage;
+   else safeAclStage='unknown';
+  }
+  assert.equal(child.status,0,'OIDC-stripped native child recovery: '+safePhase+
+    ' probe='+safeAclStage);
   assert.equal(child.stdout,'identity_ready');
  }finally{await rm(root,{recursive:true,force:true});}
 });
