@@ -124,6 +124,8 @@ test("#658 authenticated WSS frame adapter writes and reads a real native file w
     controller.abort();
     assert.equal(await status,"aborted");
     await engine.close();
-    await rm(root,{recursive:true,force:true});
+    // Concurrent test workers can briefly retain SQLite auxiliary files.
+    // Node's bounded ENOTEMPTY retry is scoped to this disposable fixture.
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:20});
   }
 });

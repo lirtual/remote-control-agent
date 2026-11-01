@@ -22,12 +22,14 @@ export function requireNativeMac(platform = process.platform, arch = process.arc
   }
 }
 
-function options(argv: string[]): { endpoint: string; name?: string; resume: boolean } {
+export function parseTemporaryMacArgs(argv: string[]): { endpoint: string; name?: string; resume: boolean; retryPairing: boolean } {
   let endpoint: string | undefined;
   let name: string | undefined;
   let resume = false;
+  let retryPairing = false;
   for (let i=0; i<argv.length; i++) {
-    if (argv[i] === "--resume" && !resume) resume=true;
+    if (argv[i] === "--resume" && !resume && !retryPairing) resume=true;
+    else if (argv[i] === "--retry-pairing" && !retryPairing && !resume) retryPairing=true;
     else if (argv[i] === "--endpoint" && !endpoint && argv[i+1]) endpoint=argv[++i];
     else if (argv[i] === "--name" && !name && argv[i+1]) name=argv[++i];
     else throw new Error("Invalid macOS temporary preview arguments.");
@@ -38,10 +40,10 @@ function options(argv: string[]): { endpoint: string; name?: string; resume: boo
       base.search || base.hash || base.pathname !== "/" || !base.hostname ||
       (base.port && base.port !== "443")) throw Error("Expected a trusted HTTPS origin.");
   if (name !== undefined) selectDeviceLabel(name, "");
-  return {endpoint:base.origin+"/",name,resume};
+  return {endpoint:base.origin+"/",name,resume,retryPairing};
 }
 
-async function privateDirectory(home: string, segments: string[]): Promise<string> {
+export async function privateDirectory(home: string, segments: string[]): Promise<string> {
   let cursor = home;
   for (const [index,segment] of segments.entries()) {
     cursor=path.join(cursor,segment);
@@ -54,7 +56,7 @@ async function privateDirectory(home: string, segments: string[]): Promise<strin
   return cursor;
 }
 
-async function privateFileIfPresent(filename: string): Promise<boolean> {
+export async function privateFileIfPresent(filename: string): Promise<boolean> {
   try {
     const stat=await lstat(filename);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.uid!==process.getuid?.() ||
@@ -87,7 +89,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
   requireNativeMac();
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw Error("Temporary pairing requires an interactive owner terminal.");
-  const {endpoint,name,resume}=options(argv);
+  const {endpoint,name,resume,retryPairing}=parseTemporaryMacArgs(argv);
   process.umask(0o077);
   const controller=new AbortController();
   const cancel=()=>controller.abort();
@@ -101,12 +103,18 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
     const hasId=await privateFileIfPresent(key+".device-id");
     if (hasId && !hasKey) throw Error("Orphaned device ID. Manual inspection required.");
     if (!resume) {
-      if (hasKey) throw Error("Existing temporary identity: use --resume; never overwrite keys.");
-      process.stdout.write("Unpublished macOS ARM64 preview: only Temporary (24h) is available.\n");
+      if (retryPairing ? (!hasKey || hasId) : hasKey) {
+        throw Error(retryPairing
+          ? "Retry requires an unapproved existing key without a device ID."
+          : "Existing temporary identity: use --resume or explicitly --retry-pairing; never overwrite keys.");
+      }
+      process.stdout.write(retryPairing
+        ? "Explicit pairing retry: old pending codes become invalid; the same private key is retained.\n"
+        : "Unpublished macOS ARM64 preview: only Temporary (24h) is available.\n");
       if (await promptInstallMode()!=="temporary")
         throw Error("Permanent macOS mode is not implemented by this candidate.");
       const enrollment=await beginDeviceEnrollment(
-        selectDeviceLabel(name??"",os.hostname()),endpoint,key,fetch,false,"temporary");
+        selectDeviceLabel(name??"",os.hostname()),endpoint,key,fetch,retryPairing,"temporary");
       process.stdout.write("Pairing code (10 min): "+enrollment.code+"\n");
       process.stdout.write("Fingerprint: "+enrollment.fingerprint+"\n");
       process.stdout.write("Approve this temporary key and code explicitly in authenticated MCP.\n");

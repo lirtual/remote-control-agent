@@ -193,6 +193,11 @@ jobs:
           fi
           test ! -e "$home/.local"
           grep -q 'interactive owner terminal' "$temp_dir/stderr"
+          # Test the extracted native runtime itself: WSS frame adapter, file
+          # effects, permission denial, SQLite receipts and Unknown recovery.
+          RCA_MACOS_BUNDLE_ROOT="$temp_dir/unpacked" \
+            "$temp_dir/unpacked/bin/node" --test \
+            apps/remote-control-agent/tests/macos-packaged-runtime-smoke.mjs
           echo "Verified native candidate from $(git rev-parse HEAD), unpublished SHA:"
           shasum -a 256 "$temp_dir/first/$asset"
           # CI runner is NOT an owner-paired real Mac. No permanent grant or public Release.

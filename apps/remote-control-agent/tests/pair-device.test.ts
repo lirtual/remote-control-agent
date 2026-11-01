@@ -102,6 +102,33 @@ test("#76 pending key conflict cannot silently rotate or replace existing privat
   }finally{await rm(home,{recursive:true,force:true});}
 });
 
+test("#658 temporary retry preserves original Ed25519 identity and requires fresh owner approval", async () => {
+  const home=await mkdtemp(path.join(os.tmpdir(),"rca658-retry-temporary-"));
+  const key=path.join(home,"temporary.pem");
+  let originalKey="", retriedKey="";
+  try {
+    await assert.rejects(beginDeviceEnrollment("Mac","https://example.test/",key,
+      async (_url,init)=>{
+        const body=JSON.parse(String(init?.body)) as {public_key:string;grant_type:string};
+        assert.equal(body.grant_type,"temporary");
+        originalKey=body.public_key;
+        throw Error("Initial pending response lost");
+      },false,"temporary"),/could not be completed/);
+    const saved=await readFile(key,"utf8");
+    const next=await beginDeviceEnrollment("Mac","https://example.test/",key,
+      async (_url,init)=>{
+        const body=JSON.parse(String(init?.body)) as {public_key:string;grant_type:string};
+        assert.equal(body.grant_type,"temporary");
+        retriedKey=body.public_key;
+        return new Response(null,{status:202});
+      },true,"temporary");
+    assert.match(next.code,/^[A-Z2-7]{10}$/);
+    assert.equal(retriedKey,originalKey);
+    assert.equal(await readFile(key,"utf8"),saved);
+    await assert.rejects(readFile(key+".device-id"),{code:"ENOENT"});
+  } finally {await rm(home,{recursive:true,force:true});}
+});
+
 test("pending-only installer rejects arbitrary HTTP/URL credentials before key creation", async () => {
   const home = await mkdtemp(path.join(os.tmpdir(), "remote-v2-url-pair-"));
   try {
