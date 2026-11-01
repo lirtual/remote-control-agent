@@ -14,7 +14,7 @@ const ENDPOINT='https://rca.lirtual.dpdns.org/';
 /** Only fixed stage names in an ACL-sealed, job-private file. Best effort,
  * no raw exceptions and no change to the Agent's authorization decisions. */
 export const TRANSPORT_STAGES=[
- 'entered','identity_ready','signed_recovered','receipts_ready',
+ 'entered','store_ready','pem_ready','identity_ready','signed_recovered','receipts_ready',
  'challenge_start','challenge_ok','challenge_rejected',
  'wss_start','wss_open','wss_error','wss_policy','wss_timeout',
  'connected',
@@ -67,8 +67,10 @@ export async function runWindowsSessionRca(env:NodeJS.ProcessEnv=process.env):Pr
  };
  stage('entered');
  const {dir,identity}=await loadOrCreateWindowsSessionIdentity(e.runnerTemp,e.physical);
+ stage('store_ready');
  const keyPath=path.win32.join(dir,'v2-identity.pem');
  await verifiedWindowsSessionFile(dir,'v2-identity.pem',identity.private_key_pem);
+ stage('pem_ready');
  let idExists=false;
  try{await lstat(keyPath+'.device-id');idExists=true;}
  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}

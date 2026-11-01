@@ -57,8 +57,15 @@ const SESSION_TRANSPORT_ENV = [
 
 export function sessionTransportEnvironment(source:NodeJS.ProcessEnv):NodeJS.ProcessEnv {
   const clean:NodeJS.ProcessEnv={};
+  // Windows env keys are case-insensitive, but spreading process.env into a
+  // plain object loses that property (e.g. SYSTEMROOT instead of SystemRoot).
+  // Only resolve aliases for reviewed allowlist keys, never forward others.
+  const entries=Object.entries(source);
   for (const key of SESSION_TRANSPORT_ENV) {
-    if (typeof source[key]==='string') clean[key]=source[key];
+    const exact=source[key];
+    const value=typeof exact==='string'?exact:
+      entries.find(([name])=>name.toLowerCase()===key.toLowerCase())?.[1];
+    if (typeof value==='string') clean[key]=value;
   }
   return clean;
 }

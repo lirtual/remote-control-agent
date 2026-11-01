@@ -13,9 +13,14 @@ export type SessionFileName='identity.json'|'v2-identity.pem'|'v2-identity.pem.d
 export function checkWindowsSessionAcl(action:'Init'|'Check'|'Seal',directory:string,file?:SessionFileName):void{
  if(process.platform!=='win32'||!process.env.SystemRoot)throw Error('Native Windows required.');
  const ps=path.win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
+ // The ACL helper accepts only command-line arguments and its raw output must
+ // never be surfaced. No pipe handles are needed; avoid nested Windows pipe
+ // lifetime issues when the OIDC-bearing parent has already exited.
  const result=spawnSync(ps,['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
    '-File',SCRIPT,'-Action',action,'-Directory',directory,...(file?['-FileName',file]:[])],
-   {encoding:'utf8',windowsHide:true,timeout:12000,stdio:'pipe'});
+   {windowsHide:true,timeout:12000,stdio:'ignore'});
+ if((result.error as NodeJS.ErrnoException|undefined)?.code==='ETIMEDOUT')
+   throw Error('Session ACL helper timed out.');
  if(result.error||result.status!==0)throw Error('Session job-private ACL check refused.');
 }
 export async function verifiedWindowsSessionFile(dir:string,name:SessionFileName,expected:string):Promise<void>{

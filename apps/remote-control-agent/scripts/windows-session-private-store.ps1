@@ -16,8 +16,11 @@ $expected=[IO.Path]::GetFullPath([IO.Path]::Combine($temp,'session-rca'))
 if (-not [string]::Equals([IO.Path]::GetFullPath($Directory),$expected,[StringComparison]::OrdinalIgnoreCase) -or
     $temp.StartsWith('\\') -or $temp.StartsWith('//') -or
     $expected.StartsWith('\\') -or $expected.StartsWith('//')) { throw 'Unexpected Session store' }
-$parent=Get-Item -LiteralPath $temp -Force
-if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+# Avoid starting a PowerShell FileSystem provider in the OIDC-stripped child.
+# .NET attributes check preserves the directory and no-reparse-point contract.
+$parentAttributes=[IO.File]::GetAttributes($temp)
+if (($parentAttributes -band [IO.FileAttributes]::Directory) -eq 0 -or
+    ($parentAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw 'Unsafe Runner Temp'
 }
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().User
@@ -41,8 +44,10 @@ function New-PrivateAcl([bool]$isDirectory) {
   return $acl
 }
 function Assert-Private([string]$target,[bool]$isDirectory){
-  $item=Get-Item -LiteralPath $target -Force
-  if($item.PSIsContainer -ne $isDirectory -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+  $attributes=[IO.File]::GetAttributes($target)
+  $actualDirectory=($attributes -band [IO.FileAttributes]::Directory) -ne 0
+  if($actualDirectory -ne $isDirectory -or
+     ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
     throw 'Wrong type or reparse point'
   }
   $acl=if($isDirectory){[IO.Directory]::GetAccessControl($target)}else{[IO.File]::GetAccessControl($target)}
@@ -67,9 +72,11 @@ Assert-Private $expected $true
 if($Action -eq 'Seal'){
   if(-not $FileName){throw 'Exact newly-created Session filename required'}
   $file=[IO.Path]::Combine($expected,$FileName)
-  $item=Get-Item -LiteralPath $file -Force
   $isDirectory=$FileName -eq 'receipts'
-  if($item.PSIsContainer -ne $isDirectory -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
+  $attributes=[IO.File]::GetAttributes($file)
+  $actualDirectory=($attributes -band [IO.FileAttributes]::Directory) -ne 0
+  if($actualDirectory -ne $isDirectory -or
+     ($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){
     throw 'Only regular Session-owned resources may be sealed'
   }
   if($isDirectory){[IO.Directory]::SetAccessControl($file,(New-PrivateAcl $true))}
