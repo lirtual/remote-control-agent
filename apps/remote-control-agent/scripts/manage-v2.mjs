@@ -265,8 +265,11 @@ export async function runInteractiveLocalManager(args,{
       return sendSignedOwnerIntent(origin,key,action);
     };
     const service=action=>{
+      // systemd may use its full TimeoutStopSec=15s before completing Stop.
+      // The CLI must outwait that bounded OS-owned stop, not falsely report
+      // failure while cloud STOP and the private OFF marker are already set.
       const result=(rest.invokeService??invoke)("systemctl",["--user",action,state.unitName],
-        {encoding:"utf8",stdio:"ignore",timeout:12000});
+        {encoding:"utf8",stdio:"ignore",timeout:action==="stop"?25000:12000});
       if(result.error||result.signal||result.status!==0)
         throw Error("Managed systemd service state unconfirmed.");
     };
