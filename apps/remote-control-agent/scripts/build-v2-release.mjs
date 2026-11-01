@@ -239,7 +239,7 @@ export function build(args) {
     throw new Error("Reviewed paired full-tools release profile is not proven.");
   }
   const modules=runtimeSources(darwin
-    ? ["macos-temporary.ts"] : undefined);
+    ? ["macos-temporary.ts","macos-permanent.ts"] : undefined);
   for(const file of modules){
     const src=readFileSync(path.join(source,file),"utf8");
     const compiled=ts.transpileModule(src,{fileName:file,reportDiagnostics:true,
@@ -248,6 +248,10 @@ export function build(args) {
     if(errors.length) throw new Error("TS compilation error in "+file);
     writeFileSync(path.join(work,"apps/remote-control-agent/src",file.replace(/\.ts$/,".js")),
       rewriteExtensions(compiled.outputText),{mode:0o600});
+  }
+  if (darwin) {
+    const local=path.join(root,"scripts/macos-local.mjs");
+    copyFileSync(local,path.join(work,"apps/remote-control-agent/scripts/macos-local.mjs"));
   }
   if (!darwin) {
   const installer=readFileSync(path.join(root,"scripts/install-v2.mjs"),"utf8");
@@ -263,9 +267,15 @@ export function build(args) {
   }
   }
   writeFileSync(path.join(work,"apps/remote-control-agent/package.json"),JSON.stringify({type:"module"})+"\n",{mode:0o600});
+  const sourceCommit=darwin ? spawnSync("git",["rev-parse","HEAD"],{
+    cwd:path.resolve(root,"../.."),encoding:"utf8",timeout:5000,
+  }) : null;
+  if (darwin && (sourceCommit.error || sourceCommit.status!==0 ||
+      !/^[a-f0-9]{40}\s*$/.test(sourceCommit.stdout)))
+    throw new Error("Cannot prove reviewed Darwin source commit.");
   writeFileSync(path.join(work,"bundle.json"),JSON.stringify({
     name:"remote-control-agent",version:args.version,target:args.target,
-    node:nodeVersion,...(darwin ? {candidate_profile:"darwin-temporary-owned-session-v1",native_supervisor:"darwin-owned-group-v1"} : {glibc_build:libc,glibc_min:glibcMin}),modules,
+    node:nodeVersion,...(darwin ? {candidate_profile:"darwin-permanent-local-v1",native_supervisor:"darwin-owned-group-v1",source_commit:sourceCommit.stdout.trim()} : {glibc_build:libc,glibc_min:glibcMin}),modules,
     artifact_schema:1,device_protocol:2,receipt_schema:1,
     ...(!darwin ? {upgrade_profile:"paired-full-v1"} : {})
   })+"\n",{mode:0o600});

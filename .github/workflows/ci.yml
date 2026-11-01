@@ -188,10 +188,11 @@ jobs:
           asset="remote-control-agent-$RCA_CANDIDATE_TAG-darwin-arm64.tar.gz"
           cmp "$temp_dir/first/$asset" "$temp_dir/second/$asset"
           mkdir "$temp_dir/unpacked"
+          chmod 700 "$temp_dir/unpacked"
           tar -xzf "$temp_dir/first/$asset" -C "$temp_dir/unpacked"
           test "$("$temp_dir/unpacked/bin/node" --version)" = v24.21.0
-          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-temporary-owned-session-v1" || m.native_supervisor!=="darwin-owned-group-v1" || m.upgrade_profile)process.exit(1)' \
-            "$temp_dir/unpacked/bundle.json"
+          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-permanent-local-v1" || m.native_supervisor!=="darwin-owned-group-v1" || m.source_commit!==process.argv[2] || m.upgrade_profile)process.exit(1)' \
+            "$temp_dir/unpacked/bundle.json" "$(git rev-parse HEAD)"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/.build/session-supervisor"
           test -x "$temp_dir/unpacked/apps/remote-control-agent/.build/darwin-session-supervisor"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/scripts/install-v2.mjs"
@@ -213,6 +214,16 @@ jobs:
           RCA_MACOS_BUNDLE_ROOT="$temp_dir/unpacked" \
             "$temp_dir/unpacked/bin/node" --test \
             apps/remote-control-agent/tests/macos-packaged-runtime-smoke.mjs
+          RCA_MACOS_BUNDLE_ROOT="$temp_dir/unpacked" \
+            "$temp_dir/unpacked/bin/node" --experimental-strip-types --test \
+            apps/remote-control-agent/tests/macos-local.test.mjs
+          # Offline first-stage refuses non-owner/noninteractive execution.
+          if sh apps/remote-control-agent/scripts/macos-local.sh install \
+              --archive "$temp_dir/first/$asset" --sha256 "$(shasum -a 256 "$temp_dir/first/$asset" | awk '{print $1}')" \
+              --source-sha "$(git rev-parse HEAD)" --endpoint https://example.invalid/ \
+              </dev/null; then
+            echo 'macOS offline bootstrap accepted a non-owner terminal' >&2; exit 1
+          fi
           echo "Verified native candidate from $(git rev-parse HEAD), unpublished SHA:"
           shasum -a 256 "$temp_dir/first/$asset"
           # CI runner is NOT an owner-paired real Mac. No permanent grant or public Release.

@@ -338,6 +338,8 @@ export async function maintainAuthenticatedDeviceSession(
     capability?: "read-only" | "full";
     /** Durable receipt directory; native Windows passes its private user store. */
     receiptDirectory?: string;
+    /** Only the owner-installed permanent Mac enables the private upgrade socket. */
+    enableLocalUpgrade?: boolean;
     wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
     onState?: (status: "connected" | "disconnected" | "rejected") => void;
     onConnectionStage?: (stage: SocketConnectionStage) => void;
@@ -362,7 +364,8 @@ export async function maintainAuthenticatedDeviceSession(
     receiptDirectory: options.receiptDirectory,
   });
   let upgradeControl: Awaited<ReturnType<typeof startUpgradeControl>> | undefined;
-  if (full && process.platform === "linux") {
+  if (full && (process.platform === "linux" ||
+      (process.platform === "darwin" && options.enableLocalUpgrade === true))) {
     try { upgradeControl = await startUpgradeControl(execution!, keyPath); }
     catch (error) { await execution!.close(); throw error; }
   }
