@@ -344,6 +344,37 @@ test('Linux/WSL2 owner Stop survives offline cloud failure and Start reconciles 
  }finally{cleanup(f);}
 });
 
+test('owner Stop/Start invokes installed systemctl without optional test-only invokeService',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key retained',{mode:0o600});
+  const actions=[],tty={isTTY:true,write(){}};
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+    stdin:tty,stdout:tty,
+    // Deliberately omit invokeService: production does not inject this test hook.
+    invoke:(bin,args,options)=>{
+      assert.equal(bin,'systemctl');
+      assert.deepEqual([args[0],args[2]],['--user','remote-control-agent.service']);
+      assert.equal(options.timeout,args[1]==='stop'?25000:12000);
+      actions.push(args[1]);
+      return {status:0};
+    },
+    signedIntent:async(_origin,_key,action)=>{
+      actions.push('cloud:'+action);
+      return action==='stop'?{status:'stopped',idle_expires_at:9999999999999}:
+        {status:'resume_pending',idle_expires_at:9999999999999};
+    }};
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  assert.equal(await runInteractiveLocalManager(['stop'],opts),0);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  assert.equal(await runInteractiveLocalManager(['start'],opts),0);
+  assert.deepEqual(actions,['cloud:stop','stop','cloud:stop','cloud:resume','start']);
+  assert.equal((await import('node:fs')).existsSync(marker),false);
+  assert.equal(readFileSync(path.join(f.ids,'v2-identity.pem.device-id'),'utf8'),UUID);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});
+
 test('owner STOP state rejects tampered symlink and no owner terminal',async()=>{
  const f=fixture();
  try{

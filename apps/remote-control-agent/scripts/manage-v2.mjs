@@ -203,7 +203,7 @@ export async function runInteractiveLocalManager(args,{
   inventory=localManagerInventory,home=os.homedir(),
   stdin=process.stdin,stdout=process.stdout,
   ask=null,plan=planLocalUninstall,execute=executeLocalUninstall,
-  ...rest
+  invoke=spawnSync,...rest
 }={}){
   if(args.length===0){
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Interactive Agent manager requires a local terminal");
