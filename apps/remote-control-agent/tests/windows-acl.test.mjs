@@ -43,6 +43,21 @@ test("Windows native store starts with a protected current-user ACL", { skip:
     rmSync(key);
   }
 
+  // Owner Stop persists as an independent current-user-only marker, never an
+  // activation-pending marker; its ACL must be enforced by the real OS helper.
+  const stopped = path.win32.join(root,"v2-identity.pem.owner-stopped");
+  writeFileSync(stopped,"stopped\n",{flag:"wx"});
+  try {
+    assert.equal(run("Seal",root,"v2-identity.pem.owner-stopped").status,0,
+      "Owner STOP marker must inherit protected native Windows ACL");
+    assert.equal(run("Check",root).status,0,"Owner STOP remains private across normal service checks");
+    assert.equal(readFileSync(stopped,"utf8"),"stopped\n");
+    assert.notEqual(run("Seal",root,"foreign.owner-stopped").status,0,
+      "Owner STOP helper cannot seal arbitrary files");
+  } finally {
+    rmSync(stopped,{force:true});
+  }
+
   // Actual native Windows rename behavior with the same ACL helper that the
   // interactive re-pair CLI will use. No cloud traffic, identity or task.
   const oldId = "11111111-1111-4111-8111-111111111111";
