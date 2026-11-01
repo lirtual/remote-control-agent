@@ -114,7 +114,7 @@ test("#660 native upgrade busy/activation failure retains identity and rolls bac
   const opts={...base,bundle:alt,freezeAgent:async()=> "busy"};
   await assert.rejects(localMacAction("upgrade",opts),/Busy or uncertain/);
   assert.equal((await localMacAction("status",{home:f.home,invoke:f.invoke})).version,
-    m.version.replace("0.1-ci","0.0-ci")+"-darwin-arm64");
+    f.version+"-darwin-arm64");
   // Busy attempt safely staged the second version; explicit human inspection
   // is required before repeat, rather than overwriting it blindly.
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
