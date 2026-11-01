@@ -315,7 +315,12 @@ test('Linux/WSL2 owner Stop survives offline cloud failure and Start reconciles 
   let available=false;
   const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
    stdin:tty,stdout:tty,
-   invokeService:(_bin,args)=>{events.push(args[1]);return {status:0};},
+   invokeService:(_bin,args,options)=>{
+     events.push(args[1]);
+     assert.equal(options.timeout,args[1]==='stop'?25000:12000,
+       'owner Stop must outwait the 15s systemd stop deadline');
+     return {status:0};
+   },
    signedIntent:async(_origin,_key,action)=>{
     events.push('cloud:'+action);
     if(!available)throw Error('network unavailable');
