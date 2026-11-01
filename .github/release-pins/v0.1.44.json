@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.44",
+  "source_sha": "26b06dd1f20b51c637b4f607dc6b4878c4777530",
+  "candidate_run_id": 41276281773,
+  "release_title": "Remote Control Agent v0.1.44 - Windows Session ACL recovery",
+  "release_notes": ".github/release-notes/v0.1.44.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.44-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.44-linux-x64-glibc.tar.gz",
+      "sha256": "db480ffbe7d5f90805c4c2698adec7744f606fc07950ed6a65bd102ed31ab3ca"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.44-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.44-linux-arm64-glibc.tar.gz",
+      "sha256": "e99763fd91a067bbdfabeff0c7bb25de44d0f46e23b434be14b623957ce9ad3e"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.44-windows-x64",
+      "name": "remote-control-agent-v0.1.44-windows-x64.zip",
+      "sha256": "0f80e622ae53b0354a2bdfa88450dec8ffb5324306962dadea98e39a63430639"
+    }
+  ]
+}
