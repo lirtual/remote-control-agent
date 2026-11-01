@@ -93,6 +93,15 @@ test("#658 authenticated WSS frame adapter writes and reads a real native file w
       this.dispatchEvent(message);
     }
   }();
+  const waitReply=async(kind:string,requestId:string)=>{
+    for(let i=0;i<100;i++){
+      const reply=socket.sent.map(x=>JSON.parse(x) as Record<string,any>)
+        .find(x=>x.kind===kind&&x.request_id===requestId);
+      if(reply)return reply;
+      await new Promise(resolve=>setTimeout(resolve,15));
+    }
+    throw Error("Timed out awaiting bounded native WSS fixture reply.");
+  };
   const engine=createAgentExecutionEngine({receiptDirectory:path.join(root,"receipts")});
   const status=monitorDeviceSocket(socket as unknown as WebSocket,controller.signal,
     {intervalMs:60_000,timeoutMs:10_000},
@@ -102,16 +111,12 @@ test("#658 authenticated WSS frame adapter writes and reads a real native file w
     const id=randomUUID(), requestId=randomUUID();
     socket.frame({kind:"operation",request_id:requestId,operation_id:id,
       tool:"write_file",arguments:{path:filename,content:"signed-message\n",mode:"rewrite"}});
-    await new Promise(resolve=>setTimeout(resolve,30));
-    const write=socket.sent.map(x=>JSON.parse(x) as Record<string,any>)
-      .find(x=>x.kind==="operation_result" && x.request_id===requestId);
+    const write=await waitReply("operation_result",requestId);
     assert.equal(write?.result?.status,"completed");
     assert.equal(await readFile(filename,"utf8"),"signed-message\n");
     const readId=randomUUID();
     socket.frame({kind:"read",request_id:readId,tool:"read_file",arguments:{path:filename}});
-    await new Promise(resolve=>setTimeout(resolve,30));
-    const read=socket.sent.map(x=>JSON.parse(x) as Record<string,any>)
-      .find(x=>x.kind==="read_result" && x.request_id===readId);
+    const read=await waitReply("read_result",readId);
     assert.equal(read?.status,"completed");
     assert.match(read?.text??"",/signed-message/);
     const shellId=randomUUID();
