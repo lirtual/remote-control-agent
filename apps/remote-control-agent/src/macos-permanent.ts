@@ -3,7 +3,7 @@
  * Pair only in a real local terminal; LaunchAgent can only resume a
  * previously explicitly approved permanent key and signed WSS identity.
  */
-import { lstat, rename, writeFile } from "node:fs/promises";
+import { lstat, rename, writeFile, readFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +72,12 @@ export async function runPermanentMac(argv=process.argv.slice(2)):Promise<void>{
       return;
     }
     if(!hasKey||!hasId)throw Error("LaunchAgent cannot enroll or renew an unapproved identity.");
+    const stopMark=path.join(identity,"macos","stopped");
+    if(await privateFileIfPresent(stopMark)){
+      if((await readFile(stopMark,"utf8"))!=="stopped\n")
+        throw Error("Unsafe owner STOP state.");
+      return; // Autostart, crash restart and login do not override owner OFF.
+    }
     const marker=path.join(identity,"macos-connection.json");
     const record=async(state:"connected"|"disconnected"|"rejected")=>{
       // Owner-private directory, exclusive temporary file, atomic replace; no secrets.

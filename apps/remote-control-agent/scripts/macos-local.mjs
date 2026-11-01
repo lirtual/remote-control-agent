@@ -5,7 +5,7 @@ import {spawnSync} from "node:child_process";
 import {cp,lstat,mkdir,readFile,rename,rm,writeFile} from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath,pathToFileURL} from "node:url";
 const LABEL="org.mcp-workers.remote-control-agent";
 const ID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const SHA=/^[a-f0-9]{40}$/, VERSION=/^v\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/;
@@ -89,6 +89,7 @@ async function checkCandidate(bundle,sha){
   for(const [relative,mode] of [
     ["bin/node",0o700],["apps/remote-control-agent/.build/darwin-session-supervisor",0o700],
     ["apps/remote-control-agent/src/macos-permanent.js",0o600],
+    ["apps/remote-control-agent/src/v2-session-client.js",0o600],
     ["apps/remote-control-agent/scripts/macos-local.mjs",0o600]
   ])await checked(path.join(bundle,relative),{mode});
   return name;
@@ -149,7 +150,7 @@ async function confirm(question){
 }
 /** Host mutation only after local owner consent and a pinned source candidate. */
 export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,endpoint,
-  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze}={}){
+  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze,ownerIntent}={}){
   if(!["install","upgrade","status","stop","start"].includes(action))
     throw Error("Unsupported local action.");
   if(process.platform!=="darwin"||process.arch!=="arm64"||
@@ -188,6 +189,15 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   const stopped=await checked(stopMark,{optional:true,mode:0o600});
   const service="gui/"+process.getuid()+"/"+LABEL,domain="gui/"+process.getuid();
   const key=path.join(identity,"v2-identity.pem");
+  const signedIntent=async(action)=>{
+    if(ownerIntent)return ownerIntent(action);
+    if(!current||!bound||!await approved(key))throw Error("Approved permanent identity required.");
+    const modulePath=path.join(current.root,"apps/remote-control-agent/src/v2-session-client.js");
+    await checked(modulePath,{mode:0o600});
+    const {sendSignedOwnerIntent}=await import(pathToFileURL(modulePath).href);
+    if(typeof sendSignedOwnerIntent!=="function")throw Error("Candidate does not support owner intent.");
+    return sendSignedOwnerIntent(bound,key,action);
+  };
   if(action==="status")return {
     installed:!!current,version:current?path.basename(current.root):null,
     local_service:current?(stopped?"stopped_requested_unverified":"present_unverified"):"not_installed",
@@ -195,25 +205,33 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     last_online:"unconfirmed",receipts:"preserved_unverified",
   };
   if(action==="stop"){
-    if(!current)throw Error("LaunchAgent absent.");
+    if(!current||!await approved(key))throw Error("Existing approved LaunchAgent required.");
     if(!await ask("Intentionally stop this user LaunchAgent?"))throw Error("Owner declined.");
-    if(launch(["print",service],invoke)&&!launch(["bootout",service],invoke))
-      throw Error("Service bootout uncertain; no stopped marker created.");
+    // Durable OFF intent precedes service shutdown; even crash/reboot/upgrade respects it.
     await ownedWrite(stopMark,"stopped\n",stopped);
-    return {status:"intentionally_stopped"};
+    let cloud="unconfirmed";
+    try {await signedIntent('stop');cloud="confirmed";}catch{/* Local OFF still required. */}
+    if(launch(["print",service],invoke)&&!launch(["bootout",service],invoke))
+      throw Error("Service bootout uncertain; owner STOP intent retained.");
+    return {status:"intentionally_stopped",cloud};
   }
   if(action==="start"){
-    if(!current||!stopped)throw Error("No deliberately stopped owned service.");
+    if(!current||!stopped||!await approved(key))throw Error("No deliberately stopped approved LaunchAgent.");
+    if((await readFile(stopMark,"utf8"))!=="stopped\n")throw Error("Unsafe persisted owner STOP.");
     if(!await ask("Resume the previously stopped LaunchAgent?"))throw Error("Owner declined.");
-    if(!launch(["bootstrap",domain,plist],invoke))
-      throw Error("LaunchAgent bootstrap failed.");
-    if(!await online(identity,current.generation)){
-      if(!launch(["bootout",service],invoke))
-        throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
-      throw Error("Signed WSS activation unconfirmed; prior stopped state retained.");
-    }
+    await signedIntent('stop'); // reconcile offline Stop first without extending cloud deadline
+    const permitted=await signedIntent('resume');
+    if(permitted.status!=="resume_pending")throw Error("Signed cloud Resume not authorized.");
     await rm(stopMark);
-    return {status:"connected_observed"};
+    try{
+      if(!launch(["bootstrap",domain,plist],invoke))throw Error("LaunchAgent bootstrap failed.");
+      if(!await online(identity,current.generation))throw Error("Signed WSS activation unconfirmed.");
+    }catch(error){
+      if(!launch(["bootout",service],invoke))throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      await ownedWrite(stopMark,"stopped\n");
+      throw error;
+    }
+    return {status:"connected_observed",cloud:"signed_WSS_observed"};
   }
   if(!bundle||!sourceSha||!bound)throw Error("Reviewed candidate, source and endpoint required.");
   if(action==="install"&&current)throw Error("Existing identity requires upgrade.");
