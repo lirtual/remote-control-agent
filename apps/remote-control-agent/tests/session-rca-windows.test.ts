@@ -171,6 +171,8 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
  assert.equal(childEnv.PSModulePath,undefined);
  const url=pathToFileURL(path.resolve('src/session-windows-identity-store.ts')).href;
  const program=`
+  import {spawnSync as launchNative} from 'node:child_process';
+  import path from 'node:path';
   import {loadOrCreateWindowsSessionIdentity,verifiedWindowsSessionFile,
    checkWindowsSessionAcl} from ${JSON.stringify(url)};
   const physical={attempt_id:process.env.ATTEMPT_ID,
@@ -195,7 +197,15 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
    const message=e instanceof Error?e.message:'';
    const cause=message==='Session ACL helper timed out.'?'acl_timeout':
     message==='Session job-private ACL check refused.'?'acl_refused':'other';
-   process.stdout.write('failed_'+phase+'_'+cause);process.exitCode=1;
+   // A fixed, no-script native startup probe distinguishes an unresponsive
+   // PowerShell process from the ACL script itself. Never print raw errors.
+   const ps=path.win32.join(process.env.SystemRoot,
+     'System32','WindowsPowerShell','v1.0','powershell.exe');
+   const probe=launchNative(ps,['-NoProfile','-NonInteractive','-Command','exit 0'],
+     {windowsHide:true,timeout:5000,stdio:'ignore'});
+   const start=probe.error?.code==='ETIMEDOUT'?'startup_timeout':
+     probe.status===0?'startup_ok':'startup_other';
+   process.stdout.write('failed_'+phase+'_'+cause+'_'+start);process.exitCode=1;
   }
  `;
  const invoke=(env:NodeJS.ProcessEnv)=>spawnSync(process.execPath,
@@ -208,7 +218,7 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
   assert.equal(parent.stdout,'identity_ready');
   const child=invoke(childEnv);
   assert.equal(child.error,undefined);
-  const safePhase=/^failed_(store|pem|sidecar|checkpoint|final_acl)_(acl_timeout|acl_refused|other)$/.test(child.stdout)?
+  const safePhase=/^failed_(store|pem|sidecar|checkpoint|final_acl)_(acl_timeout|acl_refused|other)_(startup_timeout|startup_ok|startup_other)$/.test(child.stdout)?
     child.stdout:'unknown';
   assert.equal(child.status,0,'OIDC-stripped native child recovery: '+safePhase);
   assert.equal(child.stdout,'identity_ready');
