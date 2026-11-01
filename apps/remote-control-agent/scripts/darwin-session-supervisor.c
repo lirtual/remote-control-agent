@@ -117,7 +117,8 @@ int main(int argc,char **argv) {
   close(requests[0]);close(responses[1]);
   /* Do not retain the shell's stdio pipes in the monitor. */
   close(0);close(1);close(2);
-  int ready=0, have_exit=0, anchor_exited=0, anchor_status=0, response_closed=0;
+  int ready=0, have_exit=0, kill_requested=0;
+  int anchor_exited=0, anchor_status=0, response_closed=0;
   unsigned char exit_status=125;
   int awaiting_code=0;
   int channel_error=0;
@@ -130,9 +131,11 @@ int main(int argc,char **argv) {
     /* Drain the anchor's response pipe even AFTER waitpid reports its exit:
      * a short-lived shell may send X and die before the monitor polls. */
     if (anchor_exited && (have_exit || response_closed)) {
-      if (ready && have_exit && WIFSIGNALED(anchor_status) &&
-          WTERMSIG(anchor_status)==SIGKILL) return exit_status;
-      return 125;
+      if (ready && WIFSIGNALED(anchor_status) && WTERMSIG(anchor_status)==SIGKILL) {
+        if (have_exit) return exit_status;
+        if (kill_requested) return 137; /* acknowledged owned-group KILL */
+      }
+      return 125; /* ownership/result not proved */
     }
     fd_set ready_fds;
     FD_ZERO(&ready_fds); FD_SET(3,&ready_fds); FD_SET(responses[0],&ready_fds);
@@ -148,7 +151,7 @@ int main(int argc,char **argv) {
           requests[1]<0 || byte(requests[1],value)<0) {
         if (requests[1]>=0) close(requests[1]);
         requests[1]=-1;channel_error=1;
-      }
+      } else if (value=='K') kill_requested=1;
     }
     if (count>0 && FD_ISSET(responses[0],&ready_fds)) {
       char value=0;
