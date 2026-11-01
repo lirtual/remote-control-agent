@@ -104,3 +104,35 @@ test("#659 Darwin helper denies non-owned calls and cannot claim success when co
   });
   assert.notEqual(child.exitCode,0,"loss of control may never look like success");
 });
+
+test("#659 Darwin monitor SIGKILL must not leave its anchored group running an effect",
+  {skip:!native},async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"rca659-crash-"));
+  const marker=path.join(root,"must-not-exist");
+  const helper=path.resolve(path.dirname(new URL(import.meta.url).pathname),
+    "../.build/darwin-session-supervisor");
+  const command="sleep 2; echo unguarded > "+JSON.stringify(marker);
+  const child=spawn(helper,["/bin/sh",command],{detached:true,
+    stdio:["pipe","pipe","pipe","pipe","pipe"]});
+  try {
+    const ready=await new Promise<string>((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(Error("monitor did not prove ownership")),2000);
+      child.stdio[4]!.once("data",data=>{clearTimeout(timeout);resolve(String(data));});
+    });
+    assert.equal(ready,"R");
+    // This kills ONLY our directly spawned monitor. The anchor must notice
+    // its owned control pipe's EOF and kill the group before the effect.
+    assert.equal(child.kill("SIGKILL"),true);
+    await new Promise<void>((resolve,reject)=>{
+      const timeout=setTimeout(()=>reject(Error("monitor did not exit")),2000);
+      child.once("exit",()=>{clearTimeout(timeout);resolve();});
+    });
+    await sleep(2400);
+    await assert.rejects(access(marker),{code:"ENOENT"},
+      "a surviving shell would have performed an unauthorized later effect");
+  }finally{
+    child.stdio[3]!.destroy();
+    if(child.exitCode===null && child.signalCode===null)child.kill("SIGKILL");
+    await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:20});
+  }
+});
