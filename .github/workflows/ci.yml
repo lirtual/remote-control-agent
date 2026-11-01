@@ -157,7 +157,11 @@ jobs:
           test "$(sw_vers -productVersion | cut -d. -f1)" -ge 15
           corepack pnpm --filter remote-control-agent typecheck
           cd apps/remote-control-agent
-          node --experimental-strip-types --test tests/macos-candidate.test.mjs tests/macos-file-tools.test.ts tests/macos-managed-sessions.test.ts tests/pair-device.test.ts
+          node --experimental-strip-types --test tests/macos-candidate.test.mjs tests/macos-file-tools.test.ts tests/pair-device.test.ts
+          # macOS-owned child groups must not hold CI indefinitely when
+          # the helper or a test faults. This is the SAME existing job.
+          node -e 'const {spawnSync}=require("node:child_process"); const r=spawnSync(process.execPath,["--experimental-strip-types","--test","tests/macos-managed-sessions.test.ts"],{timeout:45000,stdio:"inherit"}); if(r.error||r.status!==0) {console.error("Native Darwin session tests failed or timed out:",r.error?.code??r.status);process.exit(1)}'
+
       - name: Build and inspect native unpublished ARM64 candidate
         shell: bash
         run: |
