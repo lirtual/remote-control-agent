@@ -33,6 +33,9 @@ test("Windows preview CLI fails closed on untrusted flags and endpoints", () => 
   assert.equal(parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/"]).action, "onboard");
   assert.throws(() => parseWindowsAgentArgs(["onboard", "--endpoint", "https://rca.example.test/", "--grant", "temporary"]));
   assert.equal(parseWindowsAgentArgs(["task-status"]).action, "task-status");
+  assert.equal(parseWindowsAgentArgs(["stop"]).action,"stop");
+  assert.equal(parseWindowsAgentArgs(["start"]).action,"start");
+  assert.throws(()=>parseWindowsAgentArgs(["start","--endpoint","https://rca.example.test/"]));
   assert.equal(parseWindowsAgentArgs(["enable", "--endpoint", "https://rca.example.test/"]).action, "enable");
   assert.equal(parseWindowsAgentArgs(["pair", "--endpoint", "https://rca.example.test/"]).action, "pair");
   assert.equal(parseWindowsAgentArgs(["re-pair", "--endpoint", "https://rca.example.test/"]).action, "re-pair");

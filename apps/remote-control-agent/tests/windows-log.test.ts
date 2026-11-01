@@ -12,9 +12,11 @@ test("Windows logs stay private, bounded and contain only fixed events", () => {
     assert.match(readWindowsEvents(folder), /No local Windows Agent events/);
     recordWindowsEvent(folder, "starting");
     recordWindowsEvent(folder, "connected");
+    recordWindowsEvent(folder, "owner_stopped");
     const result = readWindowsEvents(folder);
     assert.match(result, /"event":"starting"/);
     assert.match(result, /"event":"connected"/);
+    assert.match(result, /"event":"owner_stopped"/);
     assert.doesNotMatch(result, /endpoint|pem|device_id|pairing_code/);
     assert.equal(parseWindowsAgentArgs(["logs"]).action, "logs");
     assert.throws(() => parseWindowsAgentArgs(["logs", "--endpoint", "https://example.org/"]));
