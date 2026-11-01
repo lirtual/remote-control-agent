@@ -72,7 +72,9 @@ test("#660 native offline install → stopped state → upgrade without restart"
   skip:!native},async t=>{
   const f=await fixture(t);
   const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
-    invoke:f.invoke,ask:async()=>true,online:async()=>true,freezeAgent:async()=>{throw Error("Stopped service must not freeze");}};
+    invoke:f.invoke,ask:async()=>true,online:async()=>true,
+    ownerIntent:async()=>({status:'stopped',idle_expires_at:Date.now()+14*86_400_000}),
+    freezeAgent:async()=>{throw Error("Stopped service must not freeze");}};
   const first=await localMacAction("install",opts);
   assert.equal(first.status,"connected_observed");
   const state=await localMacAction("status",{home:f.home,invoke:f.invoke});
@@ -166,4 +168,24 @@ test("#660 native suspicious LaunchAgent symlink refused before any mutation",{
   await symlink(path.join(f.identity,"v2-identity.pem"),plist);
   await assert.rejects(localMacAction("status",opts),/Unsafe owner/);
   assert.equal(await readFile(path.join(f.identity,"v2-identity.pem"),"utf8"),"synthetic-private-key");
+});
+
+
+test('#666 native owner Stop/Resume preserves same identity and demands signed activation',{
+ skip:!native},async t=>{
+ const f=await fixture(t),calls=[];
+ const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+  invoke:(command,args)=>{calls.push('launch:'+args[0]);return {status:args[0]==='print'?1:0}},
+  ask:async()=>true,online:async()=>true,
+  ownerIntent:async(action)=>{calls.push('cloud:'+action);
+   return {status:action==='stop'?'stopped':'resume_pending',idle_expires_at:Date.now()+14*86_400_000}}};
+ await localMacAction('install',opts);
+ await localMacAction('stop',opts);
+ const marker=path.join(f.identity,'macos','stopped');
+ assert.equal(await readFile(marker,'utf8'),'stopped\n');
+ assert.equal((await localMacAction('status',opts)).local_service,'stopped_requested_unverified');
+ assert.equal((await localMacAction('start',opts)).status,'connected_observed');
+ await assert.rejects(readFile(marker),{code:'ENOENT'});
+ assert.deepEqual(calls.filter(x=>x.startsWith('cloud:')),['cloud:stop','cloud:stop','cloud:resume']);
+ assert.equal((await readFile(path.join(f.identity,'v2-identity.pem.device-id'),'utf8')).trim(),ID);
 });

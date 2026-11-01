@@ -306,3 +306,50 @@ test("installed rca shell shim executes the bundled Node, not a host Node",()=>{
     assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
   }finally{cleanup(f);}
 });
+
+test('Linux/WSL2 owner Stop survives offline cloud failure and Start reconciles signed intent without re-pair',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key retained',{mode:0o600});
+  const events=[],tty={isTTY:true,write(){}};
+  let available=false;
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+   stdin:tty,stdout:tty,
+   invokeService:(_bin,args)=>{events.push(args[1]);return {status:0};},
+   signedIntent:async(_origin,_key,action)=>{
+    events.push('cloud:'+action);
+    if(!available)throw Error('network unavailable');
+    return action==='stop'?{status:'stopped',idle_expires_at:9999999999999}:
+     {status:'resume_pending',idle_expires_at:9999999999999};
+   }};
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  assert.equal(await runInteractiveLocalManager(['stop'],opts),0);
+  assert.deepEqual(events,['cloud:stop','stop']);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+  await assert.rejects(runInteractiveLocalManager(['start'],opts),/network unavailable/);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  available=true;
+  assert.equal(await runInteractiveLocalManager(['start'],opts),0);
+  assert.deepEqual(events.slice(-3),['cloud:stop','cloud:resume','start']);
+  assert.equal(await import('node:fs').then(fs=>fs.existsSync(marker)),false);
+  assert.equal(readFileSync(path.join(f.ids,'v2-identity.pem.device-id'),'utf8'),UUID);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});
+
+test('owner STOP state rejects tampered symlink and no owner terminal',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key',{mode:0o600});
+  const tty={isTTY:true,write(){}};
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+   stdin:tty,stdout:tty,signedIntent:async()=>{throw Error('cannot authorize');},
+   invokeService:()=>({status:0})};
+  await assert.rejects(runInteractiveLocalManager(['stop'],{...opts,stdin:{isTTY:false}}),/real terminal/);
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  symlinkSync('/etc/passwd',marker);
+  await assert.rejects(runInteractiveLocalManager(['start'],opts),/Untrusted local managed path/);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});

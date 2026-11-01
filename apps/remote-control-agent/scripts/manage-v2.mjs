@@ -4,6 +4,8 @@
  * separate review. This file is Draft-only and is not an installable CLI yet.
  */
 import { spawnSync } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
+import {pathToFileURL} from "node:url";
 import { createInterface } from "node:readline/promises";
 import { planLocalUninstall, executeLocalUninstall } from "./lifecycle-v2.mjs";
 import { prepareManualUpgrade, activateManualUpgrade, resolveWorkerUpgradePin } from "./upgrade-v2.mjs";
@@ -152,7 +154,7 @@ export function dispatchLocalManager(args,{inventory=localManagerInventory,statu
   if(args.length>2)throw Error("Too many rca arguments");
   if(args.length>1&&cmd!=="pair")throw Error("Only documented rca subcommands are accepted");
   if(cmd==="help"||cmd==="--help"||cmd==="-h"){
-    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|upgrade|uninstall] — Python-free Draft CLI\n");
+    stdout.write("rca [status|version|logs|pair [HTTPS endpoint]|stop|start|upgrade|uninstall] — Python-free Draft CLI\n");
     stdout.write("Upgrade from the approved Worker: rca upgrade.\n");
     return 0;
   }
@@ -236,6 +238,58 @@ export async function runInteractiveLocalManager(args,{
         stdout.write("Choose 1–6.\n");
       }
     }finally{rl.close();}
+  }
+  if(args[0]==="stop"||args[0]==="start"){
+    if(args.length!==1||!stdin.isTTY||!stdout.isTTY)
+      throw Error("Owner-local Stop/Start requires a real terminal.");
+    const state=inventory();
+    if(!state.unit||!state.unitName||!state.ids.permanent)
+      throw Error("An existing managed permanent service is required.");
+    const origin=trustedInstalledEndpoint(state.unit);
+    const privateRoot=path.join(home,STORE);
+    checkedPath(privateRoot,{directory:true});
+    const key=path.join(privateRoot,"v2-identity.pem");
+    checkedPath(key,{mode:0o600});
+    checkedPath(key+".device-id",{mode:0o600});
+    const marker=key+".owner-stopped";
+    const isStopped=checkedPath(marker,{mode:0o600,optional:true});
+    if(isStopped && readFileSync(marker,"utf8")!=="stopped\n")
+      throw Error("Unexpected owner STOP intent.");
+    const call=async action=>{
+      if(rest.signedIntent)return rest.signedIntent(origin,key,action);
+      // Compiled runtime already in the verified installer-owned manifest.
+      const module=path.join(state.root,"apps/remote-control-agent/src/v2-session-client.js");
+      checkedPath(module,{mode:0o600});
+      const {sendSignedOwnerIntent}=await import(pathToFileURL(module).href);
+      if(typeof sendSignedOwnerIntent!=="function")throw Error("Current Agent does not support signed owner intent.");
+      return sendSignedOwnerIntent(origin,key,action);
+    };
+    const service=action=>{
+      const result=(rest.invokeService??invoke)("systemctl",["--user",action,state.unitName],
+        {encoding:"utf8",stdio:"ignore",timeout:12000});
+      if(result.error||result.signal||result.status!==0)
+        throw Error("Managed systemd service state unconfirmed.");
+    };
+    if(args[0]==="stop"){
+      if(!isStopped)writeFileSync(marker,"stopped\n",{flag:"wx",mode:0o600});
+      // Persist STOP before touching the service: rollback, crash and login cannot silently resume.
+      let cloud="unconfirmed";
+      try { await call("stop");cloud="confirmed"; } catch { /* Preserve local OFF. */ }
+      // Even a systemctl failure must not skip the cloud fencing attempt.
+      service("stop");
+      stdout.write(JSON.stringify({local:"stopped",cloud})+"\n");
+      return 0;
+    }
+    if(!isStopped)throw Error("Local owner STOP is not recorded; Start cannot bypass pairing.");
+    // A lost STOP acknowledgement is reconciled first; repeat STOP never extends deadline.
+    await call("stop");
+    const approved=await call("resume");
+    if(approved.status!=="resume_pending")throw Error("Server did not authorize owner Resume.");
+    unlinkSync(marker);
+    try { service("start"); }
+    catch(error){writeFileSync(marker,"stopped\n",{flag:"wx",mode:0o600});throw error;}
+    stdout.write(JSON.stringify({local:"started",cloud:"resume_pending_signed_WSS",idle_expires_at:approved.idle_expires_at})+"\n");
+    return 0;
   }
   if(args[0]==="upgrade"){
     if(args.length!==1&&args.length!==3)throw Error("Use rca upgrade");

@@ -89,6 +89,44 @@ export async function verifyApprovedDeviceId(
   return challenged.result.device_id;
 }
 
+/** Distinct Ed25519 intent domain; ordinary signed WSS cannot authorize local owner OFF/Resume. */
+export function signedOwnerIntentProof(pem:string,action:'stop'|'resume',id:string,nonce:string,generation:number):string {
+  if(!UUID.test(id)||!/^[A-Za-z0-9_-]{24}$/.test(nonce)||
+      !Number.isSafeInteger(generation)||generation<0||generation>=Number.MAX_SAFE_INTEGER)
+    throw Error('Invalid signed local owner intent.');
+  const privateKey=createPrivateKey(pem);
+  const publicKey=Buffer.from(createPublicKey(privateKey).export({type:'spki',format:'der'})).toString('base64');
+  const transcript=`remote-control:v2:owner-intent:v1:${action}:${id}:${generation}:${nonce}:${publicKey}`;
+  return Buffer.from(sign(null,Buffer.from(transcript),privateKey)).toString('base64url');
+}
+
+/** Explicit owner CLI only: durable signed Stop/Resume result is never inferred from a timeout. */
+export async function sendSignedOwnerIntent(
+  origin:string,keyPath:string,action:'stop'|'resume',send:typeof fetch=fetch,
+):Promise<{status:'stopped'|'resume_pending';idle_expires_at:number}> {
+  const base=endpoint(origin);
+  const id=(await readFile(keyPath+'.device-id','utf8')).trim();
+  if(!UUID.test(id))throw Error('Invalid existing device identity.');
+  const pem=await readFile(keyPath,'utf8');
+  const challenged=await postJson(base,'/agent/owner/intent/challenge',{action,device_id:id},send);
+  rejectPermanentStatus(challenged.status);
+  const c=challenged.result as {action?:unknown;device_id?:unknown;nonce?:unknown;generation?:unknown};
+  if(challenged.status!==200||c.device_id!==id||c.action!==action||
+     typeof c.nonce!=='string'||!/^[A-Za-z0-9_-]{24}$/.test(c.nonce)||
+     !Number.isSafeInteger(c.generation)||Number(c.generation)<0)throw Error('Owner intent challenge unavailable.');
+  const generation=Number(c.generation);
+  const proof=signedOwnerIntentProof(pem,action,id,c.nonce,generation);
+  const result=await postJson(base,'/agent/owner/intent',{
+    action,device_id:id,nonce:c.nonce,generation,proof,
+  },send);
+  rejectPermanentStatus(result.status);
+  if(result.status!==200||result.result.device_id!==id||
+     result.result.status!==(action==='stop'?'stopped':'resume_pending')||
+     !Number.isSafeInteger(result.result.idle_expires_at))
+    throw Error('Cloud owner intent was not confirmed.');
+  return {status:result.result.status,idle_expires_at:result.result.idle_expires_at};
+}
+
 /** Read-only signed approval proof; never creates an incomplete .device-id file. */
 export async function recoverDeviceId(
   baseAddress: string, keyPath: string, send: typeof fetch = fetch,

@@ -2,7 +2,7 @@
 # Does not create an elevated service, use a password or touch cloud grants.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('Enable','Start','Stop','Disable','Status','Switch')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('Enable','Start','Stop','Disable','Status','Switch','Endpoint')][string]$Action,
   [string]$Endpoint, [string]$Entry, [string]$Node,
   [string]$Version, [ValidateSet('Upgrade','Rollback')][string]$Direction,
   [switch]$CIInjectFailure
@@ -86,6 +86,15 @@ if ($Action -eq 'Status') {
   '{"installed":true,"running":' + $running.ToString().ToLowerInvariant() + ',"autostart":"at-user-logon"}'
   exit 0
 }
+if ($Action -eq 'Endpoint') {
+  Check-Existing
+  $args = [string]$task.Actions[0].Arguments
+  if ($args -cnotmatch '^"[^"]+" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"$') {
+    throw 'Managed endpoint cannot be verified'
+  }
+  $Matches[1]
+  exit 0
+}
 if ($Action -eq 'Enable') {
   if ($task) { throw 'Cannot overwrite an existing scheduled task' }
   if (-not $Node -or -not $Entry -or -not $Endpoint) {
@@ -115,6 +124,10 @@ if ($Action -eq 'Switch') {
   if ($Endpoint -or $Node -or $Entry -or
       $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$' -or
       $Direction -notin @('Upgrade','Rollback')) { throw 'Untrusted switch arguments' }
+  $marker = [IO.Path]::Combine($env:LOCALAPPDATA,'mcp-workers','remote-control','v2-identity.pem.owner-stopped')
+  if ($Direction -eq 'Rollback' -and (Test-Path -LiteralPath $marker)) {
+    throw 'Owner-stopped identity cannot roll back to an unchecked runtime'
+  }
   $oldAction = $task.Actions[0]
   $oldArguments = [string]$oldAction.Arguments
   if ($oldArguments -cnotmatch '^"([^"]+)" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"$') {
