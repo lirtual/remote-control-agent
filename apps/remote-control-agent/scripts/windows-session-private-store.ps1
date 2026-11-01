@@ -16,8 +16,11 @@ $expected=[IO.Path]::GetFullPath([IO.Path]::Combine($temp,'session-rca'))
 if (-not [string]::Equals([IO.Path]::GetFullPath($Directory),$expected,[StringComparison]::OrdinalIgnoreCase) -or
     $temp.StartsWith('\\') -or $temp.StartsWith('//') -or
     $expected.StartsWith('\\') -or $expected.StartsWith('//')) { throw 'Unexpected Session store' }
-$parent=Get-Item -LiteralPath $temp -Force
-if (-not $parent.PSIsContainer -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+# Avoid starting a PowerShell FileSystem provider in the OIDC-stripped child.
+# .NET attributes check preserves the directory and no-reparse-point contract.
+$parentAttributes=[IO.File]::GetAttributes($temp)
+if (($parentAttributes -band [IO.FileAttributes]::Directory) -eq 0 -or
+    ($parentAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw 'Unsafe Runner Temp'
 }
 $user=[Security.Principal.WindowsIdentity]::GetCurrent().User

@@ -233,6 +233,8 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
    const probes=[
     ["$ErrorActionPreference='Stop'",'entered'],
     ["$expected=[IO.Path]::GetFullPath([IO.Path]::Combine($temp,'session-rca'))",'path_ready'],
+    ["$parentAttributes=[IO.File]::GetAttributes($temp)",'attributes_start'],
+    ["if (($parentAttributes -band [IO.FileAttributes]::Directory) -eq 0 -or",'attributes_ready'],
     ["$user=[Security.Principal.WindowsIdentity]::GetCurrent().User",'user_ready'],
     ["Assert-Private $expected $true",'acl_enter'],
    ] as const;
@@ -253,7 +255,8 @@ test('native Windows Session identity recovers in the exact no-OIDC child enviro
      {env:childEnv,windowsHide:true,stdio:'ignore',timeout:12000});
    let stage='unknown';
    try{stage=await readFile(trace,'utf8');}catch{}
-   if(['entered','path_ready','user_ready','acl_enter','acl_complete','complete'].includes(stage))
+   if(['entered','path_ready','attributes_start','attributes_ready',
+     'user_ready','acl_enter','acl_complete','complete'].includes(stage))
      safeAclStage=stage;
    else safeAclStage='unknown';
   }
