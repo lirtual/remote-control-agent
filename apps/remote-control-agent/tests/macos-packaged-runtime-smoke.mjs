@@ -9,8 +9,8 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 const bundle = process.env.RCA_MACOS_BUNDLE_ROOT;
-if (!bundle || process.platform !== "darwin" || process.arch !== "arm64")
-  throw Error("This smoke requires an unpacked bundle on a native ARM64 Mac.");
+if (!bundle || process.platform !== "darwin" || !["arm64","x64"].includes(process.arch))
+  throw Error("This smoke requires an unpacked bundle on a native ARM64 or Intel Mac.");
 const moduleUrl = name => pathToFileURL(path.join(bundle,
   "apps/remote-control-agent/src",name)).href;
 const { createAgentExecutionEngine } = await import(moduleUrl("execution.js"));

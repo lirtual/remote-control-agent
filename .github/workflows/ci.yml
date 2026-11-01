@@ -131,10 +131,22 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  macos-arm64-temporary-candidate:
-    name: Unpublished native macOS 15 ARM64 temporary file candidate
-    runs-on: macos-15
+  macos-native-candidate:
+    name: Unpublished native macOS 15 / ${{ matrix.arch }} candidate
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            uname_arch: arm64
+            runner: macos-15
+            node_archive_sha256: 6239d4cf92d864487ec8cd3615038f7b67e7f58b77b21cd2f09ea9fbd68065fe
+          - arch: x64
+            uname_arch: x86_64
+            runner: macos-15-intel
+            node_archive_sha256: 0ae5a24c24bb7d015cd816c5036b3f90f2945aa872fcf54e58da054753b3a299
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -153,7 +165,8 @@ jobs:
       - name: Typecheck and verify native file/receipt seam (no owner pairing)
         run: |
           set -euo pipefail
-          test "$(uname -m)" = arm64
+          test "$(uname -m)" = "${{ matrix.uname_arch }}"
+          test "$(node -p process.arch)" = "${{ matrix.arch }}"
           test "$(sw_vers -productVersion | cut -d. -f1)" -ge 15
           corepack pnpm --filter remote-control-agent typecheck
           cd apps/remote-control-agent
@@ -162,7 +175,7 @@ jobs:
           # the helper or a test faults. This is the SAME existing job.
           node -e 'const {spawnSync}=require("node:child_process"); const r=spawnSync(process.execPath,["--experimental-strip-types","--test","tests/macos-managed-sessions.test.ts"],{timeout:45000,stdio:"inherit"}); if(r.error||r.status!==0) {console.error("Native Darwin session tests failed or timed out:",r.error?.code??r.status);process.exit(1)}'
 
-      - name: Build and inspect native unpublished ARM64 candidate
+      - name: Build and inspect native unpublished CPU-specific candidate
         shell: bash
         run: |
           set -euo pipefail
@@ -171,28 +184,28 @@ jobs:
           archive="$temp_dir/node.tar.xz"
           curl --fail --silent --show-error --location --max-time 90 \
             --proto '=https' --tlsv1.2 \
-            https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-arm64.tar.xz -o "$archive"
-          echo '6239d4cf92d864487ec8cd3615038f7b67e7f58b77b21cd2f09ea9fbd68065fe  '"$archive" | shasum -a 256 --check
-          tar -xJOf "$archive" node-v24.21.0-darwin-arm64/bin/node > "$temp_dir/node"
+            https://nodejs.org/dist/v24.21.0/node-v24.21.0-darwin-${{ matrix.arch }}.tar.xz -o "$archive"
+          echo '${{ matrix.node_archive_sha256 }}  '"$archive" | shasum -a 256 --check
+          tar -xJOf "$archive" node-v24.21.0-darwin-${{ matrix.arch }}/bin/node > "$temp_dir/node"
           chmod 700 "$temp_dir/node"
           test "$("$temp_dir/node" --version)" = v24.21.0
           for pass in first second; do
             "$temp_dir/node" apps/remote-control-agent/scripts/build-v2-release.mjs \
-              --version "$RCA_CANDIDATE_TAG" --target darwin-arm64 \
+              --version "$RCA_CANDIDATE_TAG" --target darwin-${{ matrix.arch }} \
               --node-bin "$temp_dir/node" \
               --node-sha256 "$(shasum -a 256 "$temp_dir/node" | awk '{print $1}')" \
               --native "$(pwd)/apps/remote-control-agent/.build/darwin-session-supervisor" \
               --native-sha256 "$(shasum -a 256 apps/remote-control-agent/.build/darwin-session-supervisor | awk '{print $1}')" \
               --out "$temp_dir/$pass"
           done
-          asset="remote-control-agent-$RCA_CANDIDATE_TAG-darwin-arm64.tar.gz"
+          asset="remote-control-agent-$RCA_CANDIDATE_TAG-darwin-${{ matrix.arch }}.tar.gz"
           cmp "$temp_dir/first/$asset" "$temp_dir/second/$asset"
           mkdir "$temp_dir/unpacked"
           chmod 700 "$temp_dir/unpacked"
           tar -xzf "$temp_dir/first/$asset" -C "$temp_dir/unpacked"
           test "$("$temp_dir/unpacked/bin/node" --version)" = v24.21.0
-          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-arm64" || m.candidate_profile!=="darwin-permanent-local-v1" || m.native_supervisor!=="darwin-owned-group-v1" || m.source_commit!==process.argv[2] || m.upgrade_profile)process.exit(1)' \
-            "$temp_dir/unpacked/bundle.json" "$(git rev-parse HEAD)"
+          node -e 'const m=require(process.argv[1]); if(m.target!=="darwin-"+process.argv[3] || m.candidate_profile!=="darwin-permanent-local-v1" || m.native_supervisor!=="darwin-owned-group-v1" || m.source_commit!==process.argv[2] || m.upgrade_profile)process.exit(1)' \
+            "$temp_dir/unpacked/bundle.json" "$(git rev-parse HEAD)" "${{ matrix.arch }}"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/.build/session-supervisor"
           test -x "$temp_dir/unpacked/apps/remote-control-agent/.build/darwin-session-supervisor"
           test ! -e "$temp_dir/unpacked/apps/remote-control-agent/scripts/install-v2.mjs"

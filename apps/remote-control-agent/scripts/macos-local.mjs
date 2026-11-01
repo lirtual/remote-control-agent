@@ -49,7 +49,7 @@ export function plistText({node,entry,endpoint,generation}){
       .map(x=>'<string>'+esc(x)+'</string>').join("")+'</array>\n'+
     '<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n</dict></plist>\n';
 }
-export function parsePlist(xml,programs,endpoint){
+export function parsePlist(xml,programs,endpoint,arch=process.arch){
   const tokens=[...xml.matchAll(/<string>([^<>]*)<\/string>/g)].map(m=>m[1]
     .replaceAll("&apos;","'").replaceAll("&quot;",'"').replaceAll("&gt;",">")
     .replaceAll("&lt;","<").replaceAll("&amp;","&"));
@@ -61,8 +61,9 @@ export function parsePlist(xml,programs,endpoint){
     throw Error("Foreign or ambiguous LaunchAgent.");
   const node=tokens[1],entry=tokens[2],root=path.dirname(path.dirname(node));
   const name=path.basename(root);
-  if(path.dirname(root)!==programs||!name.endsWith("-darwin-arm64")||
-    !VERSION.test(name.slice(0,-"-darwin-arm64".length))||
+  const suffix="-darwin-"+arch;
+  if(!["x64","arm64"].includes(arch)||path.dirname(root)!==programs||
+    !name.endsWith(suffix)||!VERSION.test(name.slice(0,-suffix.length))||
     node!==path.join(root,"bin/node")||
     entry!==path.join(root,"apps/remote-control-agent/src/macos-permanent.js"))
     throw Error("LaunchAgent points outside owned candidate.");
@@ -70,15 +71,16 @@ export function parsePlist(xml,programs,endpoint){
     throw Error("Unexpected LaunchAgent configuration.");
   return {root,generation:tokens[7]};
 }
-export function candidateName(meta,sha){
+export function candidateName(meta,sha,arch=process.arch){
   if(!SHA.test(sha)||meta.source_commit!==sha||!VERSION.test(meta.version)||
-    meta.target!=="darwin-arm64"||meta.artifact_schema!==1||
+    !["arm64","x64"].includes(arch)||meta.target!=="darwin-"+arch||
+    meta.artifact_schema!==1||
     meta.device_protocol!==2||meta.receipt_schema!==1||
     meta.candidate_profile!=="darwin-permanent-local-v1"||
     meta.native_supervisor!=="darwin-owned-group-v1"||
     !Array.isArray(meta.modules)||!meta.modules.includes("macos-permanent.ts"))
     throw Error("Unexpected source commit, architecture or manifest.");
-  return meta.version+"-darwin-arm64";
+  return meta.version+"-darwin-"+arch;
 }
 async function checkCandidate(bundle,sha){
   if(!path.isAbsolute(bundle))throw Error("Bundle must be absolute.");
@@ -152,9 +154,9 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze}={}){
   if(!["install","upgrade","status","stop","start"].includes(action))
     throw Error("Unsupported local action.");
-  if(process.platform!=="darwin"||process.arch!=="arm64"||
+  if(process.platform!=="darwin"||!["arm64","x64"].includes(process.arch)||
     Number.parseInt(os.release(),10)<24||process.getuid?.()===0)
-    throw Error("Native unprivileged macOS 15+ ARM64 required.");
+    throw Error("Native unprivileged macOS 15+ ARM64 or x64 required.");
   process.umask(0o077);
   await checked(home,{dir:true,privateOnly:false});
   const identity=await directories(home,ROOT);

@@ -31,12 +31,19 @@ test("#660 LaunchAgent plist is strictly owned, deterministic and rejects foreig
   const node=path.join(root,"bin/node");
   const entry=path.join(root,"apps/remote-control-agent/src/macos-permanent.js");
   const xml=plistText({node,entry,endpoint:ENDPOINT,generation:ID});
-  assert.deepEqual(parsePlist(xml,programs,ENDPOINT),{root,generation:ID});
+  assert.deepEqual(parsePlist(xml,programs,ENDPOINT,"arm64"),{root,generation:ID});
+  const intelRoot=path.join(programs,"v0.0.0-ci-darwin-x64");
+  const intelXml=plistText({node:path.join(intelRoot,"bin/node"),
+    entry:path.join(intelRoot,"apps/remote-control-agent/src/macos-permanent.js"),
+    endpoint:ENDPOINT,generation:ID});
+  assert.deepEqual(parsePlist(intelXml,programs,ENDPOINT,"x64"),
+    {root:intelRoot,generation:ID});
+  assert.throws(()=>parsePlist(intelXml,programs,ENDPOINT,"arm64"));
   for(const other of [
     xml.replace("/bin/node","/bin/sh"),
     xml.replace("KeepAlive</key><true/>","KeepAlive</key><false/>"),
     xml.replace("</dict>","<key>Disabled</key><true/></dict>"),
-  ])assert.throws(()=>parsePlist(other,programs,ENDPOINT));
+  ])assert.throws(()=>parsePlist(other,programs,ENDPOINT,"arm64"));
 });
 
 test("#660 candidate provenance requires exact pinned source and no change of protocol",()=>{
@@ -44,13 +51,15 @@ test("#660 candidate provenance requires exact pinned source and no change of pr
     artifact_schema:1,device_protocol:2,receipt_schema:1,
     candidate_profile:"darwin-permanent-local-v1",
     native_supervisor:"darwin-owned-group-v1",modules:["macos-permanent.ts"]};
-  assert.equal(candidateName(meta,"a".repeat(40)),"v0.0.0-ci-darwin-arm64");
-  assert.throws(()=>candidateName(meta,"b".repeat(40)));
-  assert.throws(()=>candidateName({...meta,target:"linux-x64-glibc"},"a".repeat(40)));
-  assert.throws(()=>candidateName({...meta,device_protocol:3},"a".repeat(40)));
+  assert.equal(candidateName(meta,"a".repeat(40),"arm64"),"v0.0.0-ci-darwin-arm64");
+  assert.equal(candidateName({...meta,target:"darwin-x64"},"a".repeat(40),"x64"),"v0.0.0-ci-darwin-x64");
+  assert.throws(()=>candidateName(meta,"a".repeat(40),"x64"));
+  assert.throws(()=>candidateName(meta,"b".repeat(40),"arm64"));
+  assert.throws(()=>candidateName({...meta,target:"linux-x64-glibc"},"a".repeat(40),"arm64"));
+  assert.throws(()=>candidateName({...meta,device_protocol:3},"a".repeat(40),"arm64"));
 });
 
-const native=process.platform==="darwin"&&process.arch==="arm64"&&!!bundle;
+const native=process.platform==="darwin"&&["arm64","x64"].includes(process.arch)&&!!bundle;
 async function fixture(t){
   const root=await mkdtemp(path.join(os.tmpdir(),"rca660-test-"));
   const home=path.join(root,"home");
@@ -112,7 +121,7 @@ test("#660 native upgrade busy/activation failure retains identity and rolls bac
   const opts={...base,bundle:alt,freezeAgent:async()=> "busy"};
   await assert.rejects(localMacAction("upgrade",opts),/Busy or uncertain/);
   assert.equal((await localMacAction("status",{home:f.home,invoke:f.invoke})).version,
-    m.version.replace("0.1-ci","0.0-ci")+"-darwin-arm64");
+    m.version.replace("0.1-ci","0.0-ci")+"-darwin-"+process.arch);
   // Busy attempt safely staged the second version; explicit human inspection
   // is required before repeat, rather than overwriting it blindly.
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);

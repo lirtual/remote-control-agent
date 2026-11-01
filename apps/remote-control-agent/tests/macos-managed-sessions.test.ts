@@ -8,7 +8,7 @@ import test from "node:test";
 import { ManagedSessions } from "../src/sessions.ts";
 import { createAgentExecutionEngine } from "../src/execution.ts";
 
-const native = process.platform==="darwin" && process.arch==="arm64";
+const native = process.platform==="darwin" && (process.arch==="arm64" || process.arch==="x64");
 const sleep=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms));
 const alive=(pid:number)=>{try{process.kill(pid,0);return true;}catch{return false;}};
 
