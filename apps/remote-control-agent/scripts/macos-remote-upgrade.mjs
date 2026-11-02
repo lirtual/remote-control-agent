@@ -179,7 +179,8 @@ export async function dispatchRemoteMacUpgrade({home=os.homedir(),bundle,sourceS
   // bootstrap loads an owner-private once-only launchd job outside the
   // Agent-managed Shell. Unlike submit, failure must never restart it.
   const job=path.join(dir,"job.plist");
-  await record(job,remoteJobPlist(id,node,worker,dir));
+  // The job is XML, not a JSON receipt. Preserve raw plist bytes.
+  await writeFile(job,remoteJobPlist(id,node,worker,dir),{flag:"wx",mode:0o600});
   await checked(job,{mode:0o600});
   const sent=invoke("/bin/launchctl",["bootstrap","gui/"+process.getuid(),job]);
   if(sent.error||sent.signal||sent.status!==0)

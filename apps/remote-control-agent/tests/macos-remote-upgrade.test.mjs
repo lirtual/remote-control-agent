@@ -177,6 +177,9 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   assert.equal(seen.filter(x=>x==="bootstrap").length,1);
   const jobFile=path.join(identity,"macos/remote-upgrades",launched.operation_id,"job.plist");
   const jobText=await readFile(jobFile,"utf8");
+  const lint=spawnSync("/usr/bin/plutil",["-lint",jobFile],
+    {encoding:"utf8",timeout:2000});
+  assert.equal(lint.status,0,lint.stderr??"launchd plist lint failed");
   assert.equal(jobText,remoteJobPlist(launched.operation_id,
     path.join(identity,"macos/remote-upgrades",launched.operation_id,"bundle/bin/node"),
     path.join(identity,"macos/remote-upgrades",launched.operation_id,
