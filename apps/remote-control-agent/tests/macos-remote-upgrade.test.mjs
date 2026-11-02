@@ -5,6 +5,7 @@ import {spawnSync} from "node:child_process";
 import test from "node:test";
 import {
   remoteJobLabel,verifiedLaunchdJob,dispatchRemoteMacUpgrade,runRemoteMacUpgrade,
+  forwardMacVersion,
 } from "../scripts/macos-remote-upgrade.mjs";
 
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -13,6 +14,18 @@ test("#657 remote macOS operation label is strict, unique and not a service alia
   assert.equal(remoteJobLabel(ID),LABEL);
   for(const bad of ["", "../foreign","ABC","aaaa-bbbb","a".repeat(36)])
     assert.throws(()=>remoteJobLabel(bad),/Invalid one-shot/);
+});
+test("#657 detached Mac upgrade rejects same/older versions and other CPU",()=>{
+  const base="v0.1.49-rc.4-darwin-arm64";
+  for(const good of ["v0.1.49-darwin-arm64","v0.1.49-rc.5-darwin-arm64",
+    "v0.1.50-darwin-arm64","v1.0.0-darwin-arm64"])
+    assert.equal(forwardMacVersion(base,good),true,good);
+  for(const bad of ["v0.1.49-rc.3-darwin-arm64",base,
+    "v0.1.48-darwin-arm64","v0.1.49-rc.4-darwin-x64",
+    "v0.1.49-darwin-x64","v0.1.49-rc.5-darwin-x64","untrusted"])
+    assert.equal(forwardMacVersion(base,bad),false,bad);
+  assert.equal(forwardMacVersion("v0.1.49-darwin-arm64",
+    "v0.1.49-rc.5-darwin-arm64"),false);
 });
 test("#657 detached job cannot impersonate arbitrary service or shell PID",()=>{
   const stdout="gui/501/"+LABEL+" = {\n\tpid = 98765\n}";
