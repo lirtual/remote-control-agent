@@ -28,6 +28,19 @@ new signed WSS generation has been observed. If activation/rollback cannot be
 proved, the operation stays Blocked/Unknown; no re-pairing, automatic second
 switch or replay of Unknown operations is permitted. Historical receipts remain.
 
+After a verified permanent install, a version-pinned, owner-private
+`~/.local/bin/rca` executable provides `status`, `stop`, and `start`.
+Use the full path if `~/.local/bin` is not already on `PATH`. `status`
+is a local inspection only: cloud approval and signed-WSS fields remain
+`unconfirmed` until independently checked. `stop` and `start` require
+the existing owner's terminal confirmation and signed-grant protocol.
+The executable never permits arbitrary install/upgrade arguments: use the
+separately reviewed SHA-256-verified `macos-local.sh upgrade` path. Local
+CLI updates are part of the guarded version switch; failed upgrades retain
+the previous verified executable. A foreign or symlinked `rca` is never
+overwritten. These assertions are candidate source/native-runner evidence,
+not proof of a real owner-Mac install/launchd session.
+
 The unsigned candidate may trigger Gatekeeper. No automated bypass, quarantine
 removal, privilege escalation, TCC change, Full Disk Access or LaunchDaemon is
 allowed. If macOS blocks the trusted executable, owner manual review through

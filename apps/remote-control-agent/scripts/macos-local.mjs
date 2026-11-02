@@ -117,13 +117,24 @@ export async function freeze(key,command="freeze"){
     socket.on("end",()=>done(null,buffer.trim()));
   });
 }
-async function ownedWrite(file,content,replace=false){
+async function ownedWrite(file,content,replace=false,mode=0o600){
   await checked(path.dirname(file),{dir:true});
-  if(replace)await checked(file,{mode:0o600});
+  if(replace)await checked(file,{mode});
   else if(await statMaybe(file))throw Error("Owned file already exists.");
   const temp=path.join(path.dirname(file),".new-"+randomUUID());
-  await writeFile(temp,content,{flag:"wx",mode:0o600});
+  await writeFile(temp,content,{flag:"wx",mode});
   try{await rename(temp,file);}catch(e){await rm(temp,{force:true});throw e;}
+}
+// Local CLI is a version-pinned, owner-private dispatch only. Upgrades must
+// still use the separately reviewed, SHA-pinned offline installer.
+export function ownerCliText(root){
+  const quote=value=>"'"+value.replaceAll("'","'\"'\"'")+"'";
+  const node=path.join(root,"bin/node");
+  const manager=path.join(root,"apps/remote-control-agent/scripts/macos-local.mjs");
+  return '#!/bin/sh\nset -eu\ncase "${1:-}" in\n'+
+    '  status|stop|start) [ "$#" -eq 1 ] || exit 2 ;;\n'+
+    '  *) echo "Use the reviewed macOS installer for install/upgrade." >&2; exit 2 ;;\n'+
+    'esac\nexec '+quote(node)+' '+quote(manager)+' "$1"\n';
 }
 async function approved(key){
   if(!await checked(key,{optional:true,mode:0o600})||
@@ -182,6 +193,8 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   await checked(path.join(receipts,"operation-receipts.sqlite"),{optional:true,mode:0o600});
   const macos=await directories(home,[...ROOT,"macos"]);
   const programs=await directories(home,[...ROOT,"macos","programs"]);
+  const localBin=await directories(home,[".local","bin"]);
+  const cli=path.join(localBin,"rca");
   const agents=await directories(home,["Library","LaunchAgents"]);
   const plist=path.join(agents,LABEL+".plist");
   const stopMark=path.join(macos,"stopped"), journal=path.join(macos,"switch.json");
@@ -198,6 +211,11 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     throw Error("Endpoint identity cannot change during upgrade.");
   const bound=endpoint??stored;
   const current=old?parsePlist(old,programs,bound):null;
+  const previousCli=await checked(cli,{optional:true,mode:0o700})
+    ?await readFile(cli,"utf8"):null;
+  // Never replace a foreign executable, symlink or mismatched owner version.
+  if(previousCli!==null&&(!current||previousCli!==ownerCliText(current.root)))
+    throw Error("Foreign or inconsistent local rca executable.");
   if(current){
     for(const rel of ["", "bin", "apps", "apps/remote-control-agent",
         "apps/remote-control-agent/src"])
@@ -289,7 +307,7 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     entry:path.join(nextRoot,"apps/remote-control-agent/src/macos-permanent.js"),
     endpoint:bound,generation,
   });
-  let journalCreated=false,oldStopped=false,newLoaded=false;
+  let journalCreated=false,oldStopped=false,newLoaded=false,cliWritten=false;
   try{
     await ownedWrite(journal,JSON.stringify({
       version,previous:old,generation,stopped,phase:"switch_pending"})+"\n");
@@ -306,14 +324,21 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
       newLoaded=true;
       if(!await online(identity,generation))throw Error("New signed WSS activation unconfirmed.");
     }
+    await ownedWrite(cli,ownerCliText(nextRoot),previousCli!==null,0o700);
+    cliWritten=true;
     await rm(journal);
-    return {status:stopped?"stopped_preserved":"connected_observed",version,generation};
+    return {status:stopped?"stopped_preserved":"connected_observed",version,generation,
+      cli};
   }catch(error){
     if(!journalCreated&&frozen){
       try{await freezeAgent(key,"release");}catch{/* only safe to reconcile */}
     }
     if(!journalCreated)throw error;
     try{
+      if(cliWritten){
+        if(previousCli!==null)await ownedWrite(cli,previousCli,true,0o700);
+        else await rm(cli);
+      }
       if(newLoaded&&!launch(["bootout",service],invoke))
         throw Error("New service cannot be stopped.");
       if(old)await ownedWrite(plist,old,true);

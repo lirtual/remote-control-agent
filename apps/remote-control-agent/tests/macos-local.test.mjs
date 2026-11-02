@@ -1,15 +1,35 @@
 import assert from "node:assert/strict";
 import {randomUUID} from "node:crypto";
-import {chmod,cp,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from "node:fs/promises";
+import {chmod,cp,lstat,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from "node:fs/promises";
+import {spawnSync} from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {candidateName,checked,localMacAction,parsePlist,plistText,verifiedEndpoint} from
+import {candidateName,checked,localMacAction,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
   "../scripts/macos-local.mjs";
 import {parsePermanentMacArgs} from "../src/macos-permanent.ts";
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const ENDPOINT="https://rca.example.test/";
 const bundle=process.env.RCA_MACOS_BUNDLE_ROOT;
+
+test("#660 owner-local rca executable quotes paths and refuses unverified commands",async t=>{
+  const root="/Users/o'neill;touch BAD/programs/v0.0.0-ci-darwin-arm64";
+  const script=ownerCliText(root);
+  const temp=await mkdtemp(path.join(os.tmpdir(),"rca660-cli-"));
+  t.after(()=>rm(temp,{recursive:true,force:true}));
+  const file=path.join(temp,"rca");
+  await writeFile(file,script,{mode:0o700});
+  assert.equal(spawnSync("/bin/sh",["-n",file]).status,0);
+  for(const action of ["upgrade","install","status",""]) {
+    const args=action? [action] : [];
+    const r=spawnSync("/bin/sh",[file,...args],{encoding:"utf8"});
+    // 'status' is permitted but points to a nonexistent reviewed test binary.
+    if(action==="status")assert.notEqual(r.status,0);
+    else assert.equal(r.status,2);
+  }
+  assert.match(script,/status\|stop\|start/);
+  assert.ok(script.includes("o'\"'\"'neill"));
+});
 
 test("#660 permanent service accepts only exact approved existing grant and managed generation",()=>{
   const approved=parsePermanentMacArgs(["--service","--endpoint",ENDPOINT,"--generation",ID]);
@@ -109,6 +129,14 @@ test("#660 native offline install → stopped state → upgrade without restart"
     freezeAgent:async()=>{throw Error("Stopped service must not freeze");}};
   const first=await localMacAction("install",opts);
   assert.equal(first.status,"connected_observed");
+  const cli=path.join(f.home,".local/bin/rca");
+  const firstRoot=path.join(f.identity,"macos/programs",f.version+"-darwin-"+process.arch);
+  assert.equal(first.cli,cli);
+  assert.equal(await readFile(cli,"utf8"),ownerCliText(firstRoot));
+  assert.equal((await lstat(cli)).mode&0o777,0o700);
+  assert.equal(spawnSync("/bin/sh",["-n",cli]).status,0);
+  assert.equal(spawnSync("/bin/sh",[cli,"upgrade"]).status,2,
+    "raw, unpinned local CLI upgrade must be refused");
   const state=await localMacAction("status",{home:f.home,invoke:f.invoke});
   assert.equal(state.installed,true);
   await localMacAction("stop",{...opts,invoke:(command,args)=>{
@@ -124,6 +152,8 @@ test("#660 native offline install → stopped state → upgrade without restart"
     invoke:(command,args)=>{f.commands.push(args[0]);
       return {status:args[0]==="print"?1:0};}});
   assert.equal(result.status,"stopped_preserved");
+  assert.equal(await readFile(cli,"utf8"),
+    ownerCliText(path.join(f.identity,"macos/programs","v0.0.1-ci-darwin-"+process.arch)));
   assert.deepEqual(f.commands,["print"],
     "intentionally stopped service may only be checked, never auto-launched");
   assert.equal((await localMacAction("status",{home:f.home,invoke:f.invoke})).local_service,
@@ -171,6 +201,8 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
   await localMacAction("install",first);
   const plist=path.join(f.home,"Library/LaunchAgents/org.mcp-workers.remote-control-agent.plist");
   const before=await readFile(plist,"utf8");
+  const cli=path.join(f.home,".local/bin/rca");
+  const beforeCli=await readFile(cli,"utf8");
   const alt=path.join(f.root,"rollback-candidate");
   await cp(bundle,alt,{recursive:true});
   const manifestFile=path.join(alt,"bundle.json");
@@ -184,9 +216,25 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
   }),/Upgrade blocked; previous service restored/);
   assert.match(actions.join(","),/bootout,bootstrap,bootout,bootstrap/);
   assert.equal(await readFile(plist,"utf8"),before);
+  assert.equal(await readFile(cli,"utf8"),beforeCli);
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
   await assert.rejects(readFile(path.join(f.home,
     ".local/share/mcp-workers/remote-control/macos/switch.json")),{code:"ENOENT"});
+});
+
+test("#660 local rca path cannot overwrite foreign files or symlinks",{skip:!native},async t=>{
+  const f=await fixture(t);
+  const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    invoke:f.invoke,ask:async()=>true,online:async()=>true};
+  const dir=path.join(f.home,".local/bin"),cli=path.join(dir,"rca");
+  await mkdir(dir,{recursive:true,mode:0o700});
+  await writeFile(cli,"#!/bin/sh\necho foreign\n",{mode:0o700});
+  await assert.rejects(localMacAction("install",opts),/Foreign or inconsistent local rca/);
+  assert.equal(await readFile(cli,"utf8"),"#!/bin/sh\necho foreign\n");
+  await rm(cli);
+  await symlink(path.join(f.identity,"v2-identity.pem"),cli);
+  await assert.rejects(localMacAction("install",opts),/Unsafe owner/);
+  assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
 });
 
 test("#660 native suspicious LaunchAgent symlink refused before any mutation",{
