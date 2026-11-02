@@ -29,7 +29,11 @@ async function requestPowershell(key,action,fromTask=false){
   const functionText=source.split("function Invoke-AgentUpgradeFreeze(")[1]
     ?.split(fromTask?"if ($Action -eq 'Switch')":"# A Remote Control Shell may schedule")[0];
   assert(functionText,"reviewed Windows PowerShell freeze function missing");
-  const command="function Invoke-AgentUpgradeFreeze("+functionText+
+  const diagnostic=functionText.replace(
+    "  $pipe = [IO.Pipes.NamedPipeClientStream]::new(",
+    "  Write-Output ('RCA_PIPE_HASH:' + $hash)\n  $pipe = [IO.Pipes.NamedPipeClientStream]::new(");
+  assert.notEqual(diagnostic,functionText);
+  const command="function Invoke-AgentUpgradeFreeze("+diagnostic+
     "\nInvoke-AgentUpgradeFreeze '"+key.replaceAll("'","''")+"' '"+action+"'";
   const child=spawn("powershell.exe",["-NoProfile","-NonInteractive","-Command",command],
     {windowsHide:true,stdio:["ignore","pipe","pipe"]});
@@ -54,6 +58,8 @@ windows("Windows same-user private pipe freezes all admissions; native PowerShel
     assert.equal(await requestPipe(upgradeSocketPath(key),"freeze"),"busy");
     assert.equal(await requestPipe(upgradeSocketPath(key),"verify-frozen"),"ready");
     const verified=await requestPowershell(key,"verify-frozen");
+    assert.equal(verified.output.trim(),"RCA_PIPE_HASH:"+upgradeSocketPath(key).slice(-32),
+      "Node and Windows PowerShell must derive the same pipe name");
     assert.equal(verified.errors,"","Windows PowerShell verification must not emit errors");
     assert.equal(verified.exit,0);
     const taskVerified=await requestPowershell(key,"verify-frozen",true);
