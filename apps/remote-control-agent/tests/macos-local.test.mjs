@@ -5,7 +5,7 @@ import {spawnSync} from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {acceptsOwnerConfirmation,awaitLaunchctlUnregistered,candidateName,checked,launchctlServiceState,localMacAction,ownedWrite,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
+import {acceptsOwnerConfirmation,awaitLaunchctlUnregistered,candidateName,checked,launchctlServiceState,localMacAction,ownedWrite,ownerCliText,parsePlist,plistText,stopLaunchdForSwitch,verifiedEndpoint} from
   "../scripts/macos-local.mjs";
 import {parsePermanentMacArgs} from "../src/macos-permanent.ts";
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -71,6 +71,30 @@ test("#660 stop waits for two observed launchd deregistration checks",async()=>{
     ()=>({status:5}),async()=>{}),/state unknown/);
   assert.equal(await awaitLaunchctlUnregistered('gui/501/rca',
     ()=>({status:0}),async()=>{}),false);
+});
+
+test("#660 upgrade switch waits for confirmed launchd absence before any bootstrap",async()=>{
+  const calls=[];
+  let remaining=3;
+  const invoke=(command,args)=>{
+    assert.equal(command,"/bin/launchctl");
+    calls.push(args[0]);
+    if(args[0]==="bootout")return {status:0};
+    assert.equal(args[0],"print");
+    return remaining-->0?{status:0}:{status:113,stderr:"Could not find service"};
+  };
+  await stopLaunchdForSwitch("gui/501/org.mcp-workers.remote-control-agent",invoke,
+    async()=>{});
+  assert.deepEqual(calls,["bootout","print","print","print","print","print"]);
+  calls.length=0;
+  await assert.rejects(stopLaunchdForSwitch("gui/501/rca",
+    (command,args)=>{calls.push(args[0]);return {status:5};},async()=>{}),
+    /bootout unconfirmed/);
+  assert.deepEqual(calls,["bootout"]);
+  await assert.rejects(stopLaunchdForSwitch("gui/501/rca",
+    ()=>({status:0}),async()=>{}),/deregistration not confirmed/);
+  await assert.rejects(stopLaunchdForSwitch("gui/501/rca",
+    ()=>({status:5}),async()=>{},false),/state unknown/);
 });
 
 test("#660 owner-local rca executable quotes paths and refuses unverified commands",async t=>{
@@ -278,9 +302,17 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
   skip:!native},async t=>{
   const f=await fixture(t);
   const actions=[];
-  const mock=(command,args)=>{actions.push(args[0]);return {status:0};};
+  let registered=false;
+  const mock=(command,args)=>{
+    actions.push(args[0]);
+    if(args[0]==="print")return registered?{status:0}
+      :{status:113,stderr:"Could not find service"};
+    if(args[0]==="bootstrap")registered=true;
+    if(args[0]==="bootout")registered=false;
+    return {status:0};
+  };
   const first={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
-    invoke:mock,ask:async()=>true,online:async()=>true};
+    invoke:mock,ask:async()=>true,online:async()=>true,pauseLaunchd:async()=>{}};
   await localMacAction("install",first);
   // Verify real-world 0755 parent modes do not block rollback restoration.
   await chmod(path.join(f.home,"Library/LaunchAgents"),0o755);
@@ -300,12 +332,84 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
     ...first,bundle:alt,freezeAgent:async()=> "ready",
     online:async()=>++onlineCalls===2,
   }),/Upgrade blocked at signed-wss-activation/);
-  assert.match(actions.join(","),/bootout,bootstrap,bootout,bootstrap/);
+  assert.deepEqual(actions.filter(x=>x==="bootout"||x==="bootstrap"),
+    ["bootstrap","bootout","bootstrap","bootout","bootstrap"]);
+  assert.equal(registered,true);
+  // The switch and rollback both waited for two confirmed absent checks.
+  assert.ok(actions.filter(x=>x==="print").length>=5);
   assert.equal(await readFile(plist,"utf8"),before);
   assert.equal(await readFile(cli,"utf8"),beforeCli);
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
   await assert.rejects(readFile(path.join(f.home,
     ".local/share/mcp-workers/remote-control/macos/switch.json")),{code:"ENOENT"});
+});
+
+test("#660 native stale bootout blocks upgrade and restores old LaunchAgent",{
+  skip:!native},async t=>{
+  const f=await fixture(t);
+  let registered=false,bootouts=0,bootstraps=0;
+  const invoke=(command,args)=>{
+    const a=args[0];
+    if(a==="print")return bootouts===1?{status:0}:
+      registered?{status:0}:{status:113,stderr:"Could not find service"};
+    if(a==="bootstrap"){registered=true;bootstraps++;return {status:0};}
+    if(a==="bootout"){bootouts++;registered=bootouts===1;return {status:0};}
+    throw Error("Unexpected launchctl action");
+  };
+  const first={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    invoke,ask:async()=>true,online:async()=>true,pauseLaunchd:async()=>{}};
+  await localMacAction("install",first);
+  const plist=path.join(f.home,"Library/LaunchAgents/org.mcp-workers.remote-control-agent.plist");
+  const before=await readFile(plist,"utf8");
+  const candidate=path.join(f.root,"stale-update");
+  await cp(bundle,candidate,{recursive:true});
+  const manifest=path.join(candidate,"bundle.json");
+  const meta=JSON.parse(await readFile(manifest,"utf8"));
+  meta.version="v0.0.1-ci";
+  await writeFile(manifest,JSON.stringify(meta)+"\n",{mode:0o600});
+  await assert.rejects(localMacAction("upgrade",{
+    ...first,bundle:candidate,freezeAgent:async()=> "ready",
+  }),/Upgrade blocked at wait-old-service-unregistered/);
+  assert.equal(bootouts,2);
+  assert.equal(bootstraps,2,"never bootstrap a new Agent during stale old deregistration");
+  assert.equal(registered,true);
+  assert.equal(await readFile(plist,"utf8"),before);
+  await assert.rejects(readFile(path.join(f.identity,"macos/switch.json")),{code:"ENOENT"});
+});
+
+test("#660 native unreconciled new deregistration preserves switch journal",{
+  skip:!native},async t=>{
+  const f=await fixture(t);
+  let registered=false,bootouts=0,bootstraps=0;
+  const invoke=(command,args)=>{
+    const a=args[0];
+    if(a==="print")return registered?{status:0}:
+      {status:113,stderr:"Could not find service"};
+    if(a==="bootstrap"){registered=true;bootstraps++;return {status:0};}
+    if(a==="bootout"){
+      bootouts++;
+      registered=bootouts===2; // new bootout acknowledged but remains registered
+      return {status:0};
+    }
+    throw Error("Unexpected launchctl action");
+  };
+  const first={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    invoke,ask:async()=>true,online:async()=>true,pauseLaunchd:async()=>{}};
+  await localMacAction("install",first);
+  const candidate=path.join(f.root,"uncertain-rollback");
+  await cp(bundle,candidate,{recursive:true});
+  const manifest=path.join(candidate,"bundle.json");
+  const meta=JSON.parse(await readFile(manifest,"utf8"));
+  meta.version="v0.0.1-ci";
+  await writeFile(manifest,JSON.stringify(meta)+"\n",{mode:0o600});
+  await assert.rejects(localMacAction("upgrade",{
+    ...first,bundle:candidate,freezeAgent:async()=> "ready",
+    online:async()=>false,
+  }),/UNKNOWN rollback/);
+  assert.equal(bootstraps,2,"must not bootstrap old over uncertain new registration");
+  assert.equal(registered,true);
+  const journal=JSON.parse(await readFile(path.join(f.identity,"macos/switch.json"),"utf8"));
+  assert.equal(journal.phase,"switch_pending");
 });
 
 test("#660 local rca path cannot overwrite foreign files or symlinks",{skip:!native},async t=>{

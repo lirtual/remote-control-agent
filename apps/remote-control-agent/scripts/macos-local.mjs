@@ -124,6 +124,14 @@ export async function awaitLaunchctlUnregistered(service,invoke,
   }
   return false;
 }
+// A successful bootout merely acknowledges a launchd request. A subsequent
+// bootstrap must not race the old registration's asynchronous removal.
+export async function stopLaunchdForSwitch(service,invoke,pause,bootout=true){
+  if(bootout&&!launch(["bootout",service],invoke))
+    throw Error("LaunchAgent bootout unconfirmed.");
+  if(!await awaitLaunchctlUnregistered(service,invoke,pause))
+    throw Error("LaunchAgent deregistration not confirmed.");
+}
 export async function freeze(key,command="freeze"){
   const socketPath=path.join(path.dirname(key),"upgrade.sock");
   await checked(socketPath,{optional:false}).catch(async e=>{
@@ -369,6 +377,8 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
       failureStage="stop-old-service";
       if(!launch(["bootout",service],invoke))throw Error("Old service bootout failed.");
       oldStopped=true;
+      failureStage="wait-old-service-unregistered";
+      await stopLaunchdForSwitch(service,invoke,pauseLaunchd,false);
     }
     failureStage="write-launchagent";
     await ownedWrite(plist,next,!!old,0o600,false);
@@ -399,8 +409,15 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
         if(previousCli!==null)await ownedWrite(cli,previousCli,true,0o700,false);
         else await rm(cli);
       }
-      if(newLoaded&&!launch(["bootout",service],invoke))
-        throw Error("New service cannot be stopped.");
+      if(newLoaded){
+        await stopLaunchdForSwitch(service,invoke,pauseLaunchd);
+      }else if(oldStopped){
+        // A failed bootstrap can still leave a registration asynchronously
+        // arriving. Never overwrite the plist and bootstrap old over it.
+        const state=launchctlServiceState(service,invoke);
+        if(state==="unknown")throw Error("Uncertain new-service registration.");
+        await stopLaunchdForSwitch(service,invoke,pauseLaunchd,state==="present");
+      }
       if(old)await ownedWrite(plist,old,true,0o600,false);
       else if(await checked(plist,{optional:true,mode:0o600}))await rm(plist);
       if(oldStopped){
