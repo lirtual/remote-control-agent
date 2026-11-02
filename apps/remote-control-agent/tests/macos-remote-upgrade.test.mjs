@@ -138,10 +138,20 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   meta.version=nextVersion;
   await writeFile(metaPath,JSON.stringify(meta)+"\n",{mode:0o600});
   const seen=[];
+  let registered=true; // The first owner-local install already bootstrapped its service.
   const invoke=(cmd,args)=>{
     assert.equal(cmd,"/bin/launchctl");
     seen.push(args[0]);
-    if(args[0]==="print")return {status:0,stdout:"\tpid = "+process.pid+"\n"};
+    if(args[0]==="print"){
+      // The detached job's identity check is independent of the permanent
+      // Agent registration. After bootout, only the latter must be absent.
+      if(args[1]?.includes("/org.mcp-workers.rca-upgrade-"))
+        return {status:0,stdout:"\tpid = "+process.pid+"\n"};
+      return registered?{status:0,stdout:"\tpid = "+process.pid+"\n"}:
+        {status:113,stderr:"Could not find service"};
+    }
+    if(args[0]==="bootout")registered=false;
+    if(args[0]==="bootstrap")registered=true;
     return {status:0,stdout:""};
   };
   const launched=await dispatchRemoteMacUpgrade({home,bundle:candidate,sourceSha,endpoint,invoke});
