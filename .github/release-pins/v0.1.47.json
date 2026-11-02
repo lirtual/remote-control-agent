@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.47",
+  "source_sha": "50c85b549b6eebaf1fd52f524969692b668e808f",
+  "candidate_run_id": 41374587150,
+  "release_title": "Remote Control Agent v0.1.47 — legacy Windows Owner Stop",
+  "release_notes": ".github/release-notes/v0.1.47.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.47-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.47-linux-x64-glibc.tar.gz",
+      "sha256": "db93c3ea8396d814cb0bff98dc1e9db3a0e33505cb380e834b3c734cc0ca8eed"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.47-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.47-linux-arm64-glibc.tar.gz",
+      "sha256": "593afb50c545ea49338eb03ea73a61a6ae6f1b68b125d52b95e85d8abce4d2b8"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.47-windows-x64",
+      "name": "remote-control-agent-v0.1.47-windows-x64.zip",
+      "sha256": "139478946f37f65513c79cb09fd5f2fb1fa87df047111ccacbdb7c4361a118a2"
+    }
+  ]
+}
