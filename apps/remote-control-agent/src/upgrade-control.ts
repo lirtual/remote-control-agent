@@ -1,13 +1,25 @@
 /**
  * Owner-local v2 upgrade handshake. No TCP listener, key, token or remote
- * tool: socket exists only under the Agent user's mode-0700 state directory.
+ * tool: Unix socket is under owner-private state; Windows uses an owner-only
+ * named pipe. The pipe never takes a remote-provided command or path.
  */
 import { createConnection, createServer, type Server } from "node:net";
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { AgentExecutionEngine } from "./execution.ts";
 
 export function upgradeSocketPath(keyPath: string): string {
+  if (process.platform === "win32") {
+    // Flat pipe namespace: derive a fixed collision-resistant same-user name
+    // from the installed *path*, never an arbitrary remote argument.
+    // Hash the same locally assembled identity spelling as the PowerShell
+    // installer. Win32 GetFullPath can expand/rewrite CI temporary paths
+    // differently from Node normalize(), yielding two different pipe names.
+    const identity = keyPath.replaceAll("/", "\\").toLowerCase();
+    const digest = createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 32);
+    return String.raw`\\.\pipe\rca-upgrade-` + digest;
+  }
   return path.join(path.dirname(keyPath), "upgrade.sock");
 }
 
@@ -35,13 +47,16 @@ async function clearOnlyStaleOwnedSocket(file: string): Promise<void> {
 export async function startUpgradeControl(execution: AgentExecutionEngine, keyPath: string):
   Promise<{ close(): Promise<void> }> {
   const socketPath = upgradeSocketPath(keyPath);
-  const directory = path.dirname(socketPath);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const stat = await lstat(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() ||
-      stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
-    throw new Error("Unsafe Agent upgrade control directory.");
-  await clearOnlyStaleOwnedSocket(socketPath);
+  const windows = process.platform === "win32";
+  if (!windows) {
+    const directory = path.dirname(socketPath);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() ||
+        stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0)
+      throw new Error("Unsafe Agent upgrade control directory.");
+    await clearOnlyStaleOwnedSocket(socketPath);
+  }
   const server: Server = createServer(socket => {
     socket.setTimeout(2000, () => socket.destroy());
     let buffer = "";
@@ -66,20 +81,23 @@ export async function startUpgradeControl(execution: AgentExecutionEngine, keyPa
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(socketPath, () => {
+      server.listen({path:socketPath,readableAll:false,writableAll:false}, () => {
         server.off("error", reject);
         resolve();
       });
     });
-    await chmod(socketPath, 0o600);
+    if (!windows) await chmod(socketPath, 0o600);
   } catch (error) {
     server.close();
-    try { await unlink(socketPath); } catch { /* Do not mask original failure */ }
+    if (!windows) {
+      try { await unlink(socketPath); } catch { /* Do not mask original failure */ }
+    }
     throw error;
   }
   return {
     close: async () => {
       await new Promise<void>(resolve => server.close(() => resolve()));
+      if (windows) return; // Windows named pipes disappear when closed.
       try {
         const current = await lstat(socketPath);
         if (current.isSocket() && current.uid === process.getuid?.())

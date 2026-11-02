@@ -1378,7 +1378,8 @@ export async function runInstaller(args, {
   if (portable && ["uninstall", "resume"].includes(options.action)) {
     throw new Error("Portable uninstall/resume requires separately reviewed lifecycle CLI.");
   }
-  if (portable && options.action === "upgrade" && (!stdin.isTTY || !stdout.isTTY)) {
+  if (portable && options.action === "upgrade" && (!stdin.isTTY || !stdout.isTTY) &&
+      process.env.RC_AGENT_DETACHED_UPGRADE !== "owner-approved-task-v1") {
     throw new Error("Manual portable upgrade requires a real local terminal.");
   }
   if (portable && options.action === "install") {

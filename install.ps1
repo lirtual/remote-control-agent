@@ -264,6 +264,38 @@ function Confirm-Upgrade([object]$ui) {
     ($key.Character -ceq 'y' -or $key.Character -ceq 'Y'))
 }
 
+
+function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
+  if ($action -cnotin @('freeze','verify-frozen','release')) { throw 'Invalid upgrade action' }
+  $canonical = $keyPath.Replace('/','\').ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = [BitConverter]::ToString($sha.ComputeHash(
+      [Text.Encoding]::UTF8.GetBytes($canonical))).Replace('-','').ToLowerInvariant().Substring(0,32)
+  } finally { $sha.Dispose() }
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    '.', 'rca-upgrade-' + $hash, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None)
+  try {
+    $pipe.Connect(10000)
+    # The protocol accepts only ASCII action names and exact LF.
+    # StreamWriter with Encoding.UTF8 would prepend a BOM to the first frame.
+    $requestBytes = [Text.Encoding]::ASCII.GetBytes($action + "`n")
+    $pipe.Write($requestBytes,0,$requestBytes.Length)
+    $pipe.Flush()
+    $reader = [IO.StreamReader]::new($pipe,[Text.Encoding]::ASCII,$false,1024,$true)
+    try {
+      $answer = $reader.ReadLine()
+      $expected = if ($action -ceq 'release') { 'released' } else { 'ready' }
+      if ($answer -cne $expected) { throw 'Agent is busy, absent or not frozen' }
+    } finally { $reader.Dispose() }
+  } finally { $pipe.Dispose() }
+}
+
+# A Remote Control Shell may schedule the *reviewed official installer* in a
+# separate same-user Windows Task. Never infer approval from missing TTY.
+# This opt-in is only valid for an existing approved, currently running Task.
+$detachedUpgrade = $env:RCA_UNATTENDED_UPGRADE -ceq 'owner-approved-task-v1'
+$detachedRequest = $env:RCA_UNATTENDED_UPGRADE -ceq 'launch-approved-task-v1'
 $temp = $null
 $stage = $null
 $promoted = $false
@@ -278,6 +310,83 @@ try {
   $alreadyPaired = Test-Path -LiteralPath $idFile
   $userTaskName = 'RCA-Remote-Control-v2-' + $userSid.Value.Replace('-', '_')
   $task = Get-ScheduledTask -TaskName $userTaskName -ErrorAction SilentlyContinue
+  if ($detachedUpgrade -and (-not $alreadyPaired -or -not $task -or
+      $task.State -ne 'Running' -or
+      (Test-Path -LiteralPath ($identityFile + '.owner-stopped')))) {
+    throw 'Unattended upgrade requires an approved, running, owner-ON Agent'
+  }
+  if ($detachedUpgrade -and $StageOnly) { throw 'Detached upgrade cannot use stage-only mode' }
+
+  if ($detachedRequest) {
+    if ($StageOnly -or -not $alreadyPaired -or -not $task -or
+        $task.State -ne 'Running' -or
+        (Test-Path -LiteralPath ($identityFile + '.owner-stopped'))) {
+      throw 'Remote upgrade requires an approved, running, owner-ON Agent'
+    }
+    $oldVersion = Get-ExistingAgentVersion $programs ([string]$task.Actions[0].Execute)
+    if ([version]($Version.Substring(1)) -le [version]($oldVersion.Substring(1))) {
+      throw 'Remote upgrade requires a strictly newer reviewed Release'
+    }
+    # Worker already verified exact immutable installer source SHA.
+    $source = [string]$MyInvocation.MyCommand.ScriptBlock.ToString()
+    if (-not $source.StartsWith('# Native Windows x64 bootstrap.')) {
+      throw 'Cannot stage authenticated installer source'
+    }
+    $operation = [guid]::NewGuid().ToString('N')
+    $name = 'RCA-Upgrade-' + $operation
+    $installer = [IO.Path]::Combine($root,'upgrade-source-' + $operation + '.ps1')
+    $runner = [IO.Path]::Combine($root,'upgrade-runner-' + $operation + '.ps1')
+    $receipt = [IO.Path]::Combine($root,'upgrade-result-' + $operation + '.json')
+    $claim = [IO.Path]::Combine($root,'upgrade-claim-' + $operation + '.txt')
+    $claimQ = $claim.Replace("'", "''")
+    $installerQ = $installer.Replace("'", "''")
+    $receiptQ = $receipt.Replace("'", "''")
+    $lines = @(
+      '$ErrorActionPreference = ''Stop'''
+      '$env:RCA_UNATTENDED_UPGRADE = ''owner-approved-task-v1'''
+      # Before any switch: a rerun of the same OS Task must fail closed.
+      ('$claim = [IO.File]::Open(''' + $claimQ + ''',[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)')
+      'try {'
+      '  $bytes = [Text.Encoding]::UTF8.GetBytes(''claimed'')'
+      '  $claim.Write($bytes,0,$bytes.Length); $claim.Flush($true)'
+      '} finally { $claim.Dispose() }'
+      'try {'
+      ("  & '{0}' -Version '{1}' -PinnedCommit '{2}' -PinnedReleaseSha256 '{3}'" -f $installerQ,$Version,$PinnedCommit,$PinnedReleaseSha256)
+      '  if (-not $?) { throw ''Local switch failed'' }'
+      '  $result = ''local_switch_returned'''
+      '} catch { $result = ''needs_attention'' }'
+      ('$payload = @{ operation_id = ''' + $operation + '''; status = $result } | ConvertTo-Json -Compress')
+      ('$stream = [IO.File]::Open(''' + $receiptQ + ''',[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)')
+      'try {'
+      '  $bytes = [Text.Encoding]::UTF8.GetBytes($payload)'
+      '  $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true)'
+      '} finally { $stream.Dispose() }'
+    )
+    $runnerSource = $lines -join [Environment]::NewLine
+    # User-private path was ownership/ACL-checked above. No temp-path secrets.
+    foreach ($filename in @($installer,$runner)) {
+      $value = if ($filename -ceq $installer) { $source } else { $runnerSource }
+      $handle = [IO.File]::Open($filename,[IO.FileMode]::CreateNew,
+        [IO.FileAccess]::Write,[IO.FileShare]::None)
+      try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($value)
+        $handle.Write($bytes,0,$bytes.Length); $handle.Flush($true)
+      } finally { $handle.Dispose() }
+    }
+    # Demand-start only; zero scheduled triggers prevents blind replay.
+    $taskAction = New-ScheduledTaskAction -Execute ([IO.Path]::Combine($PSHOME,'powershell.exe')) -Argument (
+      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runner + '"')
+    $taskPrincipal = New-ScheduledTaskPrincipal -UserId $me.Name -LogonType Interactive -RunLevel Limited
+    $taskSettings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+    $definition = New-ScheduledTask -Action $taskAction -Principal $taskPrincipal -Settings $taskSettings
+    Register-ScheduledTask -TaskName $name -InputObject $definition -ErrorAction Stop | Out-Null
+    Start-ScheduledTask -TaskName $name -ErrorAction Stop
+    Write-Output ('Detached upgrade launched: ' + $name)
+    Write-Output ('Result path: ' + $receipt)
+    Write-Output 'Verify result, signed WSS, version, device ID and prior receipts independently.'
+    return
+  }
+
   $upgradeExisting = $false
   if ($alreadyPaired) {
     if (-not (Test-Path -LiteralPath $identityFile -PathType Leaf)) {
@@ -296,7 +405,7 @@ try {
       Write-Output ("Task: {0} (state preserved)" -f $task.State)
       # Console key comes from RawUI, not redirected pipeline stdin.
       # Any key other than Y (including Enter) is a safe cancellation.
-      if (-not $StageOnly -and -not (Confirm-Upgrade $Host.UI)) {
+      if (-not $StageOnly -and -not $detachedUpgrade -and -not (Confirm-Upgrade $Host.UI)) {
         Write-Output 'Cancelled. No changes.'
         return
       }
@@ -319,10 +428,27 @@ try {
       return
     }
     if ($upgradeExisting) {
-      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
-      Write-Output 'Upgraded. Checking authorization...'
-      Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
+      $upgradeFrozen = $false
+      try {
+        if ($detachedUpgrade) { Invoke-AgentUpgradeFreeze $identityFile 'freeze'; $upgradeFrozen = $true }
+        & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+      } finally {
+        if ($upgradeFrozen) {
+          try { Invoke-AgentUpgradeFreeze $identityFile 'release' }
+          catch { } # Original Agent may already have been replaced.
+        }
+      }
+      if ($detachedUpgrade) {
+        Write-Output 'Local switch returned; independent signed-WSS verification required.'
+      } else {
+        Write-Output 'Upgraded. Checking authorization...'
+        Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
+      }
+      return
+    }
+    if ($detachedUpgrade) {
+      Write-Output 'Already installed; independent signed-WSS verification required.'
       return
     }
     if ($alreadyPaired) {
@@ -365,10 +491,23 @@ try {
     return
   }
   if ($upgradeExisting) {
-    & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
-    Write-Output 'Upgraded. Checking authorization...'
-    Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
+    $upgradeFrozen = $false
+    try {
+      if ($detachedUpgrade) { Invoke-AgentUpgradeFreeze $identityFile 'freeze'; $upgradeFrozen = $true }
+      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+    } finally {
+      if ($upgradeFrozen) {
+        try { Invoke-AgentUpgradeFreeze $identityFile 'release' }
+        catch { } # Original Agent may already have been replaced.
+      }
+    }
+    if ($detachedUpgrade) {
+      Write-Output 'Local switch returned; independent signed-WSS verification required.'
+    } else {
+      Write-Output 'Upgraded. Checking authorization...'
+      Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))
+    }
     return
   }
   Complete-ApprovedOnboarding ([IO.Path]::Combine($target,'rca.cmd'))

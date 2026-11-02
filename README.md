@@ -11,7 +11,17 @@ paired devices were verified online on v0.1.40 with their original device
 identities preserved.
 
 Agent CI/Release publication, Worker deployment, device-local interactive
-upgrades and authenticated device pairing are separate operations. Browser
+upgrades and authenticated device pairing are separate operations.
+
+**Source-only candidate (not yet a released path):** Remote Control Shell
+may initiate an explicitly owner-approved, noninteractive upgrade using an
+independent short-lived OS user task. Linux uses the installed manager's
+new explicit unattended command; Windows uses the reviewed official
+installer's detached-task opt-in. Both preserve ordinary interactive
+one-click scripts and require separate post-reconnect verification.
+See [remote-shell-upgrade.md](docs/remote-shell-upgrade.md) for safety,
+platform, authorization and acceptance boundaries.
+ Browser
 Handoff (Spec #280) and MCP-initiated `upgrade_agent` were retired; existing
 paired-device file, search, Shell, Session and receipt tools remain supported in production.
 

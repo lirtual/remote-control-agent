@@ -256,6 +256,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows process integration tests failed' }
           node --experimental-strip-types --test tests/windows-acl.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows ACL tests failed' }
+          node --experimental-strip-types --test tests/windows-upgrade-pipe.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows upgrade-freeze IPC failed' }
           node --experimental-strip-types --test tests/session-rca-windows.test.ts
           if ($LASTEXITCODE -ne 0) { throw 'Windows Session runner context tests failed' }
       - name: Native Windows Session-private identity ACL (synthetic Runner fixture)
