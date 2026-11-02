@@ -4,7 +4,7 @@ import path from "node:path";
 import {spawnSync} from "node:child_process";
 import test from "node:test";
 import {
-  remoteJobLabel,verifiedLaunchdJob,dispatchRemoteMacUpgrade,runRemoteMacUpgrade,
+  remoteJobLabel,remoteJobPlist,verifiedLaunchdJob,dispatchRemoteMacUpgrade,runRemoteMacUpgrade,
   forwardMacVersion,awaitCallerQuiescence,
 } from "../scripts/macos-remote-upgrade.mjs";
 
@@ -15,6 +15,22 @@ test("#657 remote macOS operation label is strict, unique and not a service alia
   for(const bad of ["", "../foreign","ABC","aaaa-bbbb","a".repeat(36)])
     assert.throws(()=>remoteJobLabel(bad),/Invalid one-shot/);
 });
+test("#660 owner-private launchd plist explicitly prevents exit-code replay",()=>{
+  const dir="/Users/owner/test & <upgrade>";
+  const node=dir+"/bundle/bin/node",worker=dir+"/bundle/worker.mjs";
+  const content=remoteJobPlist(ID,node,worker,dir);
+  assert.match(content,/<key>LaunchOnlyOnce<\/key><true\/>/);
+  assert.match(content,/<key>RunAtLoad<\/key><true\/>/);
+  assert.match(content,/<key>KeepAlive<\/key><false\/>/);
+  assert.doesNotMatch(content,/KeepAlive<\/key><true\/>/);
+  assert.match(content,/&amp; &lt;upgrade&gt;/);
+  assert.match(content,/StandardOutPath/);
+  assert.match(content,/StandardErrorPath/);
+  assert.match(content,/org\.mcp-workers\.rca-upgrade-/);
+  assert.throws(()=>remoteJobPlist(ID,"relative",worker,dir),/Absolute owner-private/);
+  assert.throws(()=>remoteJobPlist("../bad",node,worker,dir),/Invalid one-shot/);
+});
+
 test("#657 detached Mac upgrade rejects same/older versions and other CPU",()=>{
   const base="v0.1.49-rc.4-darwin-arm64";
   for(const good of ["v0.1.49-darwin-arm64","v0.1.49-rc.5-darwin-arm64",
@@ -80,7 +96,8 @@ test("#657 remote launcher references exactly one detached launchd job and durab
   const installer=readFileSync(path.join(root,"macos-local.sh"),"utf8");
   const publisher=readFileSync(path.join(root,"build-v2-release.mjs"),"utf8");
   assert.match(driver,/launchctl/);
-  assert.match(driver,/"submit","-l",label/);
+  assert.match(driver,/\["bootstrap","gui\/"\+process\.getuid\(\),job\]/);
+  assert.match(driver,/LaunchOnlyOnce/);
   assert.match(driver,/verifiedLaunchdJob/);
   assert.match(driver,/\bstate:"preparing"/);
   assert.match(driver,/owner_authorized_remote_upgrade/);
@@ -157,7 +174,17 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   const launched=await dispatchRemoteMacUpgrade({home,bundle:candidate,sourceSha,endpoint,invoke});
   assert.equal(launched.status,"launched");
   assert.equal(launched.version,nextVersion+"-darwin-"+process.arch);
-  assert.equal(seen.filter(x=>x==="submit").length,1);
+  assert.equal(seen.filter(x=>x==="bootstrap").length,1);
+  const jobFile=path.join(identity,"macos/remote-upgrades",launched.operation_id,"job.plist");
+  const jobText=await readFile(jobFile,"utf8");
+  const lint=spawnSync("/usr/bin/plutil",["-lint",jobFile],
+    {encoding:"utf8",timeout:2000});
+  assert.equal(lint.status,0,lint.stderr??"launchd plist lint failed");
+  assert.equal(jobText,remoteJobPlist(launched.operation_id,
+    path.join(identity,"macos/remote-upgrades",launched.operation_id,"bundle/bin/node"),
+    path.join(identity,"macos/remote-upgrades",launched.operation_id,
+      "bundle/apps/remote-control-agent/scripts/macos-remote-upgrade.mjs"),
+    path.join(identity,"macos/remote-upgrades",launched.operation_id)));
   await assert.rejects(dispatchRemoteMacUpgrade({home,bundle:candidate,sourceSha,endpoint,invoke}),
     /Unreconciled remote upgrade/);
   await assert.rejects(runRemoteMacUpgrade(launched.operation_id,{home,invoke,ppid:2}),
@@ -176,35 +203,52 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
     /already attempted/);
 });
 
-test("#657 hosted native launchctl submit is an independent same-user one-shot job",{
+test("#660 hosted native launchd job fails exactly once without automatic restarts",{
   skip:process.platform!=="darwin"||!process.env.RCA_MACOS_BUNDLE_ROOT,
-},async()=>{
+},async t=>{
   const {randomUUID}=await import("node:crypto");
-  const label="org.mcp-workers.rca-smoke-"+randomUUID().replaceAll("-","");
-  const submit=spawnSync("/bin/launchctl",
-    ["submit","-l",label,"--","/bin/sleep","12"],
+  const {mkdtemp,writeFile,readFile,rm}=await import("node:fs/promises");
+  const {tmpdir}=await import("node:os");
+  const id=randomUUID(),label=remoteJobLabel(id);
+  const dir=await mkdtemp(path.join(tmpdir(),"rca660-launchd-once-"));
+  const plist=path.join(dir,"job.plist"),script=path.join(dir,"fail-once.sh");
+  t.after(()=>rm(dir,{recursive:true,force:true,maxRetries:5,retryDelay:20}));
+  // This is an unpaired CI-only fixture. No owner service, secrets or live
+  // remote upgrade is involved; the deliberate failure reproduces #660.
+  await writeFile(script,"#!/bin/sh\nprintf 'one invocation\\n'\nsleep 2\nexit 7\n",{mode:0o700});
+  await writeFile(plist,remoteJobPlist(id,"/bin/sh",script,dir),{mode:0o600});
+  const service="gui/"+process.getuid()+"/"+label;
+  const started=spawnSync("/bin/launchctl",["bootstrap","gui/"+process.getuid(),plist],
     {encoding:"utf8",timeout:7000});
-  assert.equal(submit.status,0,submit.stderr??"launchctl submit failed");
+  assert.equal(started.status,0,started.stderr??"once-only bootstrap failed");
   try{
-    let output="",pid=null;
-    for(let i=0;i<25;i++){
-      const r=spawnSync("/bin/launchctl",
-        ["print","gui/"+process.getuid()+"/"+label],
+    let pid=null;
+    for(let i=0;i<35;i++){
+      const r=spawnSync("/bin/launchctl",["print",service],
         {encoding:"utf8",timeout:2000});
       if(r.status===0){
-        output=r.stdout;
-        const m=output.match(/(?:^|\n)\s*pid = (\d+)(?:\n|$)/);
+        const m=r.stdout.match(/(?:^|\n)\s*pid = (\d+)(?:\n|$)/);
         if(m){pid=Number(m[1]);break;}
       }
-      await new Promise(resolve=>setTimeout(resolve,120));
+      await new Promise(resolve=>setTimeout(resolve,80));
     }
-    assert.ok(pid,"launchctl submit did not expose the expected owner GUI job PID");
+    assert.ok(pid,"once-only native job did not get a launchd PID");
     const ps=spawnSync("/bin/ps",["-p",String(pid),"-o","ppid="],
       {encoding:"utf8",timeout:2000});
     assert.equal(ps.status,0);
-    assert.equal(Number(ps.stdout.trim()),1,"job must not share managed Shell process ancestry");
+    assert.equal(Number(ps.stdout.trim()),1,"job must outlive its submitter");
+    // Check across an actual failed child exit, not merely the plist text.
+    await new Promise(resolve=>setTimeout(resolve,3100));
+    assert.equal(await readFile(path.join(dir,"stdout.log"),"utf8"),"one invocation\n");
+    const post=spawnSync("/bin/launchctl",["print",service],
+      {encoding:"utf8",timeout:2000});
+    if(post.status===0)assert.match(post.stdout,/\bruns = 1\b/);
+    await new Promise(resolve=>setTimeout(resolve,1100));
+    assert.equal(await readFile(path.join(dir,"stdout.log"),"utf8"),"one invocation\n",
+      "a failed upgrade must never restart its side-effecting worker");
   }finally{
-    spawnSync("/bin/launchctl",["remove",label],
+    // Only this CI fixture label; never the permanent Agent or owner device.
+    spawnSync("/bin/launchctl",["bootout",service],
       {encoding:"utf8",timeout:5000});
   }
 });
