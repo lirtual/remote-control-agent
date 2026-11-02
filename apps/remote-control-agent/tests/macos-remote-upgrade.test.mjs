@@ -130,7 +130,12 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   await cp(bundle,candidate,{recursive:true});
   const metaPath=path.join(candidate,"bundle.json");
   const meta=JSON.parse(await readFile(metaPath,"utf8"));
-  meta.version="v0.0.1-ci";
+  // A versioned Release candidate is already newer than v0.0.1-ci.
+  // Derive a strictly newer synthetic target so the real downgrade gate remains on.
+  const match=/^v(\d+)\.(\d+)\.(\d+)(?:-[a-z0-9.-]+)?$/.exec(meta.version);
+  assert.ok(match,"Unrecognized packaged candidate version");
+  const nextVersion=`v${match[1]}.${match[2]}.${BigInt(match[3])+1n}`;
+  meta.version=nextVersion;
   await writeFile(metaPath,JSON.stringify(meta)+"\n",{mode:0o600});
   const seen=[];
   const invoke=(cmd,args)=>{
@@ -141,7 +146,7 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   };
   const launched=await dispatchRemoteMacUpgrade({home,bundle:candidate,sourceSha,endpoint,invoke});
   assert.equal(launched.status,"launched");
-  assert.equal(launched.version,"v0.0.1-ci-darwin-"+process.arch);
+  assert.equal(launched.version,nextVersion+"-darwin-"+process.arch);
   assert.equal(seen.filter(x=>x==="submit").length,1);
   await assert.rejects(dispatchRemoteMacUpgrade({home,bundle:candidate,sourceSha,endpoint,invoke}),
     /Unreconciled remote upgrade/);
