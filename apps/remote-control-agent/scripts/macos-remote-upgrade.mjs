@@ -9,7 +9,7 @@ import {realpathSync} from "node:fs";
 import {fileURLToPath} from "node:url";
 import {
   checked,checkCandidate,localMacAction,ownerCliText,parsePlist,
-  launchctlServiceState,verifiedEndpoint,
+  launchctlServiceState,verifiedEndpoint,freeze,
 } from "./macos-local.mjs";
 
 const ROOT=path.join(".local","share","mcp-workers","remote-control");
@@ -113,6 +113,20 @@ async function trustedExisting(home,endpoint,bundle,sourceSha,invoke=run){
     throw Error("Target already staged; inspect before replay.");
   return {base,mac,programs,version,old};
 }
+// The submitting Remote Control command is still an in-flight operation for a
+// short interval after launchctl accepts the one-shot job. Wait only for the
+// read-only "busy" admission result; never retry an uncertain response or the
+// actual upgrade/switch. Freeze remains atomic in the original Agent.
+export async function awaitCallerQuiescence(freezeAgent,key,{
+  attempts=30,pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+}={}){
+  for(let i=0;i<attempts;i++){
+    const result=await freezeAgent(key);
+    if(result!=="busy")return result;
+    if(i+1<attempts)await pause(250);
+  }
+  return "busy";
+}
 async function record(file,contents){
   await writeFile(file,JSON.stringify(contents)+"\n",{flag:"wx",mode:0o600});
 }
@@ -168,9 +182,13 @@ export async function runRemoteMacUpgrade(id,{home=os.homedir(),invoke=run,ppid=
   // The existing approved native upgrade freezes operations and rolls back
   // uncertain activation; its only bypass is this verified launchd context.
   try{
+    const existingFreeze=freezeAgent??freeze;
+    const handoff=(key,command)=>command
+      ?existingFreeze(key,command)
+      :awaitCallerQuiescence(existingFreeze,key);
     const out=await localMacAction("upgrade",{home,bundle,
-      sourceSha:plan.sourceSha,endpoint:plan.endpoint,invoke,online,freezeAgent,
-      ask:async()=>true});
+      sourceSha:plan.sourceSha,endpoint:plan.endpoint,invoke,online,
+      freezeAgent:handoff,ask:async()=>true});
     if(out.status!=="connected_observed"||out.version!==plan.version)
       throw Error("Signed activation not confirmed.");
     await record(resultFile,{status:"connected_observed",version:out.version,id});

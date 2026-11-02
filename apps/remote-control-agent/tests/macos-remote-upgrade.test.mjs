@@ -5,7 +5,7 @@ import {spawnSync} from "node:child_process";
 import test from "node:test";
 import {
   remoteJobLabel,verifiedLaunchdJob,dispatchRemoteMacUpgrade,runRemoteMacUpgrade,
-  forwardMacVersion,
+  forwardMacVersion,awaitCallerQuiescence,
 } from "../scripts/macos-remote-upgrade.mjs";
 
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -42,6 +42,29 @@ test("#657 detached job cannot impersonate arbitrary service or shell PID",()=>{
   assert.equal(verifiedLaunchdJob(ID,501,98765,()=>({status:5,stderr:"unknown"}),1),false);
   assert.equal(verifiedLaunchdJob(ID,501,98765,()=>({
     status:0,stdout:"\tpid = 987650\n"}),1),false);
+});
+test("#657 detached handoff waits only for quiescence; never retries uncertain freeze",async()=>{
+  let calls=0,pauses=0;
+  const status=await awaitCallerQuiescence(async()=>++calls===3?"ready":"busy", "key",{
+    attempts:4,pause:async()=>{pauses++;},
+  });
+  assert.equal(status,"ready");
+  assert.equal(calls,3);
+  assert.equal(pauses,2);
+  calls=0;
+  assert.equal(await awaitCallerQuiescence(async()=>{calls++;return "busy";},"key",{
+    attempts:2,pause:async()=>{},
+  }),"busy");
+  assert.equal(calls,2);
+  calls=0;
+  assert.equal(await awaitCallerQuiescence(async()=>{calls++;return "unknown";},"key",{
+    attempts:3,pause:async()=>{},
+  }),"unknown");
+  assert.equal(calls,1);
+  calls=0;
+  await assert.rejects(awaitCallerQuiescence(async()=>{calls++;throw Error("socket uncertain");},"key"),
+    /socket uncertain/);
+  assert.equal(calls,1);
 });
 test("#657 unreviewed remote launch on non-Darwin cannot stage or switch",async()=>{
   if(process.platform==="darwin")return; // native CI tests cover real platform
