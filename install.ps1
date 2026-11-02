@@ -276,7 +276,7 @@ function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
   $pipe = [IO.Pipes.NamedPipeClientStream]::new(
     '.', 'rca-upgrade-' + $hash, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None)
   try {
-    $pipe.Connect(2000)
+    $pipe.Connect(10000)
     # The protocol accepts only ASCII action names and exact LF.
     # StreamWriter with Encoding.UTF8 would prepend a BOM to the first frame.
     $requestBytes = [Text.Encoding]::ASCII.GetBytes($action + "`n")
