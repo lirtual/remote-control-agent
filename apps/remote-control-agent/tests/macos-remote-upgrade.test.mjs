@@ -87,7 +87,8 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   const receipts=path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite");
   await writeFile(receipts,"synthetic durable receipts",{mode:0o600});
   await writeFile(path.join(identity,"macos-connection.json"),JSON.stringify({
-    generation:installed.generation,state:"connected",at:new Date().toISOString(),
+    generation:installed.generation,state:"connected",pid:process.pid,
+    at:new Date(Date.now()-24*60*60*1000).toISOString(),
   }),{mode:0o600});
   const candidate=path.join(root,"new-candidate");
   await cp(bundle,candidate,{recursive:true});
