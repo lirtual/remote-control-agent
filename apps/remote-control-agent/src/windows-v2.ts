@@ -564,6 +564,14 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     recordWindowsEvent(directory,"owner_stopped");
     return;
   }
+  // Only an explicit permanent mode receives the local upgrade control.
+  // Temporary foreground Agents and unverified legacy mode fail closed.
+  const upgradeModePath = keyPath + ".install-mode";
+  let enableLocalUpgrade = false;
+  if (await hasFile(upgradeModePath)) {
+    assertPrivateStore("Check", directory, "v2-identity.pem.install-mode");
+    enableLocalUpgrade = (await readFile(upgradeModePath,"utf8")) === "permanent\n";
+  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.on("SIGINT", abort);
@@ -582,6 +590,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     assertPrivateStore("Check", directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       receiptDirectory,
+      enableLocalUpgrade,
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({

@@ -83,3 +83,15 @@ No MCP upgrade_agent tool, background auto-updater, new Worker, server,
 database, credential flow or replacement for the existing one-click
 scripts. Source and CI success are not production or physical-device E2E.
 macOS remains gated by Spec #657.
+
+## Windows first-hop boundary
+
+A currently installed Agent that predates the private upgrade pipe cannot
+be promoted by pretending its operations are quiescent. One independently
+approved interactive local upgrade to a Release that includes this feature
+is needed before future Remote Control-only upgrades can rely on the new
+in-process freeze. Do not bypass the missing pipe, disable the safety guard,
+or infer an idle state from task status or an operation listing.
+
+The existing signed WSS/receipt and controlled local rollback are mandatory
+postconditions, not established by the detached Task's created/succeeded status.

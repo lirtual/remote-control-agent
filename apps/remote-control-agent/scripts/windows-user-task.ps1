@@ -117,6 +117,33 @@ if ($Action -eq 'Enable') {
   exit 0
 }
 
+
+function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
+  if ($action -cnotin @('freeze','verify-frozen','release')) { throw 'Invalid upgrade action' }
+  $canonical = [IO.Path]::GetFullPath($keyPath).Replace('/','\').ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = [BitConverter]::ToString($sha.ComputeHash(
+      [Text.Encoding]::UTF8.GetBytes($canonical))).Replace('-','').ToLowerInvariant().Substring(0,32)
+  } finally { $sha.Dispose() }
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    '.', 'rca-upgrade-' + $hash, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None)
+  try {
+    $pipe.Connect(2000)
+    # The protocol accepts only ASCII action names and exact LF.
+    # StreamWriter with Encoding.UTF8 would prepend a BOM to the first frame.
+    $requestBytes = [Text.Encoding]::ASCII.GetBytes($action + "`n")
+    $pipe.Write($requestBytes,0,$requestBytes.Length)
+    $pipe.Flush()
+    $reader = [IO.StreamReader]::new($pipe,[Text.Encoding]::ASCII,$false,1024,$true)
+    try {
+      $answer = $reader.ReadLine()
+      $expected = if ($action -ceq 'release') { 'released' } else { 'ready' }
+      if ($answer -cne $expected) { throw 'Agent is busy, absent or not frozen' }
+    } finally { $reader.Dispose() }
+  } finally { $pipe.Dispose() }
+}
+
 if ($Action -eq 'Switch') {
   # Transactional local program switch. Both versions are installed and
   # verified before touching the sole same-owner logon task.
@@ -189,6 +216,12 @@ if ($Action -eq 'Switch') {
   $newArgs = '"' + $nextEntry + '" run --endpoint "' + $originalEndpoint + '"'
   $newAction = New-ScheduledTaskAction -Execute $nextActionExe -Argument $newArgs -WorkingDirectory ([IO.Path]::GetDirectoryName($nextEntry))
   $wasRunning = ($task.State -eq 'Running')
+  if ($Direction -eq 'Upgrade' -and
+      $env:RCA_UNATTENDED_UPGRADE -ceq 'owner-approved-task-v1') {
+    $identityFile = [IO.Path]::Combine($env:LOCALAPPDATA,
+      'mcp-workers','remote-control','v2-identity.pem')
+    Invoke-AgentUpgradeFreeze $identityFile 'verify-frozen'
+  }
   $changed = $false
   try {
     if ($wasRunning) { Stop-ScheduledTask -TaskName $name -ErrorAction Stop }

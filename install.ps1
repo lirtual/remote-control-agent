@@ -264,6 +264,33 @@ function Confirm-Upgrade([object]$ui) {
     ($key.Character -ceq 'y' -or $key.Character -ceq 'Y'))
 }
 
+
+function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
+  if ($action -cnotin @('freeze','verify-frozen','release')) { throw 'Invalid upgrade action' }
+  $canonical = [IO.Path]::GetFullPath($keyPath).Replace('/','\').ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = [BitConverter]::ToString($sha.ComputeHash(
+      [Text.Encoding]::UTF8.GetBytes($canonical))).Replace('-','').ToLowerInvariant().Substring(0,32)
+  } finally { $sha.Dispose() }
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    '.', 'rca-upgrade-' + $hash, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None)
+  try {
+    $pipe.Connect(2000)
+    # The protocol accepts only ASCII action names and exact LF.
+    # StreamWriter with Encoding.UTF8 would prepend a BOM to the first frame.
+    $requestBytes = [Text.Encoding]::ASCII.GetBytes($action + "`n")
+    $pipe.Write($requestBytes,0,$requestBytes.Length)
+    $pipe.Flush()
+    $reader = [IO.StreamReader]::new($pipe,[Text.Encoding]::ASCII,$false,1024,$true)
+    try {
+      $answer = $reader.ReadLine()
+      $expected = if ($action -ceq 'release') { 'released' } else { 'ready' }
+      if ($answer -cne $expected) { throw 'Agent is busy, absent or not frozen' }
+    } finally { $reader.Dispose() }
+  } finally { $pipe.Dispose() }
+}
+
 # A Remote Control Shell may schedule the *reviewed official installer* in a
 # separate same-user Windows Task. Never infer approval from missing TTY.
 # This opt-in is only valid for an existing approved, currently running Task.
@@ -401,8 +428,17 @@ try {
       return
     }
     if ($upgradeExisting) {
-      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+      $upgradeFrozen = $false
+      try {
+        if ($detachedUpgrade) { Invoke-AgentUpgradeFreeze $identityFile 'freeze'; $upgradeFrozen = $true }
+        & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+      } finally {
+        if ($upgradeFrozen) {
+          try { Invoke-AgentUpgradeFreeze $identityFile 'release' }
+          catch { } # Original Agent may already have been replaced.
+        }
+      }
       if ($detachedUpgrade) {
         Write-Output 'Local switch returned; independent signed-WSS verification required.'
       } else {
@@ -455,8 +491,17 @@ try {
     return
   }
   if ($upgradeExisting) {
-    & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+    $upgradeFrozen = $false
+    try {
+      if ($detachedUpgrade) { Invoke-AgentUpgradeFreeze $identityFile 'freeze'; $upgradeFrozen = $true }
+      & ([IO.Path]::Combine($target,'rca.cmd')) upgrade --version $Version | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw 'Upgrade failed. Task kept or restored.' }
+    } finally {
+      if ($upgradeFrozen) {
+        try { Invoke-AgentUpgradeFreeze $identityFile 'release' }
+        catch { } # Original Agent may already have been replaced.
+      }
+    }
     if ($detachedUpgrade) {
       Write-Output 'Local switch returned; independent signed-WSS verification required.'
     } else {
