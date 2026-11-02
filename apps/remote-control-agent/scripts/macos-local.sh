@@ -15,10 +15,10 @@ case "$major" in ''|*[!0-9]*) exit 1;; esac
 if [ "$major" -lt 15 ] || [ "$(id -u)" -eq 0 ]; then
   echo 'macOS 15+ under a non-root login required.' >&2; exit 1
 fi
-[ -t 0 ] && [ -t 1 ] || { echo 'Real owner terminal required.' >&2; exit 1; }
-[ "$#" -eq 9 ] || { echo 'Usage: sh macos-local.sh install|upgrade|temporary --archive ABS --sha256 SHA256 --source-sha COMMIT --endpoint HTTPS_ROOT' >&2; exit 1; }
+case "${1:-}" in remote-upgrade) ;; *) [ -t 0 ] && [ -t 1 ] || { echo 'Real owner terminal required.' >&2; exit 1; } ;; esac
+[ "$#" -eq 9 ] || { echo 'Usage: sh macos-local.sh install|upgrade|temporary|remote-upgrade --archive ABS --sha256 SHA256 --source-sha COMMIT --endpoint HTTPS_ROOT' >&2; exit 1; }
 action="$1"; shift
-case "$action" in install|upgrade|temporary) ;; *) exit 1;; esac
+case "$action" in install|upgrade|temporary|remote-upgrade) ;; *) exit 1;; esac
 [ "$1" = '--archive' ] && [ "$3" = '--sha256' ] && [ "$5" = '--source-sha' ] && [ "$7" = '--endpoint' ] || exit 1
 archive="$2"; digest="$4"; source="$6"; endpoint="$8"
 case "$archive" in /*) ;; *) exit 1;; esac
@@ -41,7 +41,8 @@ awk '
     $0 ~ /^apps\/remote-control-agent\/src\/?$/ ||
     $0 ~ /^apps\/remote-control-agent\/src\/[a-z0-9-]+\.js$/ ||
     $0 ~ /^apps\/remote-control-agent\/scripts\/?$/ ||
-    $0=="apps/remote-control-agent/scripts/macos-local.mjs" ||
+    ($0=="apps/remote-control-agent/scripts/macos-local.mjs" ||
+     $0=="apps/remote-control-agent/scripts/macos-remote-upgrade.mjs") ||
     $0 ~ /^apps\/remote-control-agent\/\.build\/?$/ ||
     $0=="apps/remote-control-agent/.build/darwin-session-supervisor" ||
     $0=="apps/remote-control-agent/package.json" || $0=="bundle.json") {bad=1}
@@ -54,4 +55,10 @@ tar -xzf "$archive" -C "$tmp/unpacked"
 node="$tmp/unpacked/bin/node"
 manager="$tmp/unpacked/apps/remote-control-agent/scripts/macos-local.mjs"
 [ -x "$node" ] && [ -f "$manager" ] && [ ! -L "$node" ] || exit 1
-"$node" "$manager" "$action" --bundle "$tmp/unpacked" --source-sha "$source" --endpoint "$endpoint"
+if [ "$action" = remote-upgrade ]; then
+  helper="$tmp/unpacked/apps/remote-control-agent/scripts/macos-remote-upgrade.mjs"
+  [ -f "$helper" ] && [ ! -L "$helper" ] || exit 1
+  "$node" "$helper" dispatch --bundle "$tmp/unpacked" --source-sha "$source" --endpoint "$endpoint"
+else
+  "$node" "$manager" "$action" --bundle "$tmp/unpacked" --source-sha "$source" --endpoint "$endpoint"
+fi

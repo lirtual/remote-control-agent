@@ -83,7 +83,7 @@ export function candidateName(meta,sha,arch=process.arch){
     throw Error("Unexpected source commit, architecture or manifest.");
   return meta.version+"-darwin-"+arch;
 }
-async function checkCandidate(bundle,sha){
+export async function checkCandidate(bundle,sha){
   if(!path.isAbsolute(bundle))throw Error("Bundle must be absolute.");
   await checked(bundle,{dir:true});
   const manifest=path.join(bundle,"bundle.json");
