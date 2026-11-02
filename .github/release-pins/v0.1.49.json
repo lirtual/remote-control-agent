@@ -1,0 +1,40 @@
+{
+  "tag": "v0.1.49",
+  "source_sha": "fedf9a087499552ffdbdc3e3c909ea49179e3f46",
+  "candidate_run_id": 41425798426,
+  "release_title": "Remote Control Agent v0.1.49 — native macOS ARM64 and Intel x64",
+  "release_notes": ".github/release-notes/v0.1.49.md",
+  "macos_script_sha256": "78e76eeffa845a2f5af0e924467cc0d2d648356c2a069b2834938c19a6d2fece",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.49-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.49-linux-x64-glibc.tar.gz",
+      "sha256": "c5fe327738bfa292628936b16f1ac28641cd58a2864cc890cea332a6079c0c34"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.49-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.49-linux-arm64-glibc.tar.gz",
+      "sha256": "2af4b75c84efda017f22cc4cd9e0312a77cfa9b4d29cd0995a7ab35242404863"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.49-windows-x64",
+      "name": "remote-control-agent-v0.1.49-windows-x64.zip",
+      "sha256": "5013f9e32650d50e9d44f9e647220318e67778c7aef099b0e068d63e984a7adf"
+    },
+    {
+      "target": "darwin-arm64",
+      "artifact": "v0.1.49-darwin-arm64",
+      "name": "remote-control-agent-v0.1.49-darwin-arm64.tar.gz",
+      "sha256": "7a49613c843465bd181af926f02778457961a3f2b6355b654c7ac3c2f3c2b6a4"
+    },
+    {
+      "target": "darwin-x64",
+      "artifact": "v0.1.49-darwin-x64",
+      "name": "remote-control-agent-v0.1.49-darwin-x64.tar.gz",
+      "sha256": "cb861f5858f0e85bb629ed808d6015287d7651a1bbc918d54569853a020f2e32"
+    }
+  ]
+}
