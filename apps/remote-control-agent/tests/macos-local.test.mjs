@@ -12,6 +12,18 @@ const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 const ENDPOINT="https://rca.example.test/";
 const bundle=process.env.RCA_MACOS_BUNDLE_ROOT;
 
+test("#661 macOS owner installer dispatch must not silently skip a symlinked/aliased entry path",async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"rca-mac-entry-alias-"));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const canonical=path.resolve(import.meta.dirname,"../scripts/macos-local.mjs");
+  const aliased=path.join(root,"macos-local.mjs");
+  await symlink(canonical,aliased);
+  const r=spawnSync(process.execPath,[aliased,"unsupported-action"],{
+    encoding:"utf8",timeout:5000});
+  assert.equal(r.status,1,"aliased executable must actually run the owner action");
+  assert.match(r.stderr,/macOS local action blocked: Unsupported local action/);
+});
+
 test("#660 owner-local rca executable quotes paths and refuses unverified commands",async t=>{
   const root="/Users/o'neill;touch BAD/programs/v0.0.0-ci-darwin-arm64";
   const script=ownerCliText(root);

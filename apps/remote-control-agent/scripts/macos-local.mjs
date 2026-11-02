@@ -3,6 +3,7 @@ import {createConnection} from "node:net";
 import {randomUUID} from "node:crypto";
 import {spawnSync} from "node:child_process";
 import {cp,lstat,mkdir,readFile,rename,rm,writeFile} from "node:fs/promises";
+import {realpathSync} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {fileURLToPath,pathToFileURL} from "node:url";
@@ -369,7 +370,11 @@ async function main(){
     bundle:args["--bundle"],sourceSha:args["--source-sha"],endpoint:args["--endpoint"]});
   process.stdout.write(JSON.stringify(result)+"\n");
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+// On macOS, $TMPDIR commonly starts with /var while Node's ESM loader
+// canonicalizes it to /private/var. Compare canonical paths so a reviewed
+// installer never exits 0 without invoking the owner action.
+if(process.argv[1]&&realpathSync(process.argv[1])===
+    realpathSync(fileURLToPath(import.meta.url))){
   try{await main();}catch(e){
     process.stderr.write("macOS local action blocked: "+
       (e instanceof Error?e.message:"unknown")+".\n");process.exitCode=1;
