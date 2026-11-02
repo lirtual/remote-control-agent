@@ -4,6 +4,7 @@
  * separate review. This file is Draft-only and is not an installable CLI yet.
  */
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { writeFileSync, unlinkSync } from "node:fs";
 import {pathToFileURL} from "node:url";
 import { createInterface } from "node:readline/promises";
@@ -23,6 +24,61 @@ const VERSION=/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?-linux-(?:x64|arm64)-gli
 const ID=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const MANUAL_UPGRADE_ACTIVATION_FAILURE = "Manual upgrade activation failed. Check `rca status` and `systemctl --user status remote-control-agent.service` before retrying; do not re-pair or replay operations.";
 const GENERIC_LOCAL_FAILURE = "rca refused unsafe or unsupported local operation.";
+/** A remote Shell may only launch this independent OS-owned worker, not stop
+ * the Agent from inside its own managed command/session cgroup.
+ * Launch acknowledgement is not an upgrade success receipt. */
+export function launchUnattendedLinuxUpgrade({
+  inventory=localManagerInventory,home=os.homedir(),invoke=spawnSync,
+  stdout=process.stdout,operationId=randomUUID(),
+}={}){
+  if(process.platform!=="linux"||process.getuid?.()===0||
+     !/^[a-f0-9-]{36}$/.test(operationId))throw Error("Unsupported detached upgrade owner");
+  const state=inventory();
+  if(!state.unit||!state.ids.permanent||state.info.upgrade_profile!=="paired-full-v1")
+    throw Error("Detached upgrade requires an approved permanent full-tools Agent");
+  const app=path.join(state.root,"apps/remote-control-agent");
+  const fields=state.unit.split("\n");
+  if(![UNIT,HISTORICAL_UNIT].includes(state.unitName)||
+     !fields.includes("WorkingDirectory="+app)||
+     !fields.includes("ExecStart="+path.join(state.root,"bin/node")+" "+
+        path.join(app,"src/v2-main.js")))
+    throw Error("Detached upgrade requires the currently running owned version");
+  const stopped=path.join(home,STORE,"v2-identity.pem.owner-stopped");
+  if(lstatSafe(stopped))throw Error("Owner-stopped Agent cannot be remotely resumed");
+  const activity=invoke("/usr/bin/systemctl",
+    ["--user","is-active","--quiet",state.unitName],
+    {encoding:"utf8",stdio:"ignore",timeout:5000});
+  if(activity.error||activity.signal||activity.status!==0)
+    throw Error("Detached upgrade requires a running OS-owned Agent");
+  const node=path.join(state.root,"bin/node");
+  const manager=path.join(state.root,"apps/remote-control-agent/scripts/manage-v2.mjs");
+  checkedPath(node,{mode:0o700});
+  checkedPath(manager,{mode:0o600});
+  const unit="rca-upgrade-"+operationId.replaceAll("-","");
+  const args=["--user","--no-block","--collect","--quiet",
+    "--service-type=exec","--unit="+unit,
+    "--property=RuntimeMaxSec=600","--property=UMask=0077",
+    "--property=NoNewPrivileges=yes",
+    "--setenv=RCA_UNATTENDED_UPGRADE=owner-approved-task-v1",
+    "--",node,manager,"upgrade","--unattended-worker"];
+  const result=invoke("/usr/bin/systemd-run",args,
+    {encoding:"utf8",stdio:"pipe",timeout:15000,env:{...process.env,
+      NODE_OPTIONS:"",NODE_PATH:""}});
+  if(result.error||result.signal||result.status!==0)
+    throw Error("Detached upgrade launch unconfirmed; inspect unit before retry");
+  stdout.write(JSON.stringify({status:"launched",unit,
+    verification:"remote signed WSS and unchanged identity required"})+"\n");
+  return 0;
+}
+function approvedDetachedWorker(){
+  if(process.platform!=="linux"||
+    process.env.RCA_UNATTENDED_UPGRADE!=="owner-approved-task-v1"||
+    !/^[a-f0-9]{32}$/.test(process.env.INVOCATION_ID??""))return false;
+  try{
+    const cgroups=readFileSync("/proc/self/cgroup","utf8");
+    return /(?:^|\/)rca-upgrade-[a-f0-9]{32}\.service(?:$|\/)/m.test(cgroups);
+  }catch{return false;}
+}
 export function safeManagerCliFailure(error) {
   return error instanceof Error && error.message === MANUAL_UPGRADE_ACTIVATION_FAILURE
     ? MANUAL_UPGRADE_ACTIVATION_FAILURE
@@ -295,8 +351,15 @@ export async function runInteractiveLocalManager(args,{
     return 0;
   }
   if(args[0]==="upgrade"){
-    if(args.length!==1&&args.length!==3)throw Error("Use rca upgrade");
-    if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");
+    if(args.length===2&&args[1]==="--unattended")
+      return (rest.launchDetachedUpgrade??launchUnattendedLinuxUpgrade)({
+        inventory,home,invoke,stdout});
+    const detachedWorker=args.length===2&&args[1]==="--unattended-worker"&&
+      approvedDetachedWorker();
+    if(!detachedWorker&&args.length!==1&&args.length!==3)
+      throw Error("Use rca upgrade");
+    if(!detachedWorker&&(!stdin.isTTY||!stdout.isTTY))
+      throw Error("Manual upgrade requires the local terminal");
     const {inspectOwnerStoppedUpgrade} = await import("./install-v2.mjs");
     await inspectOwnerStoppedUpgrade(path.join(home,STORE,"v2-identity.pem"));
     const upgrade=rest.prepareUpgrade??prepareManualUpgrade;
@@ -313,7 +376,8 @@ export async function runInteractiveLocalManager(args,{
     }
     const prepared=await upgrade(state,pins,{home});
     let result;
-    try { result=activate(prepared); }
+    try { result=activate(prepared,detachedWorker?
+      {env:{...process.env,RC_AGENT_DETACHED_UPGRADE:"owner-approved-task-v1"}}:{}); }
     catch { throw new Error(MANUAL_UPGRADE_ACTIVATION_FAILURE); }
     stdout.write("Manual upgrade completed; independent cloud verification remains required.\n");
     stdout.write(JSON.stringify(result,null,2)+"\n");
