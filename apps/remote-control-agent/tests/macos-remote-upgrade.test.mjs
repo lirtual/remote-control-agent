@@ -5,6 +5,7 @@ import {spawnSync} from "node:child_process";
 import test from "node:test";
 import {
   remoteJobLabel,remoteJobPlist,verifiedLaunchdJob,dispatchRemoteMacUpgrade,runRemoteMacUpgrade,
+  reconcileFailedRemoteMacUpgrade,
   forwardMacVersion,awaitCallerQuiescence,
 } from "../scripts/macos-remote-upgrade.mjs";
 
@@ -251,4 +252,111 @@ test("#660 hosted native launchd job fails exactly once without automatic restar
     spawnSync("/bin/launchctl",["bootout",service],
       {encoding:"utf8",timeout:5000});
   }
+});
+
+test("#660 historical failed Mac upgrade reconciliation is gated, audited and idempotent",{
+  skip:process.platform!=="darwin",
+},async t=>{
+  const {createHash}=await import("node:crypto");
+  const {mkdtemp,mkdir,writeFile,readFile,rename,stat,rm,access}=await import("node:fs/promises");
+  const {tmpdir}=await import("node:os");
+  const {plistText,ownerCliText}=await import("../scripts/macos-local.mjs");
+  const home=await mkdtemp(path.join(tmpdir(),"rca660-historical-"));
+  t.after(()=>rm(home,{recursive:true,force:true,maxRetries:5,retryDelay:20}));
+  const deviceId="12345678-1234-4234-8234-123456789012";
+  const oldGen="22345678-1234-4234-8234-123456789012";
+  const nextGen="32345678-1234-4234-8234-123456789012";
+  const endpoint="https://rca.example.test/";
+  const oldVersion="v0.1.49-rc.4-darwin-"+process.arch;
+  const nextVersion="v0.1.50-darwin-"+process.arch;
+  const base=path.join(home,".local/share/mcp-workers/remote-control");
+  const mac=path.join(base,"macos"),tasks=path.join(mac,"remote-upgrades");
+  const dir=path.join(tasks,ID),programs=path.join(mac,"programs");
+  const root=path.join(programs,oldVersion),service=path.join(home,"Library/LaunchAgents");
+  for(const p of [dir,root,service,path.join(home,".local/bin"),
+    path.join(home,".local/state/mcp-workers/remote-control-agent")])
+    await mkdir(p,{recursive:true,mode:0o700});
+  const ownerWrite=(f,s,mode=0o600)=>writeFile(f,s,{mode});
+  await ownerWrite(path.join(base,"v2-identity.pem.device-id"),deviceId+"\n");
+  await ownerWrite(path.join(mac,"endpoint"),endpoint+"\n");
+  const plist=plistText({node:path.join(root,"bin/node"),
+    entry:path.join(root,"apps/remote-control-agent/src/macos-permanent.js"),
+    endpoint,generation:oldGen});
+  const plistFile=path.join(service,"org.mcp-workers.remote-control-agent.plist");
+  await ownerWrite(plistFile,plist);
+  await ownerWrite(path.join(home,".local/bin/rca"),ownerCliText(root),0o700);
+  await ownerWrite(path.join(home,".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite"),
+    "unmodified synthetic SQLite sentinel");
+  await ownerWrite(path.join(base,"macos-connection.json"),JSON.stringify({
+    generation:oldGen,state:"connected",pid:98765,at:new Date().toISOString(),
+  }));
+  const label=remoteJobLabel(ID);
+  const active=JSON.stringify({id:ID,label,version:nextVersion,state:"preparing"})+"\n";
+  const sw=JSON.stringify({version:nextVersion,previous:plist,generation:nextGen,
+    stopped:false,phase:"switch_pending"})+"\n";
+  await ownerWrite(path.join(tasks,"active.json"),active);
+  await ownerWrite(path.join(mac,"switch.json"),sw);
+  await ownerWrite(path.join(dir,"context.json"),JSON.stringify({id:ID,label,
+    version:nextVersion,sourceSha:"a".repeat(40),endpoint,
+    state:"owner_authorized_remote_upgrade"})+"\n");
+  await ownerWrite(path.join(dir,"result.json"),JSON.stringify({
+    status:"needs_attention",id:ID})+"\n");
+  for(const name of ["stdout.log","stderr.log"])
+    await ownerWrite(path.join(dir,name),name==="stderr.log"?"failed once\n":"",0o644);
+  const digest=s=>createHash("sha256").update(s).digest("hex");
+  const invoke=(_cmd,args)=>args[1]?.includes("/org.mcp-workers.rca-upgrade-")?
+    {status:113,stderr:"Could not find service"}:
+    {status:0,stdout:"state = running\npid = 98765\n"};
+  const inspectProcess=()=>({status:0,stdout:
+    path.join(root,"apps/remote-control-agent/src/macos-permanent.js")+
+    " --service --generation "+oldGen});
+  const opts={home,id:ID,deviceId,oldGeneration:oldGen,oldVersion,
+    expectedSwitchSha:digest(sw),expectedActiveSha:digest(active),
+    invoke,inspectProcess,pause:async()=>{}};
+  const archive=path.join(dir,"reconciliation");
+  const checkMissing=async p=>assert.rejects(access(p),{code:"ENOENT"});
+  assert.equal((await reconcileFailedRemoteMacUpgrade(opts)).status,
+    "eligible_failed_reconciliation");
+  await checkMissing(archive); // dry run must never create files
+  await assert.rejects(reconcileFailedRemoteMacUpgrade({
+    ...opts,expectedSwitchSha:"0".repeat(64),apply:true}),/content changed/);
+  await checkMissing(archive);
+  await assert.rejects(reconcileFailedRemoteMacUpgrade({
+    ...opts,apply:true,invoke:()=>({status:0,stdout:"state = running\npid = 98765\n"})}),
+    /not confirmed absent/);
+  await checkMissing(archive);
+  const done=await reconcileFailedRemoteMacUpgrade({...opts,apply:true});
+  assert.equal(done.status,"reconciled_failed_operation");
+  await checkMissing(path.join(tasks,"active.json"));
+  await checkMissing(path.join(mac,"switch.json"));
+  assert.equal(await readFile(path.join(archive,"active.json"),"utf8"),active);
+  assert.equal(await readFile(path.join(archive,"switch.json"),"utf8"),sw);
+  const audit=JSON.parse(await readFile(path.join(archive,"audit.json"),"utf8"));
+  assert.equal(audit.hashes.active,digest(active));
+  assert.equal(audit.hashes.switch,digest(sw));
+  assert.equal(audit.remoteUpgradeReplay,"forbidden");
+  assert.equal((await stat(path.join(archive,"audit.json"))).mode&0o777,0o600);
+  assert.equal((await reconcileFailedRemoteMacUpgrade({...opts,apply:true})).status,
+    "already_reconciled");
+  // Simulate a crash between archiving active and archiving switch.
+  await rename(path.join(archive,"switch.json"),path.join(mac,"switch.json"));
+  assert.equal((await reconcileFailedRemoteMacUpgrade({...opts,apply:true})).status,
+    "reconciled_failed_operation");
+  assert.equal(await readFile(path.join(archive,"switch.json"),"utf8"),sw);
+  assert.equal((await reconcileFailedRemoteMacUpgrade({...opts})).status,
+    "already_reconciled");
+  assert.equal(JSON.parse(await readFile(path.join(dir,"result.json"),"utf8")).status,
+    "needs_attention");
+  assert.equal(await readFile(path.join(home,
+    ".local/state/mcp-workers/remote-control-agent/operation-receipts.sqlite"),"utf8"),
+    "unmodified synthetic SQLite sentinel");
+  // Duplicate / unexpected historical source must fail closed.
+  await ownerWrite(path.join(tasks,"active.json"),active);
+  await assert.rejects(reconcileFailedRemoteMacUpgrade({...opts,apply:true}),
+    /missing or duplicated/);
+  await rm(path.join(tasks,"active.json"));
+  // Corrupting the audit fails closed; never silently repairs evidence.
+  await ownerWrite(path.join(archive,"audit.json"),"{}\n");
+  await assert.rejects(reconcileFailedRemoteMacUpgrade({...opts,apply:true}),
+    /audit differs/);
 });

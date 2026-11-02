@@ -1,8 +1,8 @@
 /** #657 explicit, one-shot owner-authorized macOS remote upgrade.
  * Called only by the reviewed, SHA-pinned public macOS installer. No daemon. */
-import {randomUUID} from "node:crypto";
+import {createHash,randomUUID} from "node:crypto";
 import {spawnSync} from "node:child_process";
-import {cp,lstat,mkdir,readFile,rm,writeFile} from "node:fs/promises";
+import {cp,lstat,mkdir,readFile,rename,rm,writeFile} from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import {realpathSync} from "node:fs";
@@ -227,6 +227,148 @@ export async function runRemoteMacUpgrade(id,{home=os.homedir(),invoke=run,ppid=
     throw Error("Detached upgrade needs inspection; no blind retry.");
   }
 }
+// Owner-reviewed, evidence-preserving recovery of one failed operation.
+// Export-only: not a CLI action, installer fallback, automatic retry or success path.
+export async function reconcileFailedRemoteMacUpgrade({
+  home=os.homedir(),id,deviceId,oldGeneration,oldVersion,
+  expectedSwitchSha,expectedActiveSha,apply=false,invoke=run,
+  inspectProcess=pid=>run("/bin/ps",["-p",String(pid),"-o","command="]),
+  pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+}={}){
+  if(!nativeOwner()||![id,deviceId,oldGeneration].every(v=>ID.test(v))||
+     !/^v\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?-darwin-(arm64|x64)$/.test(oldVersion??"")||
+     ![expectedSwitchSha,expectedActiveSha].every(x=>/^[a-f0-9]{64}$/.test(x??"")))
+    throw Error("Exact owner, operation, version, generation and SHA-256 approval required.");
+  await checked(home,{dir:true,privateOnly:false});
+  const base=path.join(home,ROOT),mac=path.join(base,"macos");
+  const tasks=path.join(mac,"remote-upgrades"),dir=path.join(tasks,id);
+  for(const p of [base,mac,tasks,dir])await checked(p,{dir:true});
+  const device=path.join(base,"v2-identity.pem.device-id");
+  await checked(device,{mode:0o600});
+  if((await readFile(device,"utf8")).trim()!==deviceId)
+    throw Error("Original permanent device identity mismatch.");
+  const endpointFile=path.join(mac,"endpoint");
+  await checked(endpointFile,{mode:0o600});
+  const endpoint=(await readFile(endpointFile,"utf8")).trim();
+  verifiedEndpoint(endpoint);
+  const programs=path.join(mac,"programs"),original=path.join(mac,"switch.json");
+  await checked(programs,{dir:true});
+  const plist=path.join(home,"Library","LaunchAgents",LABEL+".plist");
+  await checked(plist,{mode:0o600});
+  const oldPlist=await readFile(plist,"utf8");
+  const current=parsePlist(oldPlist,programs,endpoint);
+  if(current.generation!==oldGeneration||path.basename(current.root)!==oldVersion)
+    throw Error("Old LaunchAgent version or generation mismatch.");
+  const cli=path.join(home,".local","bin","rca");
+  await checked(cli,{mode:0o700});
+  const oldCli=await readFile(cli,"utf8");
+  if(oldCli!==ownerCliText(current.root))throw Error("Old owner CLI mismatch.");
+  if(await checked(path.join(mac,"stopped"),{optional:true,mode:0o600}))
+    throw Error("Owner STOP remains active.");
+  await checked(path.join(home,".local","state","mcp-workers","remote-control-agent",
+    "operation-receipts.sqlite"),{mode:0o600}); // never read live SQLite.
+  const connection=path.join(base,"macos-connection.json");
+  await checked(connection,{mode:0o600});
+  const c=JSON.parse(await readFile(connection,"utf8"));
+  const service="gui/"+process.getuid()+"/"+LABEL;
+  const running=invoke("/bin/launchctl",["print",service]);
+  const match=String(running.stdout??"").match(/(?:^|\n)\s*pid = ([1-9][0-9]*)(?:\n|$)/);
+  if(running.error||running.status!==0||
+     !/(?:^|\n)\s*state = running(?:\n|$)/.test(String(running.stdout))||
+     !match||c.state!=="connected"||c.pid!==Number(match[1])||
+     c.generation!==oldGeneration||!Number.isFinite(Date.parse(c.at)))
+    throw Error("Original signed WSS / live LaunchAgent mismatch.");
+  const ps=inspectProcess(Number(match[1]));
+  if(ps.error||ps.status!==0||
+     !String(ps.stdout).includes(path.join(current.root,"apps/remote-control-agent/src/macos-permanent.js"))||
+     !String(ps.stdout).includes("--generation "+oldGeneration))
+    throw Error("Original permanent process not verified.");
+  const failedService="gui/"+process.getuid()+"/"+remoteJobLabel(id);
+  for(let i=0;i<2;i++){
+    if(launchctlServiceState(failedService,invoke)!=="absent")
+      throw Error("Failed upgrade job not confirmed absent.");
+    if(i===0)await pause(250);
+  }
+  const archive=path.join(dir,"reconciliation");
+  const mark=path.join(tasks,"active.json"),audit=path.join(archive,"audit.json");
+  const movedActive=path.join(archive,"active.json");
+  const movedSwitch=path.join(archive,"switch.json");
+  const sha=b=>createHash("sha256").update(b).digest("hex");
+  const ownedBytes=async p=>{await checked(p,{mode:0o600});return readFile(p);};
+  const resolve=async(p,moved)=>{
+    const present=await checked(p,{mode:0o600,optional:true});
+    const archived=await checked(moved,{mode:0o600,optional:true});
+    if(present===archived)throw Error("Historical marker missing or duplicated.");
+    return {present,bytes:await ownedBytes(present?p:moved)};
+  };
+  const active=await resolve(mark,movedActive),sw=await resolve(original,movedSwitch);
+  if(!sw.present&&active.present)throw Error("Historical markers moved out of order.");
+  if(sha(active.bytes)!==expectedActiveSha||sha(sw.bytes)!==expectedSwitchSha)
+    throw Error("Historical marker content changed.");
+  const a=JSON.parse(active.bytes),s=JSON.parse(sw.bytes);
+  const context=path.join(dir,"context.json"),result=path.join(dir,"result.json");
+  const contextBytes=await ownedBytes(context),resultBytes=await ownedBytes(result);
+  const plan=JSON.parse(contextBytes),outcome=JSON.parse(resultBytes);
+  if(a.id!==id||a.label!==remoteJobLabel(id)||a.state!=="preparing"||
+     a.version!==plan.version||plan.id!==id||plan.label!==a.label||
+     plan.state!=="owner_authorized_remote_upgrade"||plan.endpoint!==endpoint||
+     !SHA.test(plan.sourceSha)||outcome.id!==id||outcome.status!=="needs_attention"||
+     s.phase!=="switch_pending"||s.stopped!==false||s.version!==a.version||
+     s.previous!==oldPlist||s.generation===oldGeneration||
+     !forwardMacVersion(oldVersion,a.version))
+    throw Error("Historical failure does not match original installed state.");
+  const logHashes={};
+  for(const name of ["stdout.log","stderr.log"]){
+    const p=path.join(dir,name),st=await exists(p);
+    if(!st||!st.isFile()||st.isSymbolicLink()||st.nlink!==1||
+       st.uid!==process.getuid()||(st.mode&0o022)!==0)
+      throw Error("Historical log ownership/type unsafe.");
+    const bytes=await readFile(p);
+    await pause(250);
+    if(sha(bytes)!==sha(await readFile(p)))
+      throw Error("Historical task log is still growing.");
+    logHashes[name]=sha(bytes);
+  }
+  const manifest={
+    schema:1,kind:"failed_upgrade_original_agent_restored",id,deviceId,
+    oldVersion,oldGeneration,failedVersion:a.version,
+    original:{switch:original,active:mark},
+    hashes:{switch:sha(sw.bytes),active:sha(active.bytes),
+      context:sha(contextBytes),result:sha(resultBytes),
+      plist:sha(Buffer.from(oldPlist)),cli:sha(Buffer.from(oldCli)),...logHashes},
+    result:"needs_attention",remoteUpgradeReplay:"forbidden",
+  };
+  const output={status:active.present||sw.present?"eligible_failed_reconciliation":
+    "already_reconciled",device_id:deviceId,operation_id:id,
+    old_version:oldVersion,failed_version:a.version};
+  const serialized=JSON.stringify(manifest)+"\n";
+  const hasAudit=await checked(audit,{mode:0o600,optional:true});
+  if((!active.present||!sw.present)&&!hasAudit)
+    throw Error("Partially archived markers without durable audit; manual inspection required.");
+  if(hasAudit&&await readFile(audit,"utf8")!==serialized)
+    throw Error("Existing reconciliation audit differs; do not release marker.");
+  if(!apply)return output;
+  await ownedDirectory(archive);
+  if(!hasAudit)await writeFile(audit,serialized,{flag:"wx",mode:0o600,flush:true});
+  // Durable, strictly matching audit before either marker is released.
+  if(await readFile(audit,"utf8")!==serialized)throw Error("Audit not confirmed.");
+  // Active first: the local CLI remains blocked by switch until the final move.
+  if(active.present){
+    if(await exists(movedActive))throw Error("Archive destination unexpectedly occupied.");
+    await rename(mark,movedActive);
+  }
+  if(sw.present){
+    if(await exists(movedSwitch))throw Error("Archive destination unexpectedly occupied.");
+    await rename(original,movedSwitch);
+  }
+  if(sha(await ownedBytes(movedActive))!==expectedActiveSha||
+     sha(await ownedBytes(movedSwitch))!==expectedSwitchSha||
+     await exists(mark)||await exists(original))
+    throw Error("Historical marker archive outcome uncertain.");
+  return {...output,status:output.status==="already_reconciled"?
+    "already_reconciled":"reconciled_failed_operation",audit_path:audit};
+}
+
 async function main(){
   const [action,...args]=process.argv.slice(2);
   if(action==="worker"&&args.length===1){

@@ -37,3 +37,38 @@ Any future reconciliation is a distinct owner-authorized **device state change**
 4. Only after explicit, separate owner approval and an independently reviewed *idempotent* reconciliation implementation may the *specific* obsolete `switch.json` and `active.json` admission markers be released, with intermediate/crash-unknown handling and post-change signed-WSS/CLI/receipt validation. Unexpected data, missing evidence or ambiguous file states must remain blocked. The prior `v0.1.50` operation must never be replayed; a later upgrade requires a new reviewed version and authorization.
 
 These gates deliberately require no new service, database, automatic retry or general-purpose cleanup interface. Preserve the failed incident evidence on the owner Mac until owner authorization and acceptance of that exact transition.
+
+## Manual failed-transaction reconciliation candidate (#660)
+
+The existing `macos-remote-upgrade.mjs` now exports the internal
+`reconcileFailedRemoteMacUpgrade` helper for a separately approved owner
+recovery. **No public CLI action, automatic reconciliation, or installer
+fallback is registered.** Its default is `apply=false` (strictly read-only);
+`apply=true` is a real owner-device state change requiring distinct approval
+and a reviewed/pinned code candidate. Merely merging this source does not
+authorize any production installation, cleanup, or upgrade.
+
+The caller must supply the exact operation ID, permanent device ID, original
+LaunchAgent generation/version, and independently obtained SHA-256 hashes of
+the original `switch.json` and `active.json`. The helper verifies existing
+owner/private path protections, unchanged old plist/CLI, running original
+process with matching PID and connected generation, existing receipts without
+opening SQLite, a matching immutable failed context and `needs_attention`
+result, and a twice-absent failed launchd job with stable logs. Mismatches,
+missing or duplicate markers, ambiguous launchd responses and unfamiliar
+partial state fail closed.
+
+When explicitly approved, an owner-private per-operation
+`reconciliation/audit.json` is written and verified **before** the old
+`active.json` and `switch.json` are renamed into that same archive, in
+that order. Existing `context.json`, `result.json`, logs, staged candidate,
+permanent identity, installed plist/CLI, cloud connection and the SQLite
+receipt database stay untouched. Each archival marker is hash-verified.
+After a crash between those two renames the still-present switch journal
+continues to block local actions; replay with the **same** approved hashes
+resumes only if the preexisting audit matches exactly. Already archived
+records return `already_reconciled` without reapplying the upgrade. The
+audit states **old Agent restored, historical upgrade failed**, never
+`connected_observed`. The original v0.1.50 operation is permanently
+non-retryable; new upgrades require a new reviewed source/pin, new operation
+ID and separate owner authorization.
