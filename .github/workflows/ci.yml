@@ -239,7 +239,30 @@ jobs:
           fi
           echo "Verified native candidate from $(git rev-parse HEAD), unpublished SHA:"
           shasum -a 256 "$temp_dir/first/$asset"
+          # Save *only* an explicitly dispatched, verified candidate for
+          # owner-Mac E2E. Pull-request CI never publishes/downloads assets.
+          # This is a short-lived Actions artifact, NOT a GitHub Release.
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            mkdir -p "release-candidate/darwin-${{ matrix.arch }}"
+            cp -- "$temp_dir/first/$asset" "release-candidate/darwin-${{ matrix.arch }}/"
+            cp -- apps/remote-control-agent/scripts/macos-local.sh \
+              "release-candidate/darwin-${{ matrix.arch }}/"
+            (
+              cd "release-candidate/darwin-${{ matrix.arch }}"
+              shasum -a 256 "$asset" macos-local.sh > SHA256SUMS.txt
+              shasum -a 256 -c SHA256SUMS.txt
+            )
+          fi
           # CI runner is NOT an owner-paired real Mac. No permanent grant or public Release.
+      - name: Save unpublished macOS candidate for owner-native E2E
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release_tag }}-darwin-${{ matrix.arch }}
+          path: release-candidate/darwin-${{ matrix.arch }}/
+          retention-days: 2
+          if-no-files-found: error
+          compression-level: 0
 
   windows-native-preview:
     name: Native Windows full tools preview / x64
