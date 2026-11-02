@@ -89,6 +89,25 @@ export async function verifyApprovedDeviceId(
   return challenged.result.device_id;
 }
 
+/** Read-only grant-type evidence for legacy Windows paired tasks whose original
+ * installer predated the local mode record. This challenge succeeds ONLY for
+ * an existing unexpired permanent grant. It does not Stop or Resume it.
+ * The caller must independently verify the same key's signed device ID. */
+export async function verifyPermanentOwnerStopChallenge(
+  origin:string, id:string, send:typeof fetch=fetch,
+):Promise<void> {
+  if(!UUID.test(id)) throw Error("Invalid existing device ID.");
+  const result=await postJson(endpoint(origin),"/agent/owner/intent/challenge",
+    {action:"stop",device_id:id},send);
+  rejectPermanentStatus(result.status);
+  const c=result.result as {device_id?:unknown;action?:unknown;nonce?:unknown;generation?:unknown};
+  if(result.status!==200||c.device_id!==id||c.action!=="stop"||
+     typeof c.nonce!=="string"||!/^[A-Za-z0-9_-]{24}$/.test(c.nonce)||
+     !Number.isSafeInteger(c.generation)||Number(c.generation)<0) {
+    throw Error("Permanent owner grant could not be confirmed.");
+  }
+}
+
 /** Distinct Ed25519 intent domain; ordinary signed WSS cannot authorize local owner OFF/Resume. */
 export function signedOwnerIntentProof(pem:string,action:'stop'|'resume',id:string,nonce:string,generation:number):string {
   if(!UUID.test(id)||!/^[A-Za-z0-9_-]{24}$/.test(nonce)||

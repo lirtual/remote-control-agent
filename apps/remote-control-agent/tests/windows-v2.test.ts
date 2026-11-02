@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DeviceSessionRejectedError } from "../src/v2-session-client.ts";
 import { isPermittedLocalPath, parseLocalRead, parseListDirectory } from "../src/local-read.ts";
-import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, resumePendingWindowsActivation, reconcileWindowsOnboard } from "../src/windows-v2.ts";
+import { parseWindowsAgentArgs, windowsAgentStore, startApprovedTemporaryAgent, assertSignedWindowsGrant, assertWindowsAutostartMode, verifyLegacyWindowsPermanentMode, resumePendingWindowsActivation, reconcileWindowsOnboard } from "../src/windows-v2.ts";
 
 test("Windows drive paths accepted without relaxing URI/UNC/ADS checks", () => {
   for (const value of ["C:\\Users\\Alice\\test.txt", "D:/data/readme.txt", "c:\\"]) {
@@ -213,4 +213,39 @@ test("failed owner approval never restarts or replaces an existing device", asyn
     start: () => { calls.push("start"); running = true; },
   }), /approval missing/);
   assert.deepEqual(calls, ["re-pair"]);
+});
+
+
+test("legacy Windows permanent mode requires live native task, same signed ID and cloud permanent challenge",async()=>{
+  const id="11111111-1111-4111-8111-111111111111";
+  const calls:string[]=[];
+  const task=()=>{calls.push("task");return {installed:true,running:true};};
+  await verifyLegacyWindowsPermanentMode({
+    deviceId:id,task,
+    verifyIdentity:async()=>{calls.push("signed");return id;},
+    verifyPermanentGrant:async()=>{calls.push("permanent");},
+  });
+  assert.deepEqual(calls,["task","signed","permanent","task"]);
+  for(const variant of ["not_installed","not_running","invalid_id","wrong_signed_id","temporary","cloud_unavailable","task_changed"]){
+    const events:string[]=[];let taskReads=0;
+    const options={
+      deviceId:variant==="invalid_id"?"invalid":id,
+      task:()=>{
+        events.push("task");
+        taskReads++;
+        return {installed:variant!=="not_installed",running:variant!=="not_running"&&(variant!=="task_changed"||taskReads===1)};
+      },
+      verifyIdentity:async()=>{
+        events.push("signed");
+        return variant==="wrong_signed_id"?"22222222-2222-4222-8222-222222222222":id;
+      },
+      verifyPermanentGrant:async()=>{
+        events.push("permanent");
+        if(variant==="temporary"||variant==="cloud_unavailable")throw Error("no permanent grant");
+      },
+    };
+    await assert.rejects(verifyLegacyWindowsPermanentMode(options),variant==="invalid_id"?/Invalid legacy/:variant==="wrong_signed_id"?/does not match/:variant==="task_changed"?/changed/:variant==="temporary"||variant==="cloud_unavailable"?/no permanent grant/:/Active owner-controlled/);
+    if(["invalid_id","not_installed","not_running"].includes(variant))assert.equal(events.includes("signed"),false);
+    if(variant==="wrong_signed_id")assert.equal(events.includes("permanent"),false);
+  }
 });
