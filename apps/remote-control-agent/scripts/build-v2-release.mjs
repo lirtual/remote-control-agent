@@ -256,6 +256,8 @@ export function build(args) {
   if (darwin) {
     const local=path.join(root,"scripts/macos-local.mjs");
     copyFileSync(local,path.join(work,"apps/remote-control-agent/scripts/macos-local.mjs"));
+    copyFileSync(path.join(root,"scripts/macos-remote-upgrade.mjs"),
+      path.join(work,"apps/remote-control-agent/scripts/macos-remote-upgrade.mjs"));
   }
   if (!darwin) {
   const installer=readFileSync(path.join(root,"scripts/install-v2.mjs"),"utf8");
