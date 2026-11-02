@@ -137,3 +137,36 @@ test("#657 native owner-on launchd dispatch preserves identity; no replay or sil
   await assert.rejects(runRemoteMacUpgrade(launched.operation_id,{home,invoke,ppid:1}),
     /already attempted/);
 });
+
+test("#657 hosted native launchctl submit is an independent same-user one-shot job",{
+  skip:process.platform!=="darwin"||!process.env.RCA_MACOS_BUNDLE_ROOT,
+},async()=>{
+  const {randomUUID}=await import("node:crypto");
+  const label="org.mcp-workers.rca-smoke-"+randomUUID().replaceAll("-","");
+  const submit=spawnSync("/bin/launchctl",
+    ["submit","-l",label,"--","/bin/sleep","12"],
+    {encoding:"utf8",timeout:7000});
+  assert.equal(submit.status,0,submit.stderr??"launchctl submit failed");
+  try{
+    let output="",pid=null;
+    for(let i=0;i<25;i++){
+      const r=spawnSync("/bin/launchctl",
+        ["print","gui/"+process.getuid()+"/"+label],
+        {encoding:"utf8",timeout:2000});
+      if(r.status===0){
+        output=r.stdout;
+        const m=output.match(/(?:^|\n)\s*pid = (\d+)(?:\n|$)/);
+        if(m){pid=Number(m[1]);break;}
+      }
+      await new Promise(resolve=>setTimeout(resolve,120));
+    }
+    assert.ok(pid,"launchctl submit did not expose the expected owner GUI job PID");
+    const ps=spawnSync("/bin/ps",["-p",String(pid),"-o","ppid="],
+      {encoding:"utf8",timeout:2000});
+    assert.equal(ps.status,0);
+    assert.equal(Number(ps.stdout.trim()),1,"job must not share managed Shell process ancestry");
+  }finally{
+    spawnSync("/bin/launchctl",["remove",label],
+      {encoding:"utf8",timeout:5000});
+  }
+});
