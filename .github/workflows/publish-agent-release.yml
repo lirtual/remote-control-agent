@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Pinned three-platform release tag
+        description: Pinned reviewed three- or five-platform release tag
         type: string
         required: true
 
@@ -75,19 +75,30 @@ jobs:
             .tag == $tag and
             (.source_sha | test("^[a-f0-9]{40}$")) and
             (.candidate_run_id | type == "number") and
-            (.assets | length == 3) and
-            [.assets[].target] == ["linux-x64-glibc", "linux-arm64-glibc", "windows-x64"] and
+            (([.assets[].target] == ["linux-x64-glibc", "linux-arm64-glibc", "windows-x64"] and
+              (.assets | length == 3) and (.macos_script_sha256 == null)) or
+             ([.assets[].target] == ["linux-x64-glibc", "linux-arm64-glibc", "windows-x64", "darwin-arm64", "darwin-x64"] and
+              (.assets | length == 5) and
+              (.macos_script_sha256 | type == "string" and test("^[a-f0-9]{64}$")))) and
             ([.assets[] |
               (.sha256 | test("^[a-f0-9]{64}$")) and
               (.name == ("remote-control-agent-" + $tag + "-" + .target +
                 (if .target == "windows-x64" then ".zip" else ".tar.gz" end))) and
               (.artifact == ($tag + "-" +
                 (if .target == "windows-x64" then "windows-x64" else
-                (if .target == "linux-x64-glibc" then "ubuntu-24.04" else "ubuntu-24.04-arm" end) end)))
+                (if .target == "linux-x64-glibc" then "ubuntu-24.04"
+                 elif .target == "linux-arm64-glibc" then "ubuntu-24.04-arm"
+                 elif .target == "darwin-arm64" then "darwin-arm64"
+                 else "darwin-x64" end) end)))
              ] | all)
           ' "$pin" >/dev/null
           sha="$(jq -r .source_sha "$pin")"
           git merge-base --is-ancestor "$sha" "$GITHUB_SHA"
+          # Five-platform pin also fixes the exact local owner bootstrap source.
+          if [[ "$(jq -r '.assets | length' "$pin")" == 5 ]]; then
+            source_digest="$(git show "$sha:apps/remote-control-agent/scripts/macos-local.sh" | sha256sum | cut -d' ' -f1)"
+            test "$source_digest" = "$(jq -r .macos_script_sha256 "$pin")"
+          fi
           run_id="$(jq -r .candidate_run_id "$pin")"
           gh api "repos/$GH_REPO/actions/runs/$run_id" |
             jq -e --arg sha "$sha" '
@@ -103,14 +114,15 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch and verify only three pinned native candidates
+      - name: Fetch and verify exactly three or five pinned native candidates
         shell: bash
         run: |
           set -euo pipefail
           pin=".github/release-pins/$RELEASE_TAG.json"
           run_id="$(jq -r .candidate_run_id "$pin")"
           mkdir -p "$RUNNER_TEMP/publish"
-          for i in 0 1 2; do
+          count="$(jq -r '.assets | length' "$pin")"
+          for ((i=0;i<count;i++)); do
             target="$(jq -r ".assets[$i].target" "$pin")"
             artifact="$(jq -r ".assets[$i].artifact" "$pin")"
             filename="$(jq -r ".assets[$i].name" "$pin")"
@@ -118,7 +130,7 @@ jobs:
             output="$RUNNER_TEMP/candidates/$target"
             mkdir -p "$output"
             gh run download "$run_id" --name "$artifact" --dir "$output"
-            if [[ "$target" == windows-x64 ]]; then
+            if [[ "$target" == windows-x64 || "$target" == darwin-* ]]; then
               archive="$output/$filename"
               record="$output/SHA256SUMS.txt"
             else
@@ -141,6 +153,23 @@ jobs:
                   .upgrade_profile == "paired-full-v1" and
                   .upgrade_protocol == null
                 ' >/dev/null
+            elif [[ "$target" == darwin-* ]]; then
+              script="$output/macos-local.sh"
+              test -f "$script" && test ! -L "$script"
+              script_digest="$(jq -r .macos_script_sha256 "$pin")"
+              printf '%s  %s\n' "$script_digest" "$script" | sha256sum --check --status
+              grep -Fx "$digest  $filename" "$record" >/dev/null
+              grep -Fx "$script_digest  macos-local.sh" "$record" >/dev/null
+              tar -xzOf "$archive" bundle.json | jq -e \
+                --arg version "$RELEASE_TAG" --arg target "$target" '
+                  .name == "remote-control-agent" and
+                  .version == $version and .target == $target and
+                  .artifact_schema == 1 and .device_protocol == 2 and
+                  .receipt_schema == 1 and
+                  .candidate_profile == "darwin-permanent-local-v1" and
+                  .native_supervisor == "darwin-owned-group-v1" and
+                  .upgrade_profile == null and .upgrade_protocol == null
+                ' >/dev/null
             else
               grep -Fx "$digest  release-candidate/$target/$filename" "$record" >/dev/null
               tar -xzOf "$archive" bundle.json | jq -e \
@@ -156,7 +185,7 @@ jobs:
           done
           jq -r '.assets[] | "\(.sha256)  \(.name)"' "$pin" > "$RUNNER_TEMP/publish/SHA256SUMS.txt"
           ( cd "$RUNNER_TEMP/publish" && sha256sum --check SHA256SUMS.txt )
-          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find "$RUNNER_TEMP/publish" -maxdepth 1 -type f | wc -l)" -eq "$((count+1))"
 
       - name: Upload draft, re-download/check assets, publish prerelease
         shell: bash
@@ -172,18 +201,27 @@ jobs:
             echo "Release/tag appeared during validation; abort" >&2
             exit 1
           fi
+          assets=(
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz"
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz"
+            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-windows-x64.zip"
+          )
+          if [[ "$(jq -r '.assets | length' "$pin")" == 5 ]]; then
+            assets+=(
+              "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-darwin-arm64.tar.gz"
+              "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-darwin-x64.tar.gz"
+            )
+          fi
           gh release create "$RELEASE_TAG" \
-            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-x64-glibc.tar.gz" \
-            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-linux-arm64-glibc.tar.gz" \
-            "$RUNNER_TEMP/publish/remote-control-agent-$RELEASE_TAG-windows-x64.zip" \
-            "$RUNNER_TEMP/publish/SHA256SUMS.txt" \
+            "${assets[@]}" "$RUNNER_TEMP/publish/SHA256SUMS.txt" \
             --target "$sha" --title "$title" \
             --notes-file "$notes" --prerelease --draft
           gh release view "$RELEASE_TAG" --json isDraft,isPrerelease |
             jq -e '.isDraft == true and .isPrerelease == true' >/dev/null
           mkdir -p "$RUNNER_TEMP/recheck"
           gh release download "$RELEASE_TAG" --dir "$RUNNER_TEMP/recheck" --clobber
-          test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq 4
+          count="$(jq -r '.assets | length' "$pin")"
+          test "$(find "$RUNNER_TEMP/recheck" -maxdepth 1 -type f | wc -l)" -eq "$((count+1))"
           ( cd "$RUNNER_TEMP/recheck" && sha256sum --check SHA256SUMS.txt )
           gh release edit "$RELEASE_TAG" --draft=false
           gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" |
