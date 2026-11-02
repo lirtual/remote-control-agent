@@ -1,0 +1,27 @@
+{
+  "tag": "v0.1.46",
+  "source_sha": "b7d9f89d84b087acb751c1423f92fedc85cc15ea",
+  "candidate_run_id": 41367131028,
+  "release_title": "Remote Control Agent v0.1.46 — Owner Stop recovery",
+  "release_notes": ".github/release-notes/v0.1.46.md",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.46-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.46-linux-x64-glibc.tar.gz",
+      "sha256": "5dd67c43b88313858ed115fd307dc3fdf5416bc45cfd930d39bd31d9d351adad"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.46-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.46-linux-arm64-glibc.tar.gz",
+      "sha256": "dae18a32ab9b5fc9ea70eeea2c169adb98aa523f727a362932319f05b969e133"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.46-windows-x64",
+      "name": "remote-control-agent-v0.1.46-windows-x64.zip",
+      "sha256": "0189525bdf27e9885db3cb8e37f68424424c8f67616b13d4a3d276882c457935"
+    }
+  ]
+}

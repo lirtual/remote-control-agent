@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile, access, chmod, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile, access, chmod, symlink, link, rename, chown } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { installUnit, recoverInterruptedUpgrade, renderV2Service, installerCommandTimeoutMs, UNIT } from "../scripts/install-v2.mjs";
+import { installUnit, recoverInterruptedUpgrade, renderV2Service, installerCommandTimeoutMs, inspectOwnerStoppedUpgrade, UNIT } from "../scripts/install-v2.mjs";
+import { runInteractiveLocalManager } from "../scripts/manage-v2.mjs";
 import { ReceiptStore } from "../src/operations.ts";
 
 async function withFakeUserService(callback, {blockRestart = false} = {}) {
@@ -32,6 +33,7 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
       "#!/bin/sh",
       'printf "%s\\n" "$*" >> "$RC_SYS_LOG"',
       'case " $* " in',
+      '  *" show "*) printf "ActiveState=inactive\\nSubState=dead\\nMainPID=0\\n";;',
       '  *" restart "*)',
       '    if [ "$RC_SYS_ACTIVE_ON_RESTART" = "1" ]; then : > "$RC_SYS_ACTIVE"; fi',
       '    if [ -n "$RC_SYS_RESTART_ONCE" ] && [ ! -e "$RC_SYS_RESTART_ONCE" ]; then',
@@ -58,7 +60,7 @@ async function withFakeUserService(callback, {blockRestart = false} = {}) {
       delete process.env.RC_SYS_ACTIVE_ON_RESTART;
     }
     const key = path.join(home, ".local", "share", "mcp-workers", "remote-control", "v2-identity.pem");
-    await mkdir(path.dirname(key), {recursive:true});
+    await mkdir(path.dirname(key), {recursive:true, mode:0o700});
     await writeFile(key, "private-unchanged", {mode:0o600});
     await writeFile(key + ".device-id", "e11d9c70-16fe-4d47-aafc-d01db72750fd", {mode:0o600});
     const receipt = path.join(preserved, "operation-receipts.sqlite");
@@ -296,5 +298,189 @@ test("#77 failed first activation deletes only the newly installed v2 unit", asy
     const calls=await readFile(logs,"utf8");
     assert.match(calls,/--user enable --now remote-control-agent\.service/);
     assert.match(calls,/--user disable --now remote-control-agent\.service/);
+  });
+});
+
+async function ownerStopped(f) {
+  await writeFile(f.unitPath, f.from, {mode:0o600});
+  await writeFile(f.key + ".owner-stopped", "stopped\n", {mode:0o600});
+  return inspectOwnerStoppedUpgrade(f.key);
+}
+async function assertOff(f) {
+  assert.equal(await readFile(f.key + ".owner-stopped", "utf8"), "stopped\n");
+  const calls = await readFile(f.logs, "utf8");
+  assert.doesNotMatch(calls, /restart|enable|start|stop|is-active/);
+  await assert.rejects(access(f.activeOk), {code:"ENOENT"});
+}
+
+test("Owner Stop upgrade switches only the program, retaining OFF, identity and receipts", async () => {
+  await withFakeUserService(async f => {
+    const ownerStop = await ownerStopped(f);
+    await installUnit(f.unitPath, f.to, f.from, {ownerStop});
+    assert.equal(await readFile(f.unitPath, "utf8"), f.to);
+    await assert.rejects(access(f.unitPath + ".upgrade-backup"), {code:"ENOENT"});
+    await assertOff(f);
+  });
+});
+
+test("Owner Stop marker proof refuses unsafe files and uncertain/active service states", async () => {
+  await withFakeUserService(async f => {
+    assert.equal(await inspectOwnerStoppedUpgrade(f.key), null);
+    const proof = await ownerStopped(f);
+    const marker = f.key + ".owner-stopped";
+    for (const text of ["stopped", "stopped\n\n", "STOPPED\n"]) {
+      await writeFile(marker, text);
+      await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /Owner Stop/);
+    }
+    await writeFile(marker, "stopped\n");
+    for (const mode of [0o644, 0o400, 0o4600]) {
+      await chmod(marker, mode);
+      await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /unsafe Owner Stop/);
+    }
+    await chmod(marker, 0o600);
+    await link(marker, marker + ".link");
+    await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /unsafe Owner Stop/);
+    await rm(marker + ".link");
+    await rm(marker);
+    await symlink(f.key, marker);
+    await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /unsafe Owner Stop/);
+    await rm(marker);
+    await mkdir(marker);
+    await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /unsafe Owner Stop/);
+    await rm(marker, {recursive:true});
+    await writeFile(marker, "stopped\n", {mode:0o600});
+    if (process.getuid() === 0) {
+      await chown(marker, 12345, 12345);
+      await assert.rejects(inspectOwnerStoppedUpgrade(f.key), /unsafe Owner Stop/);
+      await chown(marker, process.getuid(), process.getgid());
+    }
+    const invoke = value => (_bin, args) => {
+      assert.deepEqual(args, ["--user", "show", UNIT, "--property=ActiveState,SubState,MainPID"]);
+      return value;
+    };
+    for (const value of ["", "ActiveState=inactive\nSubState=dead", "ActiveState=active\nSubState=running\nMainPID=1",
+      "ActiveState=inactive\nSubState=dead\nMainPID=1", "ActiveState=inactive\nSubState=exited\nMainPID=0",
+      "ActiveState=inactive\nSubState=dead\nMainPID=0\nMainPID=0"]) {
+      await assert.rejects(inspectOwnerStoppedUpgrade(f.key, {invoke:invoke(value)}), /not proven/);
+    }
+    await assert.rejects(inspectOwnerStoppedUpgrade(f.key, {invoke:() => {throw Error("systemd unavailable");}}), /unavailable/);
+    await assert.rejects(installUnit(f.unitPath, f.to, f.from, {ownerStop:proof}), /marker changed/);
+    assert.equal(await readFile(f.unitPath, "utf8"), f.from);
+    await rm(marker);
+    await assert.rejects(installUnit(f.unitPath, f.to, f.from, {ownerStop:proof}), /Missing or unsafe/);
+  });
+});
+
+test("Owner Stop failed unit switch rolls back without starting either version", async () => {
+  await withFakeUserService(async f => {
+    const ownerStop = await ownerStopped(f);
+    // Fail the first reload after the new unit was written, then permit rollback.
+    const fake = path.join(path.dirname(f.logs), "fake-bin/systemctl");
+    const original = await readFile(fake, "utf8");
+    const once = f.unitPath + ".reload-once";
+    await writeFile(fake, original.replace('case " $* " in',
+      'case " $* " in\n  *" daemon-reload "*) if [ ! -e "' + once + '" ]; then touch "' + once + '"; exit 1; fi;;'));
+    await assert.rejects(installUnit(f.unitPath, f.to, f.from, {ownerStop}), /could not be activated/);
+    assert.equal(await readFile(f.unitPath, "utf8"), f.from);
+    await assert.rejects(access(f.unitPath + ".upgrade-backup"), {code:"ENOENT"});
+    await assertOff(f);
+  });
+});
+
+test("Owner Stop interrupted upgrade recovery preserves OFF and rejects changed/missing intent", async () => {
+  await withFakeUserService(async f => {
+    const proof = await ownerStopped(f);
+    const backup = f.unitPath + ".upgrade-backup";
+    await writeFile(backup, "# Owner Stop upgrade: " + JSON.stringify(proof) + "\n" + f.from, {mode:0o600});
+    await writeFile(f.unitPath, f.to);
+    const marker = f.key + ".owner-stopped";
+    await rename(marker, marker + ".saved");
+    await assert.rejects(recoverInterruptedUpgrade({home:f.home}), /Missing or unsafe/);
+    await writeFile(marker, "stopped\n", {mode:0o600});
+    await assert.rejects(recoverInterruptedUpgrade({home:f.home}), /marker changed/);
+    assert.equal(await readFile(f.unitPath, "utf8"), f.to);
+    await access(backup);
+    // Restore the original inode, then record its new ctime as a fresh crash fixture.
+    await rm(marker);
+    await rename(marker + ".saved", marker);
+    const restored = await inspectOwnerStoppedUpgrade(f.key);
+    await writeFile(backup, "# Owner Stop upgrade: " + JSON.stringify(restored) + "\n" + f.from);
+    assert.equal(await recoverInterruptedUpgrade({home:f.home}), true);
+    assert.equal(await readFile(f.unitPath, "utf8"), f.from);
+    await assert.rejects(access(backup), {code:"ENOENT"});
+    assert.equal(await recoverInterruptedUpgrade({home:f.home}), false);
+    await assertOff(f);
+  });
+});
+
+test("Owner Stop CLI permits verified manual upgrade without Start, Resume or re-pair", async () => {
+  await withFakeUserService(async f => {
+    await ownerStopped(f);
+    const calls = [];
+    const tty = {isTTY:true, write(){}};
+    assert.equal(await runInteractiveLocalManager(["upgrade", "v0.2.0", "a".repeat(40)], {
+      home:f.home, stdin:tty, stdout:tty,
+      inventory:() => ({unit:f.from, info:{version:"v0.1.0"}}),
+      prepareUpgrade:async (_state, pins) => {calls.push("verified-stage"); return pins;},
+      activateUpgrade:prepared => {calls.push("activate-installer"); return prepared;},
+      signedIntent:async () => {throw Error("Upgrade must never send cloud owner intent");},
+    }), 0);
+    assert.deepEqual(calls, ["verified-stage", "activate-installer"]);
+    await assertOff(f);
+  });
+});
+
+test("SIGKILL after offline unit switch recovers the actual durable Owner Stop backup", async () => {
+  await withFakeUserService(async f => {
+    const ownerStop = await ownerStopped(f);
+    const fake = path.join(path.dirname(f.logs), "fake-bin/systemctl");
+    const original = await readFile(fake, "utf8");
+    await writeFile(fake, original.replace('case " $* " in',
+      'case " $* " in\n  *" daemon-reload "*) touch "' + f.restartReached +
+      '"; while [ ! -e "' + f.releaseRestart + '" ]; do sleep 0.02; done;;'));
+    const installerUrl = new URL("../scripts/install-v2.mjs", import.meta.url).href;
+    const childSource = "import {installUnit} from " + JSON.stringify(installerUrl) + ";\n" +
+      "await installUnit(..." + JSON.stringify([f.unitPath, f.to, f.from, {ownerStop}]) + ");";
+    const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", childSource],
+      {stdio:"ignore", env:process.env});
+    const exited = new Promise(resolve => child.once("exit", (code,signal) => resolve({code,signal})));
+    try {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if (await access(f.restartReached).then(() => true, () => false)) break;
+        if (child.exitCode !== null || child.signalCode !== null) break;
+        await new Promise(resolve => setTimeout(resolve,20));
+      }
+      await access(f.restartReached);
+      assert.equal(await readFile(f.unitPath, "utf8"), f.to);
+      assert.equal(child.kill("SIGKILL"), true);
+      assert.equal((await exited).signal, "SIGKILL");
+      await writeFile(f.releaseRestart, "release");
+      await writeFile(fake, original);
+      assert.equal(await recoverInterruptedUpgrade({home:f.home}), true);
+      assert.equal(await readFile(f.unitPath, "utf8"), f.from);
+      await assertOff(f);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await writeFile(f.releaseRestart, "release").catch(() => {});
+    }
+  });
+});
+
+test("Owner Stop marker changed during switch preserves backup and refuses rollback activation", async () => {
+  await withFakeUserService(async f => {
+    const ownerStop = await ownerStopped(f);
+    const fake = path.join(path.dirname(f.logs), "fake-bin/systemctl");
+    const original = await readFile(fake, "utf8");
+    // The same content in a replacement inode is still a changed owner intent.
+    const marker = f.key + ".owner-stopped";
+    await writeFile(fake, original.replace('case " $* " in',
+      'case " $* " in\n  *" daemon-reload "*) rm -f "' + marker + '"; printf "stopped\\n" > "' + marker + '"; chmod 600 "' + marker + '";;'));
+    await assert.rejects(installUnit(f.unitPath, f.to, f.from, {ownerStop}), /could not be activated/);
+    await writeFile(fake, original);
+    await access(f.unitPath + ".upgrade-backup");
+    await assert.rejects(recoverInterruptedUpgrade({home:f.home}), /marker changed/);
+    assert.equal(await readFile(f.unitPath, "utf8"), f.to);
+    await assertOff(f);
   });
 });

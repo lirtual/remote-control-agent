@@ -9,7 +9,7 @@ import { appendFileSync, lstatSync, readFileSync, renameSync, statSync, unlinkSy
 import path from "node:path";
 
 export type WindowsEvent =
-  | "starting" | "connected" | "disconnected" | "rejected" | "stopping";
+  | "starting" | "connected" | "disconnected" | "rejected" | "stopping" | "owner_stopped";
 
 const MAX_BYTES = 256 * 1024;
 const MAX_VIEW_BYTES = 64 * 1024;
@@ -37,7 +37,7 @@ function assertRegularFile(p: string): boolean {
 
 /** Intentionally best effort: diagnostic failures never interrupt signed WSS. */
 export function recordWindowsEvent(directory: string, event: WindowsEvent): void {
-  if (!["starting", "connected", "disconnected", "rejected", "stopping"].includes(event)) return;
+  if (!["starting", "connected", "disconnected", "rejected", "stopping", "owner_stopped"].includes(event)) return;
   try {
     const log = safeLogPath(directory);
     if (assertRegularFile(log) && statSync(log).size > MAX_BYTES) {
@@ -71,7 +71,7 @@ export function readWindowsEvents(directory: string): string {
       const item = JSON.parse(line) as { utc?: unknown; event?: unknown };
       if (typeof item.utc === "string" && !Number.isNaN(Date.parse(item.utc)) &&
           typeof item.event === "string" &&
-          ["starting", "connected", "disconnected", "rejected", "stopping"].includes(item.event) &&
+          ["starting", "connected", "disconnected", "rejected", "stopping", "owner_stopped"].includes(item.event) &&
           Object.keys(item).length === 2) {
         cleaned.push(JSON.stringify({ utc: item.utc, event: item.event }));
       }

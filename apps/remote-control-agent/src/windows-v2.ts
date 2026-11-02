@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { newEnrollment, saveNewPrivateKey, selectDeviceLabel } from "./v2-enrollment.ts";
-import { recoverDeviceId, verifyApprovedDeviceId, DeviceSessionRejectedError } from "./v2-session-client.ts";
+import { recoverDeviceId, verifyApprovedDeviceId, verifyPermanentOwnerStopChallenge, sendSignedOwnerIntent, DeviceSessionRejectedError } from "./v2-session-client.ts";
 import { promptInstallMode } from "./install-mode.ts";
 import { repairWindowsIdentity } from "./windows-identity-repair.ts";
 import { setTimeout as delay } from "node:timers/promises";
@@ -81,7 +81,7 @@ export function windowsAgentStore(localAppData: string | undefined): string {
   return path.win32.join(localAppData, "mcp-workers", "remote-control");
 }
 
-function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending" | "desktop-grant.json" | "desktop-stop.json" | "receipts"): void {
+function assertPrivateStore(action: "Init" | "Check" | "Seal", directory: string, fileName?: "v2-identity.pem" | "v2-identity.pem.device-id" | "v2-identity.pem.device-id.pending" | "v2-identity.pem.install-mode" | "v2-identity.pem.activation-pending" | "desktop-grant.json" | "desktop-stop.json" | "v2-identity.pem.owner-stopped" | "receipts"): void {
   if (process.platform !== "win32") throw Error("Native Windows required.");
   const systemRoot = process.env.SystemRoot;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot)) throw Error("Missing Windows runtime.");
@@ -105,7 +105,7 @@ async function hasFile(filename: string): Promise<boolean> {
   }
 }
 
-function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status" | "Switch", endpoint?: string, targetVersion?: string, direction?: "Upgrade" | "Rollback"): string {
+function runUserTask(action: "Enable" | "Start" | "Stop" | "Disable" | "Status" | "Switch" | "Endpoint", endpoint?: string, targetVersion?: string, direction?: "Upgrade" | "Rollback"): string {
   const windows = process.env.SystemRoot;
   if (!windows) throw Error("Missing Windows system directory.");
   const powershell = path.win32.join(windows, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -127,6 +127,27 @@ export function assertWindowsAutostartMode(mode: string | undefined): true {
   if (mode !== "permanent")
     throw Error("Only a recorded permanent Windows grant may enable an autostart task.");
   return true;
+}
+
+/** Migration guard for a legacy already-paired, actively running native
+ * Windows user-logon task. Missing metadata is NEVER itself permanent proof.
+ * Verify the exact Ed25519 identity and permanent cloud grant, then recheck
+ * the unchanged protected task before a new local mode record can be sealed.
+ * No local Stop/Resume, re-pair, or cloud grant mutation occurs here. */
+export async function verifyLegacyWindowsPermanentMode(options:{
+  deviceId:string; task:()=>{installed:boolean;running:boolean};
+  verifyIdentity:()=>Promise<string>; verifyPermanentGrant:()=>Promise<void>;
+}):Promise<void> {
+  if(!ID.test(options.deviceId)) throw Error("Invalid legacy device ID.");
+  const before=options.task();
+  if(!before.installed||!before.running)
+    throw Error("Active owner-controlled Windows task required to recover legacy mode.");
+  if(await options.verifyIdentity()!==options.deviceId)
+    throw Error("Legacy key does not match the approved device ID.");
+  await options.verifyPermanentGrant();
+  const after=options.task();
+  if(!after.installed||!after.running)
+    throw Error("Windows task changed during legacy mode verification.");
 }
 
 /** An activation marker distinguishes interrupted first setup from an owner-stopped task. */
@@ -204,10 +225,73 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
   if (idExists && !exists) throw Error("Orphaned device ID; preserve and inspect existing store.");
   assertPrivateStore("Check", directory);
 
-  if (options.action === "task-status" || options.action === "disable" ||
-      options.action === "start" || options.action === "stop") {
-    const mapping = { "task-status": "Status", disable: "Disable", start: "Start", stop: "Stop" } as const;
+  if (options.action === "task-status" || options.action === "disable") {
+    const mapping = { "task-status": "Status", disable: "Disable" } as const;
     process.stdout.write(runUserTask(mapping[options.action]) + "\n");
+    return;
+  }
+  const ownerStoppedFile = path.win32.join(directory,"v2-identity.pem.owner-stopped");
+  if (options.action === "stop" || options.action === "start") {
+    if (!process.stdin.isTTY || !process.stdout.isTTY || !exists || !idExists)
+      throw Error("Native owner console and existing permanent device are required.");
+    const modePath = keyPath + ".install-mode";
+    const hasMode = await hasFile(modePath);
+    // Validate the exact owner SID, task action/program and fixed HTTPS origin
+    // before any legacy metadata is written or a cloud owner intent is sent.
+    const endpoint = runUserTask("Endpoint").trim();
+    if (!/^https:\/\/[a-z0-9.-]+(?::[0-9]+)?\/$/i.test(endpoint))
+      throw Error("Untrusted scheduled task endpoint.");
+    if (!hasMode) {
+      // Deliberate native owner Stop only; Start must never manufacture mode.
+      if (options.action !== "stop")
+        throw Error("Recorded permanent mode required.");
+      assertPrivateStore("Check",directory,"v2-identity.pem");
+      assertPrivateStore("Check",directory,"v2-identity.pem.device-id");
+      const localId=(await readFile(keyPath+".device-id","utf8")).trim();
+      const task=()=>JSON.parse(runUserTask("Status")) as {installed:boolean;running:boolean};
+      await verifyLegacyWindowsPermanentMode({
+        deviceId:localId, task,
+        verifyIdentity:()=>verifyApprovedDeviceId(endpoint,keyPath),
+        verifyPermanentGrant:()=>verifyPermanentOwnerStopChallenge(endpoint,localId),
+      });
+      // The existing Win32 private-store owner ACL is required to seal the
+      // legacy record; it is not guessed from the presence of a task.
+      await writeFile(modePath,"permanent\n",{flag:"wx",mode:0o600});
+      assertPrivateStore("Seal",directory,"v2-identity.pem.install-mode");
+    }
+    assertPrivateStore("Check",directory,"v2-identity.pem.install-mode");
+    if ((await readFile(modePath,"utf8")).trim() !== "permanent")
+      throw Error("Temporary identity may not use local owner lifecycle.");
+    const stopped = await hasFile(ownerStoppedFile);
+    if (stopped) {
+      assertPrivateStore("Check",directory,"v2-identity.pem.owner-stopped");
+      if ((await readFile(ownerStoppedFile,"utf8"))!=="stopped\n")
+        throw Error("Invalid persisted owner STOP intent.");
+    }
+    if (options.action === "stop") {
+      if (!stopped) {
+        await writeFile(ownerStoppedFile,"stopped\n",{flag:"wx",encoding:"utf8"});
+        assertPrivateStore("Seal",directory,"v2-identity.pem.owner-stopped");
+      }
+      let cloud="unconfirmed";
+      try { await sendSignedOwnerIntent(endpoint,keyPath,"stop");cloud="confirmed"; }
+      catch { /* Local STOP still required while offline. */ }
+      process.stdout.write(runUserTask("Stop")+"\n");
+      process.stdout.write(JSON.stringify({local:"stopped",cloud})+"\n");
+      return;
+    }
+    if (!stopped) throw Error("Local owner STOP is absent; cannot implicitly Resume.");
+    await sendSignedOwnerIntent(endpoint,keyPath,"stop");
+    const authorized=await sendSignedOwnerIntent(endpoint,keyPath,"resume");
+    if (authorized.status !== "resume_pending") throw Error("Cloud Resume was not authorized.");
+    await unlink(ownerStoppedFile);
+    try { process.stdout.write(runUserTask("Start")+"\n"); }
+    catch (error) {
+      await writeFile(ownerStoppedFile,"stopped\n",{flag:"wx",encoding:"utf8"});
+      assertPrivateStore("Seal",directory,"v2-identity.pem.owner-stopped");
+      throw error;
+    }
+    process.stdout.write(JSON.stringify({local:"started",cloud:"resume_pending_signed_WSS"})+"\n");
     return;
   }
   if (options.action === "upgrade" || options.action === "rollback") {
@@ -472,6 +556,22 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     assertPrivateStore("Seal", directory, "v2-identity.pem.device-id");
     assertPrivateStore("Check", directory);
   }
+  // Logon restart and a prior-version task can never silently bypass owner STOP.
+  if (await hasFile(ownerStoppedFile)) {
+    assertPrivateStore("Check", directory, "v2-identity.pem.owner-stopped");
+    if ((await readFile(ownerStoppedFile,"utf8"))!=="stopped\n")
+      throw Error("Invalid persisted owner STOP intent.");
+    recordWindowsEvent(directory,"owner_stopped");
+    return;
+  }
+  // Only an explicit permanent mode receives the local upgrade control.
+  // Temporary foreground Agents and unverified legacy mode fail closed.
+  const upgradeModePath = keyPath + ".install-mode";
+  let enableLocalUpgrade = false;
+  if (await hasFile(upgradeModePath)) {
+    assertPrivateStore("Check", directory, "v2-identity.pem.install-mode");
+    enableLocalUpgrade = (await readFile(upgradeModePath,"utf8")) === "permanent\n";
+  }
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.on("SIGINT", abort);
@@ -490,6 +590,7 @@ export async function runWindowsAgent(argv: string[]): Promise<void> {
     assertPrivateStore("Check", directory);
     await maintainAuthenticatedDeviceSession(options.endpoint!, keyPath, controller.signal, {
       receiptDirectory,
+      enableLocalUpgrade,
       onState: state => {
         recordWindowsEvent(directory, state);
         process.stderr.write(JSON.stringify({

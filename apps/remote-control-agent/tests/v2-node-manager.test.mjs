@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { dispatchLocalManager, localManagerInventory, localManagerStatus, runInteractiveLocalManager, safeManagerCliFailure } from "../scripts/manage-v2.mjs";
+import { dispatchLocalManager, localManagerInventory, localManagerStatus, runInteractiveLocalManager, launchUnattendedLinuxUpgrade, safeManagerCliFailure } from "../scripts/manage-v2.mjs";
 
 const source=fileURLToPath(new URL("../scripts/manage-v2.mjs",import.meta.url));
 const UUID="ea3b5d4f-e35c-4425-84d1-fa16d25e2efe";
@@ -305,4 +305,129 @@ test("installed rca shell shim executes the bundled Node, not a host Node",()=>{
     assert.equal(out.stdout.trim(),"bundled:version:node-options=unset");
     assert.equal(readFileSync(f.receipts,"utf8"),"SIMULATED_RECEIPT_KEEP");
   }finally{cleanup(f);}
+});
+
+test('Linux/WSL2 owner Stop survives offline cloud failure and Start reconciles signed intent without re-pair',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key retained',{mode:0o600});
+  const events=[],tty={isTTY:true,write(){}};
+  let available=false;
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+   stdin:tty,stdout:tty,
+   invokeService:(_bin,args,options)=>{
+     events.push(args[1]);
+     assert.equal(options.timeout,args[1]==='stop'?25000:12000,
+       'owner Stop must outwait the 15s systemd stop deadline');
+     return {status:0};
+   },
+   signedIntent:async(_origin,_key,action)=>{
+    events.push('cloud:'+action);
+    if(!available)throw Error('network unavailable');
+    return action==='stop'?{status:'stopped',idle_expires_at:9999999999999}:
+     {status:'resume_pending',idle_expires_at:9999999999999};
+   }};
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  assert.equal(await runInteractiveLocalManager(['stop'],opts),0);
+  assert.deepEqual(events,['cloud:stop','stop']);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+  writeFileSync(marker,'STOPPED\n');
+  await assert.rejects(runInteractiveLocalManager(['upgrade'],opts),/Owner Stop marker content/);
+  writeFileSync(marker,'stopped\n');
+  await assert.rejects(runInteractiveLocalManager(['start'],opts),/network unavailable/);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  available=true;
+  assert.equal(await runInteractiveLocalManager(['start'],opts),0);
+  assert.deepEqual(events.slice(-3),['cloud:stop','cloud:resume','start']);
+  assert.equal(await import('node:fs').then(fs=>fs.existsSync(marker)),false);
+  assert.equal(readFileSync(path.join(f.ids,'v2-identity.pem.device-id'),'utf8'),UUID);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});
+
+test('owner Stop/Start invokes installed systemctl without optional test-only invokeService',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key retained',{mode:0o600});
+  const actions=[],tty={isTTY:true,write(){}};
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+    stdin:tty,stdout:tty,
+    // Deliberately omit invokeService: production does not inject this test hook.
+    invoke:(bin,args,options)=>{
+      assert.equal(bin,'systemctl');
+      assert.deepEqual([args[0],args[2]],['--user','remote-control-agent.service']);
+      assert.equal(options.timeout,args[1]==='stop'?25000:12000);
+      actions.push(args[1]);
+      return {status:0};
+    },
+    signedIntent:async(_origin,_key,action)=>{
+      actions.push('cloud:'+action);
+      return action==='stop'?{status:'stopped',idle_expires_at:9999999999999}:
+        {status:'resume_pending',idle_expires_at:9999999999999};
+    }};
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  assert.equal(await runInteractiveLocalManager(['stop'],opts),0);
+  assert.equal(readFileSync(marker,'utf8'),'stopped\n');
+  assert.equal(await runInteractiveLocalManager(['start'],opts),0);
+  assert.deepEqual(actions,['cloud:stop','stop','cloud:stop','cloud:resume','start']);
+  assert.equal((await import('node:fs')).existsSync(marker),false);
+  assert.equal(readFileSync(path.join(f.ids,'v2-identity.pem.device-id'),'utf8'),UUID);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});
+
+test('owner STOP state rejects tampered symlink and no owner terminal',async()=>{
+ const f=fixture();
+ try{
+  writeFileSync(path.join(f.ids,'v2-identity.pem'),'key',{mode:0o600});
+  const tty={isTTY:true,write(){}};
+  const opts={home:f.home,inventory:()=>localManagerInventory({home:f.home,source:f.manager}),
+   stdin:tty,stdout:tty,signedIntent:async()=>{throw Error('cannot authorize');},
+   invokeService:()=>({status:0})};
+  await assert.rejects(runInteractiveLocalManager(['stop'],{...opts,stdin:{isTTY:false}}),/real terminal/);
+  const marker=path.join(f.ids,'v2-identity.pem.owner-stopped');
+  symlinkSync('/etc/passwd',marker);
+  await assert.rejects(runInteractiveLocalManager(['start'],opts),/Untrusted local managed path/);
+  assert.equal(readFileSync(f.receipts,'utf8'),'SIMULATED_RECEIPT_KEEP');
+ }finally{cleanup(f);}
+});
+
+test("remote upgrade uses a detached worker instead of in-process switching", async()=>{
+ const f=fixture();
+ try {
+  const output={isTTY:false,write:()=>{}};
+  const options={inventory:()=>({unit:"known",ids:{permanent:UUID},info:{upgrade_profile:"paired-full-v1"},root:f.root}),
+   home:f.home,stdin:{isTTY:false},stdout:output,
+   launchDetachedUpgrade:({home,stdout})=>{
+    assert.equal(home,f.home);assert.equal(stdout,output);return 0;
+   }};
+  assert.equal(await runInteractiveLocalManager(["upgrade","--unattended"],options),0);
+  await assert.rejects(runInteractiveLocalManager(["upgrade","--unattended-worker"],options),/Use rca upgrade/);
+ } finally {cleanup(f);}
+});
+const detachedLinux=process.platform==="linux"&&process.getuid?.()!==0?test:test.skip;
+detachedLinux("detached CLI constrains systemd unit, user and owner stop",()=>{
+ const f=fixture();
+ try {
+  const calls=[];
+  const inv={unit:readFileSync(f.unit,"utf8"),unitName:"remote-control-agent.service",
+    ids:{permanent:UUID},info:{upgrade_profile:"paired-full-v1"},root:f.root};
+  const id="bf27690f-a423-4b75-8da6-18dad2a687ea";
+  const invoke=(command,args)=>{calls.push({command,args});return {status:0};};
+  const stdout={write:message=>calls.push({message})};
+  assert.equal(launchUnattendedLinuxUpgrade({inventory:()=>inv,home:f.home,
+    invoke,stdout,operationId:id}),0);
+  assert.equal(calls[0].command,"/usr/bin/systemctl");
+  assert.equal(calls[1].command,"/usr/bin/systemd-run");
+  assert(calls[1].args.includes("--unit=rca-upgrade-"+id.replaceAll("-","")));
+  assert(calls[1].args.includes("--property=NoNewPrivileges=yes"));
+  assert.deepEqual(calls[1].args.slice(-4),
+    [path.join(f.root,"bin/node"),f.manager,"upgrade","--unattended-worker"]);
+  assert.equal(JSON.parse(calls[2].message).status,"launched");
+  writeFileSync(path.join(f.ids,"v2-identity.pem.owner-stopped"),"stopped\n",{mode:0o600});
+  assert.throws(()=>launchUnattendedLinuxUpgrade({inventory:()=>inv,
+    home:f.home,invoke,stdout,operationId:id}),/Owner-stopped/);
+  assert.equal(calls.length,3);
+ }finally{cleanup(f);}
 });

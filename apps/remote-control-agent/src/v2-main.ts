@@ -26,6 +26,21 @@ if (!endpoint || process.platform !== "linux") {
     }
     // Only the signed device identity authenticates outbound HTTPS/WSS.
     // No Portal, Cloudflare, v1 device, or per-machine bearer token is needed.
+    // Private owner STOP survives systemd restarts and Agent upgrades. Invalid
+    // markers fail closed; do not ever treat network loss as local STOP.
+    let deliberateOff = false;
+    try {
+      const marker = await lstat(keyPath + ".owner-stopped");
+      if (!marker.isFile() || marker.isSymbolicLink() || marker.nlink !== 1 ||
+          marker.uid !== process.getuid?.() || (marker.mode & 0o777) !== 0o600)
+        throw Error("Unsafe owner STOP marker.");
+      deliberateOff = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (deliberateOff) {
+      log("owner_stopped");
+    } else {
     process.umask(0o077);
     const controller = new AbortController();
     for (const name of ["SIGINT", "SIGTERM"] as const) {
@@ -44,6 +59,7 @@ if (!endpoint || process.platform !== "linux") {
     // not an authentication-hammer loop. Other transient faults reconnect inside
     // maintainAuthenticatedDeviceSession with bounded backoff.
     if (rejected) log("identity_rejected");
+    }
   } catch {
     log("startup_unavailable");
     process.exitCode = 1;

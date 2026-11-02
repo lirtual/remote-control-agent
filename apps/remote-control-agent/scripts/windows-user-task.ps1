@@ -2,7 +2,7 @@
 # Does not create an elevated service, use a password or touch cloud grants.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory=$true)][ValidateSet('Enable','Start','Stop','Disable','Status','Switch')][string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet('Enable','Start','Stop','Disable','Status','Switch','Endpoint')][string]$Action,
   [string]$Endpoint, [string]$Entry, [string]$Node,
   [string]$Version, [ValidateSet('Upgrade','Rollback')][string]$Direction,
   [switch]$CIInjectFailure
@@ -86,6 +86,15 @@ if ($Action -eq 'Status') {
   '{"installed":true,"running":' + $running.ToString().ToLowerInvariant() + ',"autostart":"at-user-logon"}'
   exit 0
 }
+if ($Action -eq 'Endpoint') {
+  Check-Existing
+  $args = [string]$task.Actions[0].Arguments
+  if ($args -cnotmatch '^"[^"]+" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"$') {
+    throw 'Managed endpoint cannot be verified'
+  }
+  $Matches[1]
+  exit 0
+}
 if ($Action -eq 'Enable') {
   if ($task) { throw 'Cannot overwrite an existing scheduled task' }
   if (-not $Node -or -not $Entry -or -not $Endpoint) {
@@ -108,6 +117,33 @@ if ($Action -eq 'Enable') {
   exit 0
 }
 
+
+function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
+  if ($action -cnotin @('freeze','verify-frozen','release')) { throw 'Invalid upgrade action' }
+  $canonical = $keyPath.Replace('/','\').ToLowerInvariant()
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = [BitConverter]::ToString($sha.ComputeHash(
+      [Text.Encoding]::UTF8.GetBytes($canonical))).Replace('-','').ToLowerInvariant().Substring(0,32)
+  } finally { $sha.Dispose() }
+  $pipe = [IO.Pipes.NamedPipeClientStream]::new(
+    '.', 'rca-upgrade-' + $hash, [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::None)
+  try {
+    $pipe.Connect(10000)
+    # The protocol accepts only ASCII action names and exact LF.
+    # StreamWriter with Encoding.UTF8 would prepend a BOM to the first frame.
+    $requestBytes = [Text.Encoding]::ASCII.GetBytes($action + "`n")
+    $pipe.Write($requestBytes,0,$requestBytes.Length)
+    $pipe.Flush()
+    $reader = [IO.StreamReader]::new($pipe,[Text.Encoding]::ASCII,$false,1024,$true)
+    try {
+      $answer = $reader.ReadLine()
+      $expected = if ($action -ceq 'release') { 'released' } else { 'ready' }
+      if ($answer -cne $expected) { throw 'Agent is busy, absent or not frozen' }
+    } finally { $reader.Dispose() }
+  } finally { $pipe.Dispose() }
+}
+
 if ($Action -eq 'Switch') {
   # Transactional local program switch. Both versions are installed and
   # verified before touching the sole same-owner logon task.
@@ -115,6 +151,10 @@ if ($Action -eq 'Switch') {
   if ($Endpoint -or $Node -or $Entry -or
       $Version -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$' -or
       $Direction -notin @('Upgrade','Rollback')) { throw 'Untrusted switch arguments' }
+  $marker = [IO.Path]::Combine($env:LOCALAPPDATA,'mcp-workers','remote-control','v2-identity.pem.owner-stopped')
+  if ($Direction -eq 'Rollback' -and (Test-Path -LiteralPath $marker)) {
+    throw 'Owner-stopped identity cannot roll back to an unchecked runtime'
+  }
   $oldAction = $task.Actions[0]
   $oldArguments = [string]$oldAction.Arguments
   if ($oldArguments -cnotmatch '^"([^"]+)" run --endpoint "(https://[A-Za-z0-9.-]+(?::[0-9]+)?/)"$') {
@@ -176,6 +216,12 @@ if ($Action -eq 'Switch') {
   $newArgs = '"' + $nextEntry + '" run --endpoint "' + $originalEndpoint + '"'
   $newAction = New-ScheduledTaskAction -Execute $nextActionExe -Argument $newArgs -WorkingDirectory ([IO.Path]::GetDirectoryName($nextEntry))
   $wasRunning = ($task.State -eq 'Running')
+  if ($Direction -eq 'Upgrade' -and
+      $env:RCA_UNATTENDED_UPGRADE -ceq 'owner-approved-task-v1') {
+    $identityFile = [IO.Path]::Combine($env:LOCALAPPDATA,
+      'mcp-workers','remote-control','v2-identity.pem')
+    Invoke-AgentUpgradeFreeze $identityFile 'verify-frozen'
+  }
   $changed = $false
   try {
     if ($wasRunning) { Stop-ScheduledTask -TaskName $name -ErrorAction Stop }
