@@ -82,10 +82,14 @@ test("#658 native entrypoint honors realpath alias (/var -> /private/var) rather
 test("#658 explicit temporary retry uses existing identity and never silently resumes or rotates", () => {
   const endpoint = ["--endpoint","https://rca.example.test/"];
   assert.deepEqual(parseTemporaryMacArgs(endpoint), {
-    endpoint:"https://rca.example.test/", name:undefined, resume:false, retryPairing:false,
+    endpoint:"https://rca.example.test/", name:undefined, resume:false, retryPairing:false, bootstrapSelected:false,
   });
   assert.equal(parseTemporaryMacArgs([...endpoint,"--retry-pairing"]).retryPairing,true);
   assert.equal(parseTemporaryMacArgs([...endpoint,"--resume"]).resume,true);
+  assert.equal(parseTemporaryMacArgs([...endpoint,"--bootstrap-selected"]).bootstrapSelected,true);
+  for(const flags of [["--bootstrap-selected","--resume"],["--bootstrap-selected","--retry-pairing"],
+    ["--bootstrap-selected","--bootstrap-selected"]])
+    assert.throws(()=>parseTemporaryMacArgs([...endpoint,...flags]),/Invalid macOS temporary/);
   for (const flags of [
     ["--retry-pairing","--resume"],["--resume","--retry-pairing"],
     ["--retry-pairing","--retry-pairing"],["--resume","--resume"],

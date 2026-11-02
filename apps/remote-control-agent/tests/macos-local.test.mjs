@@ -77,6 +77,29 @@ async function fixture(t){
     commands:[],invoke:(command,args)=>{assert.equal(command,"/bin/launchctl");
       const entry=args.join(" ");return {status:0,stdout:entry};}};
 }
+test("#662 temporary bootstrap reuses foreground runtime without LaunchAgent writes",{skip:!native},async t=>{
+  const f=await fixture(t), calls=[];
+  const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    terminal:()=>true,runTemporary:(file,args,settings)=>{
+      calls.push({file,args,settings});return {status:0};}};
+  const result=await localMacAction("temporary",opts);
+  assert.equal(result.status,"temporary_session_ended");
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].file,path.join(bundle,"bin/node"));
+  assert.deepEqual(calls[0].args,[
+    path.join(bundle,"apps/remote-control-agent/src/macos-temporary.js"),
+    "--endpoint",ENDPOINT,"--bootstrap-selected"]);
+  assert.deepEqual(calls[0].settings,{stdio:"inherit"});
+  await assert.rejects(readFile(path.join(f.home,
+    "Library/LaunchAgents/org.mcp-workers.remote-control-agent.plist")),{code:"ENOENT"});
+  await assert.rejects(localMacAction("temporary",{...opts,sourceSha:"b".repeat(40)}),
+    /Unexpected source commit/);
+  await assert.rejects(localMacAction("temporary",{...opts,terminal:()=>false}),
+    /Owner terminal required/);
+  await assert.rejects(localMacAction("temporary",{...opts,runTemporary:()=>({status:2})}),
+    /without confirmed success/);
+});
+
 test("#660 native offline install → stopped state → upgrade without restart",{
   skip:!native},async t=>{
   const f=await fixture(t);

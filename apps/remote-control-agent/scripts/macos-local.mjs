@@ -151,13 +151,30 @@ async function confirm(question){
 }
 /** Host mutation only after local owner consent and a pinned source candidate. */
 export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,endpoint,
-  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze}={}){
-  if(!["install","upgrade","status","stop","start"].includes(action))
+  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze,
+  runTemporary=spawnSync,terminal=()=>!!(process.stdin.isTTY&&process.stdout.isTTY)}={}){
+  if(!["install","upgrade","status","stop","start","temporary"].includes(action))
     throw Error("Unsupported local action.");
   if(process.platform!=="darwin"||!["arm64","x64"].includes(process.arch)||
     Number.parseInt(os.release(),10)<24||process.getuid?.()===0)
     throw Error("Native unprivileged macOS 15+ ARM64 or x64 required.");
   process.umask(0o077);
+  if(action==="temporary"){
+    // Reuse the signed 24-hour foreground Agent: no LaunchAgent, no service
+    // state mutation and no extra permanent identity or registration.
+    if(!terminal())throw Error("Owner terminal required for temporary pairing.");
+    if(!bundle||!sourceSha||!endpoint)throw Error("Reviewed temporary candidate required.");
+    const origin=verifiedEndpoint(endpoint);
+    await checkCandidate(bundle,sourceSha);
+    const node=path.join(bundle,"bin/node");
+    const entry=path.join(bundle,"apps/remote-control-agent/src/macos-temporary.js");
+    await checked(entry,{mode:0o600});
+    const result=runTemporary(node,[entry,"--endpoint",origin,"--bootstrap-selected"],
+      {stdio:"inherit"});
+    if(result.error||result.signal||result.status!==0)
+      throw Error("Temporary Agent ended without confirmed success.");
+    return {status:"temporary_session_ended"};
+  }
   await checked(home,{dir:true,privateOnly:false});
   const identity=await directories(home,ROOT);
   const receipts=await directories(home,[".local","state","mcp-workers","remote-control-agent"]);

@@ -36,25 +36,28 @@ export function requireNativeMac(
   }
 }
 
-export function parseTemporaryMacArgs(argv: string[]): { endpoint: string; name?: string; resume: boolean; retryPairing: boolean } {
+export function parseTemporaryMacArgs(argv: string[]): { endpoint: string; name?: string; resume: boolean; retryPairing: boolean; bootstrapSelected: boolean } {
   let endpoint: string | undefined;
   let name: string | undefined;
   let resume = false;
   let retryPairing = false;
+  let bootstrapSelected = false;
   for (let i=0; i<argv.length; i++) {
     if (argv[i] === "--resume" && !resume && !retryPairing) resume=true;
     else if (argv[i] === "--retry-pairing" && !retryPairing && !resume) retryPairing=true;
+    else if (argv[i] === "--bootstrap-selected" && !bootstrapSelected) bootstrapSelected=true;
     else if (argv[i] === "--endpoint" && !endpoint && argv[i+1]) endpoint=argv[++i];
     else if (argv[i] === "--name" && !name && argv[i+1]) name=argv[++i];
     else throw new Error("Invalid macOS temporary preview arguments.");
   }
+  if (bootstrapSelected && (resume || retryPairing)) throw Error("Invalid macOS temporary bootstrap options.");
   if (!endpoint) throw Error("Specify the existing trusted HTTPS Agent endpoint.");
   const base = new URL(endpoint);
   if (base.protocol !== "https:" || base.username || base.password ||
       base.search || base.hash || base.pathname !== "/" || !base.hostname ||
       (base.port && base.port !== "443")) throw Error("Expected a trusted HTTPS origin.");
   if (name !== undefined) selectDeviceLabel(name, "");
-  return {endpoint:base.origin+"/",name,resume,retryPairing};
+  return {endpoint:base.origin+"/",name,resume,retryPairing,bootstrapSelected};
 }
 
 export async function privateDirectory(home: string, segments: string[]): Promise<string> {
@@ -103,7 +106,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
   requireNativeMac();
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw Error("Temporary pairing requires an interactive owner terminal.");
-  const {endpoint,name,resume,retryPairing}=parseTemporaryMacArgs(argv);
+  const {endpoint,name,resume,retryPairing,bootstrapSelected}=parseTemporaryMacArgs(argv);
   process.umask(0o077);
   const controller=new AbortController();
   const cancel=()=>controller.abort();
@@ -129,7 +132,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
       process.stdout.write(retryPairing
         ? "Explicit pairing retry: old pending codes become invalid; the same private key is retained.\n"
         : "Unpublished native macOS preview: only Temporary (24h) is available.\n");
-      if (await promptInstallMode()!=="temporary")
+      if (!bootstrapSelected && await promptInstallMode()!=="temporary")
         throw Error("Permanent macOS mode is not implemented by this candidate.");
       const enrollment=await beginDeviceEnrollment(
         selectDeviceLabel(name??"",os.hostname()),endpoint,key,fetch,retryPairing,"temporary");

@@ -16,9 +16,9 @@ if [ "$major" -lt 15 ] || [ "$(id -u)" -eq 0 ]; then
   echo 'macOS 15+ under a non-root login required.' >&2; exit 1
 fi
 [ -t 0 ] && [ -t 1 ] || { echo 'Real owner terminal required.' >&2; exit 1; }
-[ "$#" -eq 9 ] || { echo 'Usage: sh macos-local.sh install|upgrade --archive ABS --sha256 SHA256 --source-sha COMMIT --endpoint HTTPS_ROOT' >&2; exit 1; }
+[ "$#" -eq 9 ] || { echo 'Usage: sh macos-local.sh install|upgrade|temporary --archive ABS --sha256 SHA256 --source-sha COMMIT --endpoint HTTPS_ROOT' >&2; exit 1; }
 action="$1"; shift
-case "$action" in install|upgrade) ;; *) exit 1;; esac
+case "$action" in install|upgrade|temporary) ;; *) exit 1;; esac
 [ "$1" = '--archive' ] && [ "$3" = '--sha256' ] && [ "$5" = '--source-sha' ] && [ "$7" = '--endpoint' ] || exit 1
 archive="$2"; digest="$4"; source="$6"; endpoint="$8"
 case "$archive" in /*) ;; *) exit 1;; esac
