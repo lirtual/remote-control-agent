@@ -5,7 +5,7 @@ import {spawnSync} from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {acceptsOwnerConfirmation,candidateName,checked,localMacAction,ownedWrite,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
+import {acceptsOwnerConfirmation,awaitLaunchctlUnregistered,candidateName,checked,launchctlServiceState,localMacAction,ownedWrite,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
   "../scripts/macos-local.mjs";
 import {parsePermanentMacArgs} from "../src/macos-permanent.ts";
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -47,6 +47,30 @@ test("#660 launch locations permit owner 0755 but not group/other writes",async 
     await assert.rejects(ownedWrite(file,"second",true,0o600,false),/Unsafe owner/);
     assert.equal(await readFile(file,"utf8"),"first");
   }
+});
+
+test("#660 launchctl check distinguishes a missing service from an unknown failure",()=>{
+  const absent={status:113,stderr:'Bad request. Could not find service "rca"'};
+  assert.equal(launchctlServiceState('gui/501/rca',()=>absent),'absent');
+  assert.equal(launchctlServiceState('gui/501/rca',()=>({status:0})),'present');
+  assert.equal(launchctlServiceState('gui/501/rca',()=>({status:5,stderr:'EIO'})),'unknown');
+});
+
+test("#660 stop waits for two observed launchd deregistration checks",async()=>{
+  let reads=0,waits=0;
+  const invoke=(command,args)=>{
+    assert.equal(args[0],'print');
+    reads++;
+    return reads<4?{status:0}:{status:113,stderr:'Could not find service'};
+  };
+  assert.equal(await awaitLaunchctlUnregistered('gui/501/rca',invoke,
+    async()=>{waits++;}),true);
+  assert.equal(reads,5);
+  assert.equal(waits,4);
+  await assert.rejects(awaitLaunchctlUnregistered('gui/501/rca',
+    ()=>({status:5}),async()=>{}),/state unknown/);
+  assert.equal(await awaitLaunchctlUnregistered('gui/501/rca',
+    ()=>({status:0}),async()=>{}),false);
 });
 
 test("#660 owner-local rca executable quotes paths and refuses unverified commands",async t=>{
@@ -176,8 +200,12 @@ test("#660 native offline install → stopped state → upgrade without restart"
     "raw, unpinned local CLI upgrade must be refused");
   const state=await localMacAction("status",{home:f.home,invoke:f.invoke});
   assert.equal(state.installed,true);
-  await localMacAction("stop",{...opts,invoke:(command,args)=>{
-    f.commands.push(args[0]);return {status:0};}});
+  let unloaded=false;
+  await localMacAction("stop",{...opts,pauseLaunchd:async()=>{},invoke:(command,args)=>{
+    f.commands.push(args[0]);
+    if(args[0]==="bootout")unloaded=true;
+    return args[0]==="print"&&unloaded
+      ?{status:113,stderr:"Could not find service"}:{status:0};}});
   const alt=path.join(f.root,"second");
   await cp(bundle,alt,{recursive:true});
   const manifestFile=path.join(alt,"bundle.json");
@@ -309,11 +337,38 @@ test("#660 native suspicious LaunchAgent symlink refused before any mutation",{
 });
 
 
+test('#660 native failed bootstrap records exit code and preserves STOP and key',{
+  skip:!native},async t=>{
+  const f=await fixture(t),identity=path.join(f.identity,'v2-identity.pem.device-id');
+  const device=await readFile(identity,'utf8');
+  let registered=false,bootstraps=0;
+  const invoke=(command,args)=>{
+    if(args[0]==='print')return registered?{status:0}
+      :{status:113,stderr:'Could not find service'};
+    if(args[0]==='bootstrap'){
+      if(++bootstraps===1){registered=true;return {status:0};}
+      return {status:5,stderr:'Bootstrap failed: 5: Input/output error'};
+    }
+    if(args[0]==='bootout'){registered=false;return {status:0};}
+    return {status:0};
+  };
+  const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    invoke,ask:async()=>true,online:async()=>true,pauseLaunchd:async()=>{},
+    ownerIntent:async(action)=>({status:action==='resume'?'resume_pending':'stopped'})};
+  await localMacAction('install',opts);
+  assert.equal((await localMacAction('stop',opts)).status,'intentionally_stopped');
+  await assert.rejects(localMacAction('start',opts),/bootstrap failed \(exit=5\)/);
+  assert.equal(await readFile(path.join(f.identity,'macos/stopped'),'utf8'),'stopped\n');
+  assert.equal(await readFile(identity,'utf8'),device);
+  assert.equal(registered,false);
+});
+
 test('#666 native owner Stop/Resume preserves same identity and demands signed activation',{
  skip:!native},async t=>{
  const f=await fixture(t),calls=[];
  const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
-  invoke:(command,args)=>{calls.push('launch:'+args[0]);return {status:args[0]==='print'?1:0}},
+   invoke:(command,args)=>{calls.push('launch:'+args[0]);return args[0]==='print'
+     ?{status:113,stderr:'Could not find service'}:{status:0}},
   ask:async()=>true,online:async()=>true,
   ownerIntent:async(action)=>{calls.push('cloud:'+action);
    return {status:action==='stop'?'stopped':'resume_pending',idle_expires_at:Date.now()+14*86_400_000}}};

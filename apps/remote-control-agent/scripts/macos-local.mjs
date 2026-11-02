@@ -99,6 +99,31 @@ async function checkCandidate(bundle,sha){
 }
 const run=(command,args)=>spawnSync(command,args,{encoding:"utf8",timeout:10000,maxBuffer:65536});
 const launch=(args,invoke)=>{const r=invoke("/bin/launchctl",args);return !r.error&&r.status===0;};
+// print can fail for reasons other than deregistration. Only the observed
+// launchd "not found" result proves this user service has been removed.
+export function launchctlServiceState(service,invoke){
+  const r=invoke("/bin/launchctl",["print",service]);
+  if(!r.error&&r.status===0)return "present";
+  if(!r.error&&r.status===113&&/Could not find service/.test(String(r.stderr??"")))
+    return "absent";
+  return "unknown";
+}
+// bootout may acknowledge while launchd is still asynchronously removing its
+// registration. Two read-only absent observations, bounded to 10 s; never
+// repeat bootstrap blindly, and never confuse an unknown state with absence.
+export async function awaitLaunchctlUnregistered(service,invoke,
+  pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))){
+  let absent=0;
+  for(let i=0;i<40;i++){
+    const state=launchctlServiceState(service,invoke);
+    if(state==="unknown")throw Error("LaunchAgent deregistration state unknown.");
+    if(state==="absent"){
+      if(++absent===2)return true;
+    }else absent=0;
+    if(i<39)await pause(250);
+  }
+  return false;
+}
 export async function freeze(key,command="freeze"){
   const socketPath=path.join(path.dirname(key),"upgrade.sock");
   await checked(socketPath,{optional:false}).catch(async e=>{
@@ -171,7 +196,8 @@ async function confirm(question){
 /** Host mutation only after local owner consent and a pinned source candidate. */
 export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,endpoint,
   invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze,ownerIntent,
-  runTemporary=spawnSync,terminal=()=>!!(process.stdin.isTTY&&process.stdout.isTTY)}={}){
+  runTemporary=spawnSync,terminal=()=>!!(process.stdin.isTTY&&process.stdout.isTTY),
+  pauseLaunchd=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
   if(!["install","upgrade","status","stop","start","temporary"].includes(action))
     throw Error("Unsupported local action.");
   if(process.platform!=="darwin"||!["arm64","x64"].includes(process.arch)||
@@ -255,24 +281,41 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     await ownedWrite(stopMark,"stopped\n",stopped);
     let cloud="unconfirmed";
     try {await signedIntent('stop');cloud="confirmed";}catch{/* Local OFF still required. */}
-    if(launch(["print",service],invoke)&&!launch(["bootout",service],invoke))
-      throw Error("Service bootout uncertain; owner STOP intent retained.");
+    const serviceState=launchctlServiceState(service,invoke);
+    if(serviceState==="unknown")throw Error("LaunchAgent state uncertain; owner STOP retained.");
+    if(serviceState==="present"){
+      if(!launch(["bootout",service],invoke))
+        throw Error("Service bootout uncertain; owner STOP intent retained.");
+      if(!await awaitLaunchctlUnregistered(service,invoke,pauseLaunchd))
+        throw Error("LaunchAgent removal pending; owner STOP intent retained.");
+    }
     return {status:"intentionally_stopped",cloud};
   }
   if(action==="start"){
     if(!current||!stopped||!await approved(key))throw Error("No deliberately stopped approved LaunchAgent.");
     if((await readFile(stopMark,"utf8"))!=="stopped\n")throw Error("Unsafe persisted owner STOP.");
     if(!await ask("Resume the previously stopped LaunchAgent?"))throw Error("Owner declined.");
+    if(launchctlServiceState(service,invoke)!=="absent")
+      throw Error("LaunchAgent registration not confirmed absent; owner STOP retained.");
     await signedIntent('stop'); // reconcile offline Stop first without extending cloud deadline
     const permitted=await signedIntent('resume');
     if(permitted.status!=="resume_pending")throw Error("Signed cloud Resume not authorized.");
     await rm(stopMark);
     try{
-      if(!launch(["bootstrap",domain,plist],invoke))throw Error("LaunchAgent bootstrap failed.");
+      const boot=invoke("/bin/launchctl",["bootstrap",domain,plist]);
+      if(boot.error||boot.status!==0)
+        throw Error("LaunchAgent bootstrap failed (exit="+
+          (Number.isInteger(boot.status)?boot.status:"unknown")+").");
       if(!await online(identity,current.generation))throw Error("Signed WSS activation unconfirmed.");
     }catch(error){
-      if(!launch(["bootout",service],invoke))throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      const state=launchctlServiceState(service,invoke);
+      // Retain the user's OFF request even if launchd cleanup is uncertain.
       await ownedWrite(stopMark,"stopped\n");
+      if(state==="unknown")throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      if(state==="present"&&!launch(["bootout",service],invoke))
+        throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      if(!await awaitLaunchctlUnregistered(service,invoke,pauseLaunchd))
+        throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
       throw error;
     }
     return {status:"connected_observed",cloud:"signed_WSS_observed"};
