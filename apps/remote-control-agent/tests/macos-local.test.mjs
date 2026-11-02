@@ -5,7 +5,7 @@ import {spawnSync} from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {candidateName,checked,localMacAction,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
+import {acceptsOwnerConfirmation,candidateName,checked,localMacAction,ownedWrite,ownerCliText,parsePlist,plistText,verifiedEndpoint} from
   "../scripts/macos-local.mjs";
 import {parsePermanentMacArgs} from "../src/macos-permanent.ts";
 const ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -22,6 +22,31 @@ test("#661 macOS owner installer dispatch must not silently skip a symlinked/ali
     encoding:"utf8",timeout:5000});
   assert.equal(r.status,1,"aliased executable must actually run the owner action");
   assert.match(r.stderr,/macOS local action blocked: Unsupported local action/);
+});
+
+test("#660 owner confirmation is case-insensitive, empty input denies",()=>{
+  for(const value of ["y","Y","yes","YES"," Yes "])
+    assert.equal(acceptsOwnerConfirmation(value),true);
+  for(const value of ["","n","NO","maybe","approve","yess"])
+    assert.equal(acceptsOwnerConfirmation(value),false);
+});
+
+test("#660 launch locations permit owner 0755 but not group/other writes",async t=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),"rca-parent-mode-"));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  for(const name of ["LaunchAgents","bin"]){
+    const dir=path.join(root,name);
+    await mkdir(dir,{mode:0o755});
+    await chmod(dir,0o755);
+    const file=path.join(dir,"owned-file");
+    await assert.rejects(ownedWrite(file,"first",false,0o600),/Unsafe owner/);
+    await ownedWrite(file,"first",false,0o600,false);
+    assert.equal(await readFile(file,"utf8"),"first");
+    assert.equal((await lstat(file)).mode&0o777,0o600);
+    await chmod(dir,0o777);
+    await assert.rejects(ownedWrite(file,"second",true,0o600,false),/Unsafe owner/);
+    assert.equal(await readFile(file,"utf8"),"first");
+  }
 });
 
 test("#660 owner-local rca executable quotes paths and refuses unverified commands",async t=>{
@@ -173,6 +198,24 @@ test("#660 native offline install → stopped state → upgrade without restart"
   assert.equal((await readFile(path.join(f.identity,"v2-identity.pem.device-id"),"utf8")).trim(),ID);
 });
 
+test("#660 first install bootstrap refusal preserves approved device and staged bundle",{
+  skip:!native},async t=>{
+  const f=await fixture(t);
+  const opts={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
+    invoke:(command,args)=>({status:args[0]==="bootstrap"?1:0}),
+    ask:async()=>true,online:async()=>true};
+  const keyId=path.join(f.identity,"v2-identity.pem.device-id");
+  const previous=await readFile(keyId,"utf8");
+  await assert.rejects(localMacAction("install",opts),/Install blocked at launchagent-bootstrap/);
+  assert.equal(await readFile(keyId,"utf8"),previous);
+  for(const relative of ["Library/LaunchAgents/org.mcp-workers.remote-control-agent.plist",
+    ".local/bin/rca",".local/share/mcp-workers/remote-control/macos/switch.json"])
+    await assert.rejects(readFile(path.join(f.home,relative)),{code:"ENOENT"});
+  const staged=path.join(f.identity,"macos/programs",f.version+"-darwin-"+process.arch);
+  assert.equal((await lstat(staged)).isDirectory(),true);
+  await assert.rejects(localMacAction("install",opts),/already staged; never overwrite/);
+});
+
 test("#660 native upgrade busy/activation failure retains identity and rolls back",{
   skip:!native},async t=>{
   const f=await fixture(t);
@@ -211,6 +254,9 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
   const first={home:f.home,bundle,sourceSha:f.sourceSha,endpoint:ENDPOINT,
     invoke:mock,ask:async()=>true,online:async()=>true};
   await localMacAction("install",first);
+  // Verify real-world 0755 parent modes do not block rollback restoration.
+  await chmod(path.join(f.home,"Library/LaunchAgents"),0o755);
+  await chmod(path.join(f.home,".local/bin"),0o755);
   const plist=path.join(f.home,"Library/LaunchAgents/org.mcp-workers.remote-control-agent.plist");
   const before=await readFile(plist,"utf8");
   const cli=path.join(f.home,".local/bin/rca");
@@ -225,7 +271,7 @@ test("#660 native activation failure restores prior reviewed LaunchAgent and ide
   await assert.rejects(localMacAction("upgrade",{
     ...first,bundle:alt,freezeAgent:async()=> "ready",
     online:async()=>++onlineCalls===2,
-  }),/Upgrade blocked; previous service restored/);
+  }),/Upgrade blocked at signed-wss-activation/);
   assert.match(actions.join(","),/bootout,bootstrap,bootout,bootstrap/);
   assert.equal(await readFile(plist,"utf8"),before);
   assert.equal(await readFile(cli,"utf8"),beforeCli);

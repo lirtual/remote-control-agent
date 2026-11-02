@@ -118,8 +118,9 @@ export async function freeze(key,command="freeze"){
     socket.on("end",()=>done(null,buffer.trim()));
   });
 }
-async function ownedWrite(file,content,replace=false,mode=0o600){
-  await checked(path.dirname(file),{dir:true});
+export async function ownedWrite(file,content,replace=false,mode=0o600,parentPrivate=true){
+  // Keep sensitive RCA directories private; LaunchAgents/bin only forbid outside writes.
+  await checked(path.dirname(file),{dir:true,privateOnly:parentPrivate});
   if(replace)await checked(file,{mode});
   else if(await statMaybe(file))throw Error("Owned file already exists.");
   const temp=path.join(path.dirname(file),".new-"+randomUUID());
@@ -154,12 +155,17 @@ export async function observeOnline(identity,generation,now=Date.now){
   }
   return false;
 }
+export function acceptsOwnerConfirmation(input){
+  return /^(?:y|yes)$/i.test(input.trim());
+}
 async function confirm(question){
   if(!process.stdin.isTTY||!process.stdout.isTTY)throw Error("Owner terminal required.");
-  process.stdout.write(question+" Enter YES: ");
+  process.stdout.write(question+" Confirm [y/N]: ");
   return await new Promise(resolve=>{
     process.stdin.resume();
-    process.stdin.once("data",data=>{process.stdin.pause();resolve(String(data).trim()==="YES");});
+    process.stdin.once("data",data=>{
+      process.stdin.pause();resolve(acceptsOwnerConfirmation(String(data)));
+    });
   });
 }
 /** Host mutation only after local owner consent and a pinned source candidate. */
@@ -278,7 +284,9 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   if(action==="upgrade"&&!current)throw Error("No existing permanent LaunchAgent.");
   const version=await checkCandidate(bundle,sourceSha);
   const nextRoot=path.join(programs,version);
-  if(await statMaybe(nextRoot))throw Error("Version directory already exists; no overwrite.");
+  if(await statMaybe(nextRoot))throw Error("Reviewed candidate already staged; never overwrite. " +
+    "Inspect existing state and use a separately verified newer candidate; " +
+    "the existing permanent identity and receipts remain unchanged.");
   if(!await ask("Install "+version+" into this personal Mac account?"))throw Error("Owner declined.");
   if(action==="upgrade"&&!await approved(key))
     throw Error("Approved key missing; never automatically re-pair.");
@@ -309,24 +317,32 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     endpoint:bound,generation,
   });
   let journalCreated=false,oldStopped=false,newLoaded=false,cliWritten=false;
+  let failureStage="write-switch-journal";
   try{
     await ownedWrite(journal,JSON.stringify({
       version,previous:old,generation,stopped,phase:"switch_pending"})+"\n");
     journalCreated=true;
     if(active){
+      failureStage="stop-old-service";
       if(!launch(["bootout",service],invoke))throw Error("Old service bootout failed.");
       oldStopped=true;
     }
-    await ownedWrite(plist,next,!!old);
+    failureStage="write-launchagent";
+    await ownedWrite(plist,next,!!old,0o600,false);
+    failureStage="write-endpoint";
     if(!stored)await ownedWrite(endpointFile,bound+"\n");
     if(!stopped){
+      failureStage="launchagent-bootstrap";
       if(!launch(["bootstrap",domain,plist],invoke))
         throw Error("New LaunchAgent bootstrap failed.");
       newLoaded=true;
+      failureStage="signed-wss-activation";
       if(!await online(identity,generation))throw Error("New signed WSS activation unconfirmed.");
     }
-    await ownedWrite(cli,ownerCliText(nextRoot),previousCli!==null,0o700);
+    failureStage="write-cli";
+    await ownedWrite(cli,ownerCliText(nextRoot),previousCli!==null,0o700,false);
     cliWritten=true;
+    failureStage="finalize-journal";
     await rm(journal);
     return {status:stopped?"stopped_preserved":"connected_observed",version,generation,
       cli};
@@ -337,12 +353,12 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     if(!journalCreated)throw error;
     try{
       if(cliWritten){
-        if(previousCli!==null)await ownedWrite(cli,previousCli,true,0o700);
+        if(previousCli!==null)await ownedWrite(cli,previousCli,true,0o700,false);
         else await rm(cli);
       }
       if(newLoaded&&!launch(["bootout",service],invoke))
         throw Error("New service cannot be stopped.");
-      if(old)await ownedWrite(plist,old,true);
+      if(old)await ownedWrite(plist,old,true,0o600,false);
       else if(await checked(plist,{optional:true,mode:0o600}))await rm(plist);
       if(oldStopped){
         if(!launch(["bootstrap",domain,plist],invoke)||
@@ -355,7 +371,13 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     }catch{
       throw Error("UNKNOWN rollback: journal, key and receipts retained for manual inspection.");
     }
-    throw Error("Upgrade blocked; previous service restored where verified.");
+    // Do not expose arbitrary OS exception text that may include sensitive paths.
+    const reason=error instanceof Error&&error.message==="Unsafe owner, type or mode."
+      ?"unsafe-owner-or-mode":"operation-failed";
+    const recovery=old?"prior LaunchAgent restored where verified"
+      :"new LaunchAgent configuration rolled back";
+    throw Error((action==="install"?"Install":"Upgrade")+" blocked at "+failureStage+
+      " ("+reason+"); "+recovery+". Identity, receipts and staged candidate retained.");
   }
 }
 async function main(){
