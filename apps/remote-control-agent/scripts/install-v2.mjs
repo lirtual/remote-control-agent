@@ -312,6 +312,51 @@ export async function assertSafePortableUpgrade(unit, home, newManifestPath) {
       path.basename(previousRoot)==="v0.1.11-linux-"+process.arch+"-glibc"};
 }
 
+/** Owner Stop is local intent, never inferred from network/socket failure. */
+export async function inspectOwnerStoppedUpgrade(keyPath, {invoke = run, expected} = {}) {
+  const marker = keyPath + ".owner-stopped";
+  const meta = await exists(marker);
+  if (!meta && !expected) return null; // Online upgrades still require their original gate.
+  const directory = await lstat(path.dirname(marker));
+  if (!directory.isDirectory() || directory.isSymbolicLink() ||
+      directory.uid !== process.getuid() || (directory.mode & 0o077) !== 0)
+    throw Error("Unsafe Owner Stop directory; upgrade blocked.");
+  if (!meta || !meta.isFile() || meta.isSymbolicLink() || meta.nlink !== 1 ||
+      meta.uid !== process.getuid() || (meta.mode & 0o7777) !== 0o600 || meta.size !== 8)
+    throw Error("Missing or unsafe Owner Stop marker; upgrade blocked.");
+  const fingerprint = st => [st.dev, st.ino, st.mode, st.uid, st.nlink,
+    st.size, st.mtimeNs, st.ctimeNs].map(String).join(":");
+  const handle = await open(marker, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let stamp;
+  try {
+    const before = await handle.stat({bigint:true});
+    if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n ||
+        (before.mode & 0o7777n) !== 0o600n || before.size !== 8n)
+      throw Error("Unsafe Owner Stop marker; upgrade blocked.");
+    if (await handle.readFile("utf8") !== "stopped\n")
+      throw Error("Unexpected Owner Stop marker content; upgrade blocked.");
+    stamp = fingerprint(before);
+    if (stamp !== fingerprint(await handle.stat({bigint:true})) ||
+        stamp !== fingerprint(await lstat(marker, {bigint:true})))
+      throw Error("Owner Stop marker changed; upgrade blocked.");
+  } finally { await handle.close(); }
+  if (expected && (expected.keyPath !== keyPath || expected.stamp !== stamp))
+    throw Error("Owner Stop marker changed; upgrade blocked.");
+  const state = invoke("systemctl", ["--user", "show", UNIT,
+    "--property=ActiveState,SubState,MainPID"]);
+  const values = state.trim().split("\n").sort();
+  if (values.join("\n") !== "ActiveState=inactive\nMainPID=0\nSubState=dead")
+    throw Error("Owner Stop service is not proven inactive/dead with MainPID=0; upgrade blocked.");
+  // Recheck after the systemd query too: a local Start must invalidate this proof.
+  if (stamp !== fingerprint(await lstat(marker, {bigint:true})))
+    throw Error("Owner Stop marker changed; upgrade blocked.");
+  return Object.freeze({keyPath, stamp});
+}
+
+// Keep OFF intent and the old unit in one atomically written, fsynced backup.
+// Recovery must refuse a removed/replaced marker rather than fall back to restart.
+const OWNER_STOP_BACKUP = "# Owner Stop upgrade: ";
+
 /**
  * Local-only upgrade consent, sent to the currently RUNNING Agent.
  * Absence of the socket or a busy/unknown response refuses the upgrade.
@@ -458,6 +503,7 @@ function run(binary, args) {
     if (binary === process.execPath) throw new Error("Could not compile the existing C session supervisor.");
     throw new Error("A local prerequisite is unavailable.");
   }
+  return result.stdout;
 }
 
 async function exists(target) {
@@ -662,7 +708,7 @@ async function assertRecoverablePreviousUnit(unit, home) {
 
 /**
  * Recover an interrupted program switch from a durable copy of the prior unit.
- * If the prior unit is already restored, only ensure that service is active.
+ * Restore Owner Stop transactions without activation; online recovery restarts.
  */
 async function clearCompletedUpgradeBackup(backupPath) {
   await rm(backupPath);
@@ -684,7 +730,17 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   let previous;
   try { previous = await readFile(backupPath, "utf8"); }
   catch { throw new Error("Interrupted upgrade backup cannot be read; manual review required."); }
+  let ownerStop;
+  if (previous.startsWith(OWNER_STOP_BACKUP)) {
+    const end = previous.indexOf("\n");
+    try { ownerStop = JSON.parse(previous.slice(OWNER_STOP_BACKUP.length, end)); }
+    catch { throw Error("Invalid Owner Stop upgrade backup; manual review required."); }
+    if (!ownerStop?.keyPath || typeof ownerStop.stamp !== "string")
+      throw Error("Invalid Owner Stop upgrade backup; manual review required.");
+    previous = previous.slice(end + 1);
+  }
   const oldUnit = await assertRecoverablePreviousUnit(previous, home);
+  ownerStop = await inspectOwnerStoppedUpgrade(oldUnit.keyPath, {expected:ownerStop});
   let current;
   try { current = await readOwnedUnit(unitPath); }
   catch { throw new Error("Current Agent unit cannot be verified; recovery backup preserved."); }
@@ -707,12 +763,15 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
     }
   }
   try {
+    if (ownerStop) await inspectOwnerStoppedUpgrade(oldUnit.keyPath, {expected:ownerStop});
     if (current !== previous) await atomicUnitWrite(unitPath, previous);
-    // Always restart the previous executable. An active PID alone does not
-    // prove it matches the restored unit after an interrupted restart.
+    // Online recovery must restart the previous executable; Owner Stop stays OFF.
     run("systemctl", ["--user", "daemon-reload"]);
-    run("systemctl", ["--user", "restart", UNIT]);
-    run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    if (ownerStop) await inspectOwnerStoppedUpgrade(oldUnit.keyPath, {expected:ownerStop});
+    else {
+      run("systemctl", ["--user", "restart", UNIT]);
+      run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    }
     await clearCompletedUpgradeBackup(backupPath);
     return true;
   } catch {
@@ -720,19 +779,29 @@ export async function recoverInterruptedUpgrade({home=os.homedir(), unitPath} = 
   }
 }
 
-export async function installUnit(unitPath, content, previous) {
+export async function installUnit(unitPath, content, previous, {ownerStop} = {}) {
+  const guard = async () => {
+    if (ownerStop) await inspectOwnerStoppedUpgrade(ownerStop.keyPath, {expected:ownerStop});
+  };
+  await guard();
+  if (ownerStop && !previous) throw Error("Owner Stop upgrade requires a previous service.");
   const backupPath = unitPath + ".upgrade-backup";
   if (previous) {
     if (await exists(backupPath)) {
       throw new Error("Interrupted upgrade backup exists; recovery is required before another switch.");
     }
-    await atomicUnitWrite(backupPath, previous);
+    await atomicUnitWrite(backupPath, ownerStop
+      ? OWNER_STOP_BACKUP + JSON.stringify(ownerStop) + "\n" + previous : previous);
   }
   try {
+    await guard();
     await atomicUnitWrite(unitPath, content);
     run("systemctl", ["--user", "daemon-reload"]);
-    run("systemctl", ["--user", previous ? "restart" : "enable", ...(previous ? [] : ["--now"]), UNIT]);
-    run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    await guard();
+    if (!ownerStop) {
+      run("systemctl", ["--user", previous ? "restart" : "enable", ...(previous ? [] : ["--now"]), UNIT]);
+      run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+    }
     if (previous) await clearCompletedUpgradeBackup(backupPath);
   } catch {
     // If SIGKILL bypasses this catch, recoverInterruptedUpgrade uses the same
@@ -742,11 +811,15 @@ export async function installUnit(unitPath, content, previous) {
       await rm(unitPath, { force: true });
     } else {
       try {
+        await guard();
         const current = await readOwnedUnit(unitPath);
         if (current !== previous) await atomicUnitWrite(unitPath, previous);
         run("systemctl", ["--user", "daemon-reload"]);
-        run("systemctl", ["--user", "restart", UNIT]);
-        run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+        await guard();
+        if (!ownerStop) {
+          run("systemctl", ["--user", "restart", UNIT]);
+          run("systemctl", ["--user", "is-active", "--quiet", UNIT]);
+        }
         await clearCompletedUpgradeBackup(backupPath);
       } catch { /* Keep the durable backup for a later recovery attempt. */ }
     }
@@ -1455,13 +1528,15 @@ export async function runInstaller(args, {
     endpoint: options.endpoint, keyPath, entryExt: portable ? "js" : "ts",
   });
   let consentAttempted = false;
+  let ownerStop;
   if (portable && options.action === "upgrade") {
     const safety = await assertSafePortableUpgrade(previous, home, manifestPath);
-    if (safety.legacyOffline) {
+    ownerStop = await inspectOwnerStoppedUpgrade(keyPath);
+    if (!ownerStop && safety.legacyOffline) {
       // Never remotely stop v0.1.11 or manufacture a quiescence ACK.
       // The user has already stopped it from their own terminal.
       await confirmLegacyV0111OfflineCutover({home,keyPath,stdin,stdout});
-    } else if (safety.needsFreeze) {
+    } else if (!ownerStop && safety.needsFreeze) {
       let consent;
       try {
         consent = await requestUpgradeConsent(keyPath, "freeze");
@@ -1483,7 +1558,7 @@ export async function runInstaller(args, {
     await beginInitialActivation(activationMarker, deviceId);
   }
   try {
-    await installUnit(unitPath, rendered, previous);
+    await installUnit(unitPath, rendered, previous, {ownerStop});
     if (firstActivation) await clearInitialActivation(activationMarker);
   } finally {
     // When activation fails before service stop, let the old Agent resume.
@@ -1493,7 +1568,7 @@ export async function runInstaller(args, {
   await finishRevokedPromotion(keyPath);
   if (portable) {
     const launcher=await installManagerLauncher(home,path.resolve(packageRoot, "..", ".."));
-    stdout.write("Ready: Agent active.\n");
+    stdout.write(ownerStop ? "Upgrade complete: Owner Stop retained; Agent remains OFF.\n" : "Ready: Agent active.\n");
     printPortableCliHint(stdout, launcher, home);
     if (host === "wsl2") stdout.write("WSL2: stopped distribution = offline.\n");
   }

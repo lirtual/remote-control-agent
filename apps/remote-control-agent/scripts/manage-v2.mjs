@@ -297,10 +297,8 @@ export async function runInteractiveLocalManager(args,{
   if(args[0]==="upgrade"){
     if(args.length!==1&&args.length!==3)throw Error("Use rca upgrade");
     if(!stdin.isTTY||!stdout.isTTY)throw Error("Manual upgrade requires the local terminal");
-    // A stopped device must not be activated by a version rollback without OFF support.
-    const ownerStopMarker=path.join(home,STORE,"v2-identity.pem.owner-stopped");
-    if(checkedPath(ownerStopMarker,{mode:0o600,optional:true}))
-      throw Error("Owner STOP retained: first perform an explicit authorized local Start before upgrade.");
+    const {inspectOwnerStoppedUpgrade} = await import("./install-v2.mjs");
+    await inspectOwnerStoppedUpgrade(path.join(home,STORE,"v2-identity.pem"));
     const upgrade=rest.prepareUpgrade??prepareManualUpgrade;
     const activate=rest.activateUpgrade??activateManualUpgrade;
     const recover=rest.recoverInterruptedUpgrade ??
