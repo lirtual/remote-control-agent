@@ -23,7 +23,17 @@ async function rejectLinkedAncestors(directory: string): Promise<void> {
   }
 }
 async function readVerified(file: string, attempt: SessionPhysicalAttempt): Promise<SessionDeviceIdentity> {
-  const meta=await lstat(file);
+  let meta=await lstat(file);
+  // link(temp, identity.json) publishes atomically without replacing a peer.
+  // Until its publisher unlinks temp, the verified inode briefly has two
+  // links. Concurrent readers must wait for that publication to settle,
+  // while preserving the original strict nlink===1 acceptance condition.
+  for (let i=0; i<40 && meta.isFile() && !meta.isSymbolicLink() &&
+      meta.uid===process.getuid?.() && (meta.mode & 0o077)===0 &&
+      meta.size<=4096 && meta.nlink===2; i++) {
+    await new Promise(resolve=>setTimeout(resolve,10));
+    meta=await lstat(file);
+  }
   if (!meta.isFile() || meta.isSymbolicLink() || meta.nlink!==1 ||
       meta.uid!==process.getuid?.() || (meta.mode & 0o077)!==0 || meta.size>4096) {
     throw Error('Unsafe Session identity file.');

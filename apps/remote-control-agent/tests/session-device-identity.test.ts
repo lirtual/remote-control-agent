@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createPublicKey, verify } from 'node:crypto';
-import { mkdtemp, rm, symlink, chmod, stat, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, chmod, stat, readFile, writeFile, mkdir, link, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { newSessionDeviceIdentity, signSessionEnrollmentNonce, validateSessionDeviceIdentity,
@@ -43,6 +43,29 @@ test('Linux Runner identity is private, concurrent and same-Attempt recoverable'
       assert.equal(JSON.parse(await readFile(file,'utf8')).public_key,identity.public_key);
       await assert.rejects(loadOrCreateLinuxSessionIdentity(root,{...attempt,github_run_attempt:3}),
         /another Attempt/);
+    }finally{await rm(root,{recursive:true,force:true});}
+  });
+
+test('concurrent Session identity reads wait for atomic hardlink publication, but reject persistent aliases',
+  {skip:process.platform!=='linux'},async()=>{
+    const root=await mkdtemp(path.join(os.tmpdir(),'spec62-link-race-'));
+    try{
+      const directory=path.join(root,'session-rca');
+      await mkdir(directory,{mode:0o700});
+      const temporary=path.join(directory,'identity-publisher.tmp');
+      const file=path.join(directory,'identity.json');
+      const created=newSessionDeviceIdentity(attempt);
+      await writeFile(temporary,JSON.stringify(created),{mode:0o600,flag:'wx'});
+      await link(temporary,file);
+      // The reader starts while the publisher's second hardlink still exists.
+      const pending=loadOrCreateLinuxSessionIdentity(root,attempt);
+      await new Promise(resolve=>setTimeout(resolve,75));
+      await unlink(temporary);
+      const resolved=await pending;
+      assert.equal(resolved.identity.public_key,created.public_key);
+      await link(file,temporary);
+      await assert.rejects(loadOrCreateLinuxSessionIdentity(root,attempt),
+        /Unsafe Session identity file/);
     }finally{await rm(root,{recursive:true,force:true});}
   });
 
