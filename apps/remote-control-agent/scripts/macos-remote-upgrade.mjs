@@ -30,6 +30,30 @@ export function remoteJobLabel(id){
   if(!ID.test(id))throw Error("Invalid one-shot upgrade operation.");
   return "org.mcp-workers.rca-upgrade-"+id.replaceAll("-","");
 }
+// launchctl submit restarts failed jobs (confirmed by the real Mac incident).
+// A private, launch-on-load plist with LaunchOnlyOnce prevents any replay even
+// when the detached worker exits nonzero or when the same owner logs in again.
+export function remoteJobPlist(id,node,worker,dir){
+  const label=remoteJobLabel(id);
+  const escape=s=>s.replaceAll("&","&amp;").replaceAll("<","&lt;")
+    .replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&apos;");
+  if(![node,worker,dir].every(s=>path.isAbsolute(s)))
+    throw Error("Absolute owner-private job paths required.");
+  const arg=x=>"<string>"+escape(x)+"</string>";
+  return '<?xml version="1.0" encoding="UTF-8"?>\n'+
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '+
+    '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'+
+    '<plist version="1.0"><dict>\n'+
+    '<key>Label</key>'+arg(label)+'\n'+
+    '<key>ProgramArguments</key><array>'+
+    [node,worker,"worker",id].map(arg).join("")+'</array>\n'+
+    '<key>RunAtLoad</key><true/>\n'+
+    '<key>KeepAlive</key><false/>\n'+
+    '<key>LaunchOnlyOnce</key><true/>\n'+
+    '<key>StandardOutPath</key>'+arg(path.join(dir,"stdout.log"))+'\n'+
+    '<key>StandardErrorPath</key>'+arg(path.join(dir,"stderr.log"))+'\n'+
+    '</dict></plist>\n';
+}
 export function verifiedLaunchdJob(id,uid,pid,invoke=run,parentPid=process.ppid){
   if(!ID.test(id)||!Number.isInteger(uid)||uid<=0||
      !Number.isInteger(pid)||pid<=1||parentPid!==1)return false;
@@ -152,11 +176,12 @@ export async function dispatchRemoteMacUpgrade({home=os.homedir(),bundle,sourceS
   const node=path.join(staged,"bin","node");
   const worker=path.join(staged,"apps","remote-control-agent","scripts","macos-remote-upgrade.mjs");
   await checked(node,{mode:0o700});await checked(worker,{mode:0o600});
-  // launchctl submit runs outside the Agent-managed Shell. This job is
-  // a one-shot launchd service, not a persistent updater or paired device.
-  const args=["submit","-l",label,"-o",path.join(dir,"stdout.log"),
-    "-e",path.join(dir,"stderr.log"),"--",node,worker,"worker",id];
-  const sent=invoke("/bin/launchctl",args);
+  // bootstrap loads an owner-private once-only launchd job outside the
+  // Agent-managed Shell. Unlike submit, failure must never restart it.
+  const job=path.join(dir,"job.plist");
+  await record(job,remoteJobPlist(id,node,worker,dir));
+  await checked(job,{mode:0o600});
+  const sent=invoke("/bin/launchctl",["bootstrap","gui/"+process.getuid(),job]);
   if(sent.error||sent.signal||sent.status!==0)
     throw Error("Detached launchd submission unconfirmed; preserve operation for inspection.");
   return {status:"launched",operation_id:id,version:t.version,
