@@ -126,6 +126,8 @@ export async function runRemoteMacUpgrade(id,{home=os.homedir(),invoke=run,ppid=
   const tasks=path.join(home,ROOT,"macos","remote-upgrades");
   const dir=path.join(tasks,id);
   await checked(tasks,{dir:true});await checked(dir,{dir:true});
+  const resultFile=path.join(dir,"result.json");
+  if(await exists(resultFile))throw Error("Upgrade already attempted; do not replay.");
   const marker=path.join(tasks,"active.json"),context=path.join(dir,"context.json");
   await checked(marker,{mode:0o600});await checked(context,{mode:0o600});
   const state=JSON.parse(await readFile(marker,"utf8"));
@@ -134,8 +136,6 @@ export async function runRemoteMacUpgrade(id,{home=os.homedir(),invoke=run,ppid=
      plan.id!==id||plan.label!==state.label||plan.version!==state.version||
      plan.state!=="owner_authorized_remote_upgrade"||!SHA.test(plan.sourceSha))
     throw Error("One-shot upgrade context is inconsistent.");
-  const resultFile=path.join(dir,"result.json");
-  if(await exists(resultFile))throw Error("Upgrade already attempted; do not replay.");
   const bundle=path.join(dir,"bundle");
   // The existing approved native upgrade freezes operations and rolls back
   // uncertain activation; its only bypass is this verified launchd context.

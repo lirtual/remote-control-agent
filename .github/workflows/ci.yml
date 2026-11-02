@@ -229,7 +229,8 @@ jobs:
             apps/remote-control-agent/tests/macos-packaged-runtime-smoke.mjs
           RCA_MACOS_BUNDLE_ROOT="$temp_dir/unpacked" \
             "$temp_dir/unpacked/bin/node" --experimental-strip-types --test \
-            apps/remote-control-agent/tests/macos-local.test.mjs
+            apps/remote-control-agent/tests/macos-local.test.mjs \
+            apps/remote-control-agent/tests/macos-remote-upgrade.test.mjs
           # Offline first-stage refuses non-owner/noninteractive execution.
           if sh apps/remote-control-agent/scripts/macos-local.sh install \
               --archive "$temp_dir/first/$asset" --sha256 "$(shasum -a 256 "$temp_dir/first/$asset" | awk '{print $1}')" \
