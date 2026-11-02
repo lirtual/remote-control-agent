@@ -3,6 +3,7 @@ import {createConnection} from "node:net";
 import {randomUUID} from "node:crypto";
 import {spawnSync} from "node:child_process";
 import {cp,lstat,mkdir,readFile,rename,rm,writeFile} from "node:fs/promises";
+import {realpathSync} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {fileURLToPath,pathToFileURL} from "node:url";
@@ -49,7 +50,7 @@ export function plistText({node,entry,endpoint,generation}){
       .map(x=>'<string>'+esc(x)+'</string>').join("")+'</array>\n'+
     '<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n</dict></plist>\n';
 }
-export function parsePlist(xml,programs,endpoint){
+export function parsePlist(xml,programs,endpoint,arch=process.arch){
   const tokens=[...xml.matchAll(/<string>([^<>]*)<\/string>/g)].map(m=>m[1]
     .replaceAll("&apos;","'").replaceAll("&quot;",'"').replaceAll("&gt;",">")
     .replaceAll("&lt;","<").replaceAll("&amp;","&"));
@@ -61,8 +62,9 @@ export function parsePlist(xml,programs,endpoint){
     throw Error("Foreign or ambiguous LaunchAgent.");
   const node=tokens[1],entry=tokens[2],root=path.dirname(path.dirname(node));
   const name=path.basename(root);
-  if(path.dirname(root)!==programs||!name.endsWith("-darwin-arm64")||
-    !VERSION.test(name.slice(0,-"-darwin-arm64".length))||
+  const suffix="-darwin-"+arch;
+  if(!["x64","arm64"].includes(arch)||path.dirname(root)!==programs||
+    !name.endsWith(suffix)||!VERSION.test(name.slice(0,-suffix.length))||
     node!==path.join(root,"bin/node")||
     entry!==path.join(root,"apps/remote-control-agent/src/macos-permanent.js"))
     throw Error("LaunchAgent points outside owned candidate.");
@@ -70,15 +72,16 @@ export function parsePlist(xml,programs,endpoint){
     throw Error("Unexpected LaunchAgent configuration.");
   return {root,generation:tokens[7]};
 }
-export function candidateName(meta,sha){
+export function candidateName(meta,sha,arch=process.arch){
   if(!SHA.test(sha)||meta.source_commit!==sha||!VERSION.test(meta.version)||
-    meta.target!=="darwin-arm64"||meta.artifact_schema!==1||
+    !["arm64","x64"].includes(arch)||meta.target!=="darwin-"+arch||
+    meta.artifact_schema!==1||
     meta.device_protocol!==2||meta.receipt_schema!==1||
     meta.candidate_profile!=="darwin-permanent-local-v1"||
     meta.native_supervisor!=="darwin-owned-group-v1"||
     !Array.isArray(meta.modules)||!meta.modules.includes("macos-permanent.ts"))
     throw Error("Unexpected source commit, architecture or manifest.");
-  return meta.version+"-darwin-arm64";
+  return meta.version+"-darwin-"+arch;
 }
 async function checkCandidate(bundle,sha){
   if(!path.isAbsolute(bundle))throw Error("Bundle must be absolute.");
@@ -96,6 +99,31 @@ async function checkCandidate(bundle,sha){
 }
 const run=(command,args)=>spawnSync(command,args,{encoding:"utf8",timeout:10000,maxBuffer:65536});
 const launch=(args,invoke)=>{const r=invoke("/bin/launchctl",args);return !r.error&&r.status===0;};
+// print can fail for reasons other than deregistration. Only the observed
+// launchd "not found" result proves this user service has been removed.
+export function launchctlServiceState(service,invoke){
+  const r=invoke("/bin/launchctl",["print",service]);
+  if(!r.error&&r.status===0)return "present";
+  if(!r.error&&r.status===113&&/Could not find service/.test(String(r.stderr??"")))
+    return "absent";
+  return "unknown";
+}
+// bootout may acknowledge while launchd is still asynchronously removing its
+// registration. Two read-only absent observations, bounded to 10 s; never
+// repeat bootstrap blindly, and never confuse an unknown state with absence.
+export async function awaitLaunchctlUnregistered(service,invoke,
+  pause=ms=>new Promise(resolve=>setTimeout(resolve,ms))){
+  let absent=0;
+  for(let i=0;i<40;i++){
+    const state=launchctlServiceState(service,invoke);
+    if(state==="unknown")throw Error("LaunchAgent deregistration state unknown.");
+    if(state==="absent"){
+      if(++absent===2)return true;
+    }else absent=0;
+    if(i<39)await pause(250);
+  }
+  return false;
+}
 export async function freeze(key,command="freeze"){
   const socketPath=path.join(path.dirname(key),"upgrade.sock");
   await checked(socketPath,{optional:false}).catch(async e=>{
@@ -115,13 +143,25 @@ export async function freeze(key,command="freeze"){
     socket.on("end",()=>done(null,buffer.trim()));
   });
 }
-async function ownedWrite(file,content,replace=false){
-  await checked(path.dirname(file),{dir:true});
-  if(replace)await checked(file,{mode:0o600});
+export async function ownedWrite(file,content,replace=false,mode=0o600,parentPrivate=true){
+  // Keep sensitive RCA directories private; LaunchAgents/bin only forbid outside writes.
+  await checked(path.dirname(file),{dir:true,privateOnly:parentPrivate});
+  if(replace)await checked(file,{mode});
   else if(await statMaybe(file))throw Error("Owned file already exists.");
   const temp=path.join(path.dirname(file),".new-"+randomUUID());
-  await writeFile(temp,content,{flag:"wx",mode:0o600});
+  await writeFile(temp,content,{flag:"wx",mode});
   try{await rename(temp,file);}catch(e){await rm(temp,{force:true});throw e;}
+}
+// Local CLI is a version-pinned, owner-private dispatch only. Upgrades must
+// still use the separately reviewed, SHA-pinned offline installer.
+export function ownerCliText(root){
+  const quote=value=>"'"+value.replaceAll("'","'\"'\"'")+"'";
+  const node=path.join(root,"bin/node");
+  const manager=path.join(root,"apps/remote-control-agent/scripts/macos-local.mjs");
+  return '#!/bin/sh\nset -eu\ncase "${1:-}" in\n'+
+    '  status|stop|start) [ "$#" -eq 1 ] || exit 2 ;;\n'+
+    '  *) echo "Use the reviewed macOS installer for install/upgrade." >&2; exit 2 ;;\n'+
+    'esac\nexec '+quote(node)+' '+quote(manager)+' "$1"\n';
 }
 async function approved(key){
   if(!await checked(key,{optional:true,mode:0o600})||
@@ -140,29 +180,54 @@ export async function observeOnline(identity,generation,now=Date.now){
   }
   return false;
 }
+export function acceptsOwnerConfirmation(input){
+  return /^(?:y|yes)$/i.test(input.trim());
+}
 async function confirm(question){
   if(!process.stdin.isTTY||!process.stdout.isTTY)throw Error("Owner terminal required.");
-  process.stdout.write(question+" Enter YES: ");
+  process.stdout.write(question+" Confirm [y/N]: ");
   return await new Promise(resolve=>{
     process.stdin.resume();
-    process.stdin.once("data",data=>{process.stdin.pause();resolve(String(data).trim()==="YES");});
+    process.stdin.once("data",data=>{
+      process.stdin.pause();resolve(acceptsOwnerConfirmation(String(data)));
+    });
   });
 }
 /** Host mutation only after local owner consent and a pinned source candidate. */
 export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,endpoint,
-  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze,ownerIntent}={}){
-  if(!["install","upgrade","status","stop","start"].includes(action))
+  invoke=run,ask=confirm,online=observeOnline,freezeAgent=freeze,ownerIntent,
+  runTemporary=spawnSync,terminal=()=>!!(process.stdin.isTTY&&process.stdout.isTTY),
+  pauseLaunchd=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
+  if(!["install","upgrade","status","stop","start","temporary"].includes(action))
     throw Error("Unsupported local action.");
-  if(process.platform!=="darwin"||process.arch!=="arm64"||
+  if(process.platform!=="darwin"||!["arm64","x64"].includes(process.arch)||
     Number.parseInt(os.release(),10)<24||process.getuid?.()===0)
-    throw Error("Native unprivileged macOS 15+ ARM64 required.");
+    throw Error("Native unprivileged macOS 15+ ARM64 or x64 required.");
   process.umask(0o077);
+  if(action==="temporary"){
+    // Reuse the signed 24-hour foreground Agent: no LaunchAgent, no service
+    // state mutation and no extra permanent identity or registration.
+    if(!terminal())throw Error("Owner terminal required for temporary pairing.");
+    if(!bundle||!sourceSha||!endpoint)throw Error("Reviewed temporary candidate required.");
+    const origin=verifiedEndpoint(endpoint);
+    await checkCandidate(bundle,sourceSha);
+    const node=path.join(bundle,"bin/node");
+    const entry=path.join(bundle,"apps/remote-control-agent/src/macos-temporary.js");
+    await checked(entry,{mode:0o600});
+    const result=runTemporary(node,[entry,"--endpoint",origin,"--bootstrap-selected"],
+      {stdio:"inherit"});
+    if(result.error||result.signal||result.status!==0)
+      throw Error("Temporary Agent ended without confirmed success.");
+    return {status:"temporary_session_ended"};
+  }
   await checked(home,{dir:true,privateOnly:false});
   const identity=await directories(home,ROOT);
   const receipts=await directories(home,[".local","state","mcp-workers","remote-control-agent"]);
   await checked(path.join(receipts,"operation-receipts.sqlite"),{optional:true,mode:0o600});
   const macos=await directories(home,[...ROOT,"macos"]);
   const programs=await directories(home,[...ROOT,"macos","programs"]);
+  const localBin=await directories(home,[".local","bin"]);
+  const cli=path.join(localBin,"rca");
   const agents=await directories(home,["Library","LaunchAgents"]);
   const plist=path.join(agents,LABEL+".plist");
   const stopMark=path.join(macos,"stopped"), journal=path.join(macos,"switch.json");
@@ -179,6 +244,11 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     throw Error("Endpoint identity cannot change during upgrade.");
   const bound=endpoint??stored;
   const current=old?parsePlist(old,programs,bound):null;
+  const previousCli=await checked(cli,{optional:true,mode:0o700})
+    ?await readFile(cli,"utf8"):null;
+  // Never replace a foreign executable, symlink or mismatched owner version.
+  if(previousCli!==null&&(!current||previousCli!==ownerCliText(current.root)))
+    throw Error("Foreign or inconsistent local rca executable.");
   if(current){
     for(const rel of ["", "bin", "apps", "apps/remote-control-agent",
         "apps/remote-control-agent/src"])
@@ -211,24 +281,41 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     await ownedWrite(stopMark,"stopped\n",stopped);
     let cloud="unconfirmed";
     try {await signedIntent('stop');cloud="confirmed";}catch{/* Local OFF still required. */}
-    if(launch(["print",service],invoke)&&!launch(["bootout",service],invoke))
-      throw Error("Service bootout uncertain; owner STOP intent retained.");
+    const serviceState=launchctlServiceState(service,invoke);
+    if(serviceState==="unknown")throw Error("LaunchAgent state uncertain; owner STOP retained.");
+    if(serviceState==="present"){
+      if(!launch(["bootout",service],invoke))
+        throw Error("Service bootout uncertain; owner STOP intent retained.");
+      if(!await awaitLaunchctlUnregistered(service,invoke,pauseLaunchd))
+        throw Error("LaunchAgent removal pending; owner STOP intent retained.");
+    }
     return {status:"intentionally_stopped",cloud};
   }
   if(action==="start"){
     if(!current||!stopped||!await approved(key))throw Error("No deliberately stopped approved LaunchAgent.");
     if((await readFile(stopMark,"utf8"))!=="stopped\n")throw Error("Unsafe persisted owner STOP.");
     if(!await ask("Resume the previously stopped LaunchAgent?"))throw Error("Owner declined.");
+    if(launchctlServiceState(service,invoke)!=="absent")
+      throw Error("LaunchAgent registration not confirmed absent; owner STOP retained.");
     await signedIntent('stop'); // reconcile offline Stop first without extending cloud deadline
     const permitted=await signedIntent('resume');
     if(permitted.status!=="resume_pending")throw Error("Signed cloud Resume not authorized.");
     await rm(stopMark);
     try{
-      if(!launch(["bootstrap",domain,plist],invoke))throw Error("LaunchAgent bootstrap failed.");
+      const boot=invoke("/bin/launchctl",["bootstrap",domain,plist]);
+      if(boot.error||boot.status!==0)
+        throw Error("LaunchAgent bootstrap failed (exit="+
+          (Number.isInteger(boot.status)?boot.status:"unknown")+").");
       if(!await online(identity,current.generation))throw Error("Signed WSS activation unconfirmed.");
     }catch(error){
-      if(!launch(["bootout",service],invoke))throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      const state=launchctlServiceState(service,invoke);
+      // Retain the user's OFF request even if launchd cleanup is uncertain.
       await ownedWrite(stopMark,"stopped\n");
+      if(state==="unknown")throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      if(state==="present"&&!launch(["bootout",service],invoke))
+        throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
+      if(!await awaitLaunchctlUnregistered(service,invoke,pauseLaunchd))
+        throw Error("UNKNOWN stopped-state recovery; owner inspection required.");
       throw error;
     }
     return {status:"connected_observed",cloud:"signed_WSS_observed"};
@@ -240,7 +327,9 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
   if(action==="upgrade"&&!current)throw Error("No existing permanent LaunchAgent.");
   const version=await checkCandidate(bundle,sourceSha);
   const nextRoot=path.join(programs,version);
-  if(await statMaybe(nextRoot))throw Error("Version directory already exists; no overwrite.");
+  if(await statMaybe(nextRoot))throw Error("Reviewed candidate already staged; never overwrite. " +
+    "Inspect existing state and use a separately verified newer candidate; " +
+    "the existing permanent identity and receipts remain unchanged.");
   if(!await ask("Install "+version+" into this personal Mac account?"))throw Error("Owner declined.");
   if(action==="upgrade"&&!await approved(key))
     throw Error("Approved key missing; never automatically re-pair.");
@@ -270,34 +359,49 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     entry:path.join(nextRoot,"apps/remote-control-agent/src/macos-permanent.js"),
     endpoint:bound,generation,
   });
-  let journalCreated=false,oldStopped=false,newLoaded=false;
+  let journalCreated=false,oldStopped=false,newLoaded=false,cliWritten=false;
+  let failureStage="write-switch-journal";
   try{
     await ownedWrite(journal,JSON.stringify({
       version,previous:old,generation,stopped,phase:"switch_pending"})+"\n");
     journalCreated=true;
     if(active){
+      failureStage="stop-old-service";
       if(!launch(["bootout",service],invoke))throw Error("Old service bootout failed.");
       oldStopped=true;
     }
-    await ownedWrite(plist,next,!!old);
+    failureStage="write-launchagent";
+    await ownedWrite(plist,next,!!old,0o600,false);
+    failureStage="write-endpoint";
     if(!stored)await ownedWrite(endpointFile,bound+"\n");
     if(!stopped){
+      failureStage="launchagent-bootstrap";
       if(!launch(["bootstrap",domain,plist],invoke))
         throw Error("New LaunchAgent bootstrap failed.");
       newLoaded=true;
+      failureStage="signed-wss-activation";
       if(!await online(identity,generation))throw Error("New signed WSS activation unconfirmed.");
     }
+    failureStage="write-cli";
+    await ownedWrite(cli,ownerCliText(nextRoot),previousCli!==null,0o700,false);
+    cliWritten=true;
+    failureStage="finalize-journal";
     await rm(journal);
-    return {status:stopped?"stopped_preserved":"connected_observed",version,generation};
+    return {status:stopped?"stopped_preserved":"connected_observed",version,generation,
+      cli};
   }catch(error){
     if(!journalCreated&&frozen){
       try{await freezeAgent(key,"release");}catch{/* only safe to reconcile */}
     }
     if(!journalCreated)throw error;
     try{
+      if(cliWritten){
+        if(previousCli!==null)await ownedWrite(cli,previousCli,true,0o700,false);
+        else await rm(cli);
+      }
       if(newLoaded&&!launch(["bootout",service],invoke))
         throw Error("New service cannot be stopped.");
-      if(old)await ownedWrite(plist,old,true);
+      if(old)await ownedWrite(plist,old,true,0o600,false);
       else if(await checked(plist,{optional:true,mode:0o600}))await rm(plist);
       if(oldStopped){
         if(!launch(["bootstrap",domain,plist],invoke)||
@@ -310,7 +414,13 @@ export async function localMacAction(action,{home=os.homedir(),bundle,sourceSha,
     }catch{
       throw Error("UNKNOWN rollback: journal, key and receipts retained for manual inspection.");
     }
-    throw Error("Upgrade blocked; previous service restored where verified.");
+    // Do not expose arbitrary OS exception text that may include sensitive paths.
+    const reason=error instanceof Error&&error.message==="Unsafe owner, type or mode."
+      ?"unsafe-owner-or-mode":"operation-failed";
+    const recovery=old?"prior LaunchAgent restored where verified"
+      :"new LaunchAgent configuration rolled back";
+    throw Error((action==="install"?"Install":"Upgrade")+" blocked at "+failureStage+
+      " ("+reason+"); "+recovery+". Identity, receipts and staged candidate retained.");
   }
 }
 async function main(){
@@ -325,7 +435,11 @@ async function main(){
     bundle:args["--bundle"],sourceSha:args["--source-sha"],endpoint:args["--endpoint"]});
   process.stdout.write(JSON.stringify(result)+"\n");
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+// On macOS, $TMPDIR commonly starts with /var while Node's ESM loader
+// canonicalizes it to /private/var. Compare canonical paths so a reviewed
+// installer never exits 0 without invoking the owner action.
+if(process.argv[1]&&realpathSync(process.argv[1])===
+    realpathSync(fileURLToPath(import.meta.url))){
   try{await main();}catch(e){
     process.stderr.write("macOS local action blocked: "+
       (e instanceof Error?e.message:"unknown")+".\n");process.exitCode=1;

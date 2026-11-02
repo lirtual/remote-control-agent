@@ -1,10 +1,11 @@
 /**
- * #658: unpublished native macOS ARM64 *temporary foreground* candidate.
+ * #658/#661: unpublished native macOS *temporary foreground* candidate.
  * No installer, LaunchAgent, permanent grant or auto-renewal.
  * Managed Shell depends on the bundled native Darwin owned-group supervisor.
  * The owner must explicitly authorize the existing signed pending key in MCP.
  */
 import { lstat, mkdir } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,33 +16,48 @@ import { selectDeviceLabel } from "./v2-enrollment.ts";
 import { DeviceSessionRejectedError, recoverDeviceId } from "./v2-session-client.ts";
 import { maintainAuthenticatedDeviceSession } from "./v2-connection-lifecycle.ts";
 
-export function requireNativeMac(platform = process.platform, arch = process.arch, release = os.release()): void {
-  if (platform !== "darwin" || arch !== "arm64" ||
+/** The hardware ARM64 flag stays set even when an x64 parent runs
+ * under Rosetta. A child querying proc_translated could itself be native,
+ * so query the physical ISA instead of another process's translation flag. */
+export function isRosettaProcess(invoke = spawnSync): boolean {
+  if (process.platform !== "darwin" || process.arch !== "x64") return false;
+  const check = invoke("/usr/sbin/sysctl", ["-n", "hw.optional.arm64"],
+    {encoding:"utf8",timeout:2000});
+  return check.status === 0 && check.stdout.trim() === "1";
+}
+export function requireNativeMac(
+  platform = process.platform, arch = process.arch, release = os.release(),
+  translated = isRosettaProcess(),
+): void {
+  if (platform !== "darwin" || !["arm64","x64"].includes(arch) || translated ||
       !/^\d+\./.test(release) || Number.parseInt(release,10) < 24 ||
       process.getuid?.() === 0) {
-    throw new Error("Preview requires macOS 15+ ARM64 under an unprivileged local user.");
+    throw new Error("Preview requires native macOS 15+ ARM64 or x64 under an unprivileged local user; Rosetta is unsupported.");
   }
 }
 
-export function parseTemporaryMacArgs(argv: string[]): { endpoint: string; name?: string; resume: boolean; retryPairing: boolean } {
+export function parseTemporaryMacArgs(argv: string[]): { endpoint: string; name?: string; resume: boolean; retryPairing: boolean; bootstrapSelected: boolean } {
   let endpoint: string | undefined;
   let name: string | undefined;
   let resume = false;
   let retryPairing = false;
+  let bootstrapSelected = false;
   for (let i=0; i<argv.length; i++) {
     if (argv[i] === "--resume" && !resume && !retryPairing) resume=true;
     else if (argv[i] === "--retry-pairing" && !retryPairing && !resume) retryPairing=true;
+    else if (argv[i] === "--bootstrap-selected" && !bootstrapSelected) bootstrapSelected=true;
     else if (argv[i] === "--endpoint" && !endpoint && argv[i+1]) endpoint=argv[++i];
     else if (argv[i] === "--name" && !name && argv[i+1]) name=argv[++i];
     else throw new Error("Invalid macOS temporary preview arguments.");
   }
+  if (bootstrapSelected && (resume || retryPairing)) throw Error("Invalid macOS temporary bootstrap options.");
   if (!endpoint) throw Error("Specify the existing trusted HTTPS Agent endpoint.");
   const base = new URL(endpoint);
   if (base.protocol !== "https:" || base.username || base.password ||
       base.search || base.hash || base.pathname !== "/" || !base.hostname ||
       (base.port && base.port !== "443")) throw Error("Expected a trusted HTTPS origin.");
   if (name !== undefined) selectDeviceLabel(name, "");
-  return {endpoint:base.origin+"/",name,resume,retryPairing};
+  return {endpoint:base.origin+"/",name,resume,retryPairing,bootstrapSelected};
 }
 
 export async function privateDirectory(home: string, segments: string[]): Promise<string> {
@@ -90,7 +106,7 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
   requireNativeMac();
   if (!process.stdin.isTTY || !process.stdout.isTTY)
     throw Error("Temporary pairing requires an interactive owner terminal.");
-  const {endpoint,name,resume,retryPairing}=parseTemporaryMacArgs(argv);
+  const {endpoint,name,resume,retryPairing,bootstrapSelected}=parseTemporaryMacArgs(argv);
   process.umask(0o077);
   const controller=new AbortController();
   const cancel=()=>controller.abort();
@@ -115,8 +131,8 @@ export async function runTemporaryMac(argv = process.argv.slice(2)): Promise<voi
       }
       process.stdout.write(retryPairing
         ? "Explicit pairing retry: old pending codes become invalid; the same private key is retained.\n"
-        : "Unpublished macOS ARM64 preview: only Temporary (24h) is available.\n");
-      if (await promptInstallMode()!=="temporary")
+        : "Unpublished native macOS preview: only Temporary (24h) is available.\n");
+      if (!bootstrapSelected && await promptInstallMode()!=="temporary")
         throw Error("Permanent macOS mode is not implemented by this candidate.");
       const enrollment=await beginDeviceEnrollment(
         selectDeviceLabel(name??"",os.hostname()),endpoint,key,fetch,retryPairing,"temporary");

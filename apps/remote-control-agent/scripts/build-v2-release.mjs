@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ts = require("typescript");
-const ALLOWED = new Set(["linux-x64-glibc", "linux-arm64-glibc", "darwin-arm64"]);
+const ALLOWED = new Set(["linux-x64-glibc", "linux-arm64-glibc", "darwin-arm64", "darwin-x64"]);
 const source = path.join(root, "src");
 
 export function parseArgs(argv) {
@@ -28,7 +28,6 @@ export function parseArgs(argv) {
       !argv[i+1] || params[argv[i]]) throw new Error("Invalid packaging parameters.");
     params[{"--node-bin":"nodeBin","--node-sha256":"nodeSha256","--native-sha256":"nativeSha256"}[argv[i]] ?? argv[i].slice(2)] = argv[i+1];
   }
-  const darwin = params.target === "darwin-arm64";
   if (Object.keys(params).length!==7 ||
       !/^v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?$/.test(params.version) ||
       !ALLOWED.has(params.target) ||
@@ -74,16 +73,21 @@ export function requiredGlibcVersion(binary, invoke = spawnSync) {
 }
 
 export function ensureNativeTarget({ target, nodeBin, native, nodeSha256, nativeSha256 }) {
-  if (target === "darwin-arm64") {
-    if (process.platform !== "darwin" || process.arch !== "arm64" ||
+  if (target === "darwin-arm64" || target === "darwin-x64") {
+    const arch = target.slice("darwin-".length);
+    // Never count a Rosetta-translated x64 process as an Intel build host.
+    const translated = arch === "x64" && spawnSync("/usr/sbin/sysctl",
+      ["-n","hw.optional.arm64"],{encoding:"utf8",timeout:2000});
+    if (process.platform !== "darwin" || process.arch !== arch ||
+        (translated && translated.status === 0 && translated.stdout.trim() === "1") ||
         Number(os.release().split(".")[0]) < 24) {
-      throw new Error("Darwin candidate requires native macOS 15+ ARM64 build host.");
+      throw new Error("Darwin candidate requires a native macOS 15+ build host matching the target CPU.");
     }
     const st = statSync(nodeBin);
     if (!st.isFile() || (st.mode & 0o111) === 0 ||
-        machOMachine(readFileSync(nodeBin)) !== "arm64" ||
+        machOMachine(readFileSync(nodeBin)) !== arch ||
         createHash("sha256").update(readFileSync(nodeBin)).digest("hex") !== nodeSha256) {
-      throw new Error("Pinned native ARM64 Mach-O Node checksum or architecture mismatch.");
+      throw new Error("Pinned native Mach-O Node checksum or architecture mismatch.");
     }
     const version = spawnSync(nodeBin, ["--version"], { encoding:"utf8", timeout:5000 });
     if (version.error || version.status !== 0 || !/^v24\.[0-9]+\.[0-9]+\s*$/.test(version.stdout)) {
@@ -91,11 +95,11 @@ export function ensureNativeTarget({ target, nodeBin, native, nodeSha256, native
     }
     const helper=statSync(native);
     if (!helper.isFile() || (helper.mode & 0o111)===0 ||
-        machOMachine(readFileSync(native))!=="arm64" ||
+        machOMachine(readFileSync(native))!==arch ||
         createHash("sha256").update(readFileSync(native)).digest("hex")!==nativeSha256) {
       throw new Error("Darwin owned-group supervisor Mach-O architecture or digest mismatch.");
     }
-    return { arch:"arm64", nodeVersion:version.stdout.trim(), libc:undefined, glibcMin:undefined };
+    return { arch, nodeVersion:version.stdout.trim(), libc:undefined, glibcMin:undefined };
   }
   const arch = target === "linux-x64-glibc" ? "x64" : "arm64";
   const id = arch === "x64" ? 62 : 183;
@@ -209,7 +213,7 @@ function tarball(dir, file) {
 
 export function build(args) {
   const { arch, nodeVersion, libc, glibcMin } = ensureNativeTarget(args);
-  const darwin = args.target === "darwin-arm64";
+  const darwin = args.target === "darwin-arm64" || args.target === "darwin-x64";
   if (existsSync(args.out) && readdirSync(args.out).length) {
     throw new Error("Output must be a new or empty directory.");
   }
