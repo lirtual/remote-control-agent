@@ -120,7 +120,7 @@ if ($Action -eq 'Enable') {
 
 function Invoke-AgentUpgradeFreeze([string]$keyPath,[string]$action) {
   if ($action -cnotin @('freeze','verify-frozen','release')) { throw 'Invalid upgrade action' }
-  $canonical = [IO.Path]::GetFullPath($keyPath).Replace('/','\').ToLowerInvariant()
+  $canonical = $keyPath.Replace('/','\').ToLowerInvariant()
   $sha = [Security.Cryptography.SHA256]::Create()
   try {
     $hash = [BitConverter]::ToString($sha.ComputeHash(

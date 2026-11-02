@@ -13,7 +13,10 @@ export function upgradeSocketPath(keyPath: string): string {
   if (process.platform === "win32") {
     // Flat pipe namespace: derive a fixed collision-resistant same-user name
     // from the installed *path*, never an arbitrary remote argument.
-    const identity = path.win32.normalize(keyPath).toLowerCase();
+    // Hash the same locally assembled identity spelling as the PowerShell
+    // installer. Win32 GetFullPath can expand/rewrite CI temporary paths
+    // differently from Node normalize(), yielding two different pipe names.
+    const identity = keyPath.replaceAll("/", "\\").toLowerCase();
     const digest = createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 32);
     return String.raw`\\.\pipe\rca-upgrade-` + digest;
   }
