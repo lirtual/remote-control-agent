@@ -1,0 +1,40 @@
+{
+  "tag": "v0.1.51",
+  "source_sha": "03a14fd4138ca8d77fa8aced78f7a53ccc51724e",
+  "candidate_run_id": 41490186540,
+  "release_title": "Remote Control Agent v0.1.51 — macOS failed-upgrade reliability and recovery",
+  "release_notes": ".github/release-notes/v0.1.51.md",
+  "macos_script_sha256": "59ce3cc7a9713e2ed6c01fc9d6d9015ee7dbee2f428e5a1cc45a654288ed5d55",
+  "assets": [
+    {
+      "target": "linux-x64-glibc",
+      "artifact": "v0.1.51-ubuntu-24.04",
+      "name": "remote-control-agent-v0.1.51-linux-x64-glibc.tar.gz",
+      "sha256": "5330d88b5f1df4f250f453ea70cf43fe14b4cf362c437f6aac84a7c24981bbfc"
+    },
+    {
+      "target": "linux-arm64-glibc",
+      "artifact": "v0.1.51-ubuntu-24.04-arm",
+      "name": "remote-control-agent-v0.1.51-linux-arm64-glibc.tar.gz",
+      "sha256": "5b52f3e873e510a2810f6f0c7ee3b69c9226a4e4d00ebe8b8b6aabd73e415566"
+    },
+    {
+      "target": "windows-x64",
+      "artifact": "v0.1.51-windows-x64",
+      "name": "remote-control-agent-v0.1.51-windows-x64.zip",
+      "sha256": "03f11bca0f21b7f8fd4ed1343db79827bb9b36be3feda0284b4b75f82d917311"
+    },
+    {
+      "target": "darwin-arm64",
+      "artifact": "v0.1.51-darwin-arm64",
+      "name": "remote-control-agent-v0.1.51-darwin-arm64.tar.gz",
+      "sha256": "dc3b7ea6cf5ece3c76a053ffde81b1dc1a217f1404daef621eb80ee151433803"
+    },
+    {
+      "target": "darwin-x64",
+      "artifact": "v0.1.51-darwin-x64",
+      "name": "remote-control-agent-v0.1.51-darwin-x64.tar.gz",
+      "sha256": "f75e2eff990a1cf465fbe1697240a8244798584798d552f05459d8dcdc13ede5"
+    }
+  ]
+}
