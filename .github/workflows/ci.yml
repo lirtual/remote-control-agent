@@ -14,6 +14,12 @@ on:
 permissions:
   contents: read
 
+# Only newer revisions of the same PR may supersede an in-progress CI run.
+# Main and manual five-platform release candidates must finish independently.
+concurrency:
+  group: remote-agent-ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   RCA_CANDIDATE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'v0.0.0-ci' }}
 
