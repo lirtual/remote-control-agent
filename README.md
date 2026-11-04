@@ -1,29 +1,29 @@
 # Remote Control Agent
 
-Standalone Remote Control Agent for Linux x64/ARM64 (including WSL2) and native Windows x64. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
+Standalone Remote Control Agent for Linux x64/ARM64 (including WSL2), native Windows x64 and macOS ARM64/x64. The public repository contains the Agent and immutable Release archives. The Cloudflare MCP Worker and its owner-authorized pairing service live in `lirtual/mcp-workers`.
 
-## Current verified release (2026-10-31)
+## Current verified release (2026-11-03)
 
-The immutable **v0.1.40** Agent Release includes Linux x64/ARM64 and native
-Windows x64 archives with SHA256SUMS. The Remote Control Worker serves
-version-pinned public installers. One native Windows and two WSL2 permanently
-paired devices were verified online on v0.1.40 with their original device
-identities preserved.
+The immutable **v0.1.51** release contains five SHA-256-verified platform
+archives: Linux x64/ARM64, Windows x64 and macOS ARM64/x64. The public Worker
+installer and pin are managed separately from Agent Releases. The original
+macOS ARM64 device and the owner’s Windows/WSL2 devices completed relevant
+v0.1.51 signed-WSS / identity-preservation acceptance; the macOS x64 artifact
+is built and verified by CI, not claimed to have been physically tested on an
+Intel Mac. See [v0.1.51 evidence](.github/release-notes/v0.1.51.md) and
+[Spec #657](https://github.com/lirtual/mcp-workers/issues/657) for recorded
+Pass/Waived distinctions.
 
-Agent CI/Release publication, Worker deployment, device-local interactive
-upgrades and authenticated device pairing are separate operations.
-
-**Source-only candidate (not yet a released path):** Remote Control Shell
-may initiate an explicitly owner-approved, noninteractive upgrade using an
-independent short-lived OS user task. Linux uses the installed manager's
-new explicit unattended command; Windows uses the reviewed official
-installer's detached-task opt-in. Both preserve ordinary interactive
-one-click scripts and require separate post-reconnect verification.
-See [remote-shell-upgrade.md](docs/remote-shell-upgrade.md) for safety,
-platform, authorization and acceptance boundaries.
- Browser
-Handoff (Spec #280) and MCP-initiated `upgrade_agent` were retired; existing
-paired-device file, search, Shell, Session and receipt tools remain supported in production.
+Agent CI/Release publication, Worker deployment, device upgrades and
+owner-authorized pairing remain **separate** operations. Existing paired
+permanent devices can initiate explicitly approved remote upgrades using
+short-lived same-user OS tasks; a launch acknowledgement is not success.
+The official one-click interactive installers remain available. Detached
+upgrades must preserve the original device identity, intentional STOP state,
+receipts and signed WSS, with independent reconnect verification. See
+[remote-shell-upgrade.md](docs/remote-shell-upgrade.md). Remote Control does
+not provide a separate `upgrade_agent` MCP operation, and retired Browser
+Handoff remains unsupported.
 
 **Spec #628 delivered (2026-10-31):** RCA-owned Browser/Computer executable
 tools and GUI-only bundles were retired in the formally released Worker and
@@ -49,8 +49,9 @@ script, the empty `sh` may still exit 0. Inspect download errors, and never
 treat pipeline success as proof of installation, approval or online status;
 confirm the device through authenticated MCP before declaring success.
 
-As verified 2026-10-31, both production installers were pinned to reviewed
-v0.1.40 source and immutable Release assets. A successful script download or
+The production installer pins were advanced to the reviewed v0.1.51 assets
+after the separate Worker release; earlier v0.1.40 installation evidence is
+historical, not the current installer state. A successful script download or
 local install does not prove remote approval, connectivity or successful
 upgrade; verify the signed device through authenticated MCP.
 
@@ -160,7 +161,7 @@ remain available for exceptional operator diagnostics.
 
 ## Platform and trust requirements
 
-- Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features; WSL2 can use the Linux Agent while the distribution is running. Native Windows x64 is supported by a separate reviewed package; macOS, WSL1 and musl are not supported.
+- Linux x64/ARM64 with glibc and supported kernel/pidfd process-group features (including WSL2), Windows x64, and native macOS ARM64/x64 are supported by platform-specific packages. WSL1 and musl are not supported; macOS x64 has CI/package evidence rather than a physical Intel-Mac acceptance claim.
 - A non-root interactive terminal; the installer requires a real local TTY.
 - A trusted HTTPS Worker origin with authorized owner-mediated pairing. No direct public Shell listener is created.
 - Do not copy or paste device private keys, access tokens, or unredacted logs.
@@ -194,7 +195,7 @@ safe; a crashed process can leave an orphan without proving target state.
 
 ## Release and verification
 
-Use the existing Linux x64/ARM64 and native Windows x64 CI to validate each
+Use the existing five-platform Linux x64/ARM64, Windows x64 and macOS ARM64/x64 CI to validate each
 candidate. Publish only through the established immutable, reviewed Release
 pin workflow, then separately update the Worker's installer pins and deploy
 through its existing manual workflow. A source commit, Release or Worker

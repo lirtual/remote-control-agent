@@ -1,8 +1,10 @@
 # RCA: owner-approved upgrades via Remote Control Shell
 
-Status: source candidate, not yet officially released. This changes only
-existing Windows/Linux upgrade entrypoints. Production release, existing
-paired-device upgrades, and Mac support have independent gates.
+Status: the reviewed remote-upgrade pathways have been released with
+Agent v0.1.51. Each actual Worker installer pin, device-local upgrade,
+reconnect acceptance and macOS permission scenario retains its independent
+evidence/authorization boundary. Earlier candidate-only notes below are
+historical implementation context.
 
 ## Contract
 
@@ -82,7 +84,10 @@ or unknown local state is a hard stop, not grounds for SYSTEM execution.
 No MCP upgrade_agent tool, background auto-updater, new Worker, server,
 database, credential flow or replacement for the existing one-click
 scripts. Source and CI success are not production or physical-device E2E.
-macOS remains gated by Spec #657.
+macOS ARM64 remote upgrade was separately accepted in Spec #657 on the
+original device under its documented Pass/Waived boundaries; macOS x64 has
+CI/package evidence, not a separate physical Intel-device E2E. Do not reuse
+Windows/Linux shell commands as macOS instructions.
 
 ## Windows first-hop boundary
 
