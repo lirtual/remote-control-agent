@@ -125,3 +125,14 @@ test('five-platform assets never publish from candidate CI or source-only merge'
     'count+1',
   ]) assert.ok(workflow.includes(expected), 'missing reviewed gate: '+expected);
 });
+
+test('production release external actions use immutable commit SHAs', () => {
+  const workflow = readFileSync(path.join(workflows, publisherName), 'utf8');
+  const references = [...workflow.matchAll(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/gm)]
+    .map(match => match[1])
+    .filter(reference => !reference.startsWith('./'));
+  assert.ok(references.length > 0, 'expected third-party actions in release workflow');
+  for (const reference of references) {
+    assert.match(reference, /^[^@\s]+@[a-f0-9]{40}$/, `unlocked release action: ${reference}`);
+  }
+});
